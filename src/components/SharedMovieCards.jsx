@@ -170,19 +170,24 @@ export function DiscoverMovieCard({
           />
         </>
       )}
-      expandedFooter={expanded ? (
-        <MovieExpandedDetails
+      expandedBody={expanded ? (
+        <MovieExpandedCuration
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
           itemLists={itemLists}
-          directors={displayMovie.directors}
-          cast={displayMovie.cast}
-          onPersonBrowse={onPersonBrowse}
           onCollectionBrowse={onCollectionBrowse}
           onListBrowse={onListBrowse}
           onEditLists={onEditLists}
           onRemoveFromList={onRemoveFromList}
+        />
+      ) : null}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          details={displayDetails}
+          directors={displayMovie.directors}
+          cast={displayMovie.cast}
+          onPersonBrowse={onPersonBrowse}
         />
       ) : null}
     >
@@ -250,15 +255,11 @@ export function MovieExpandedFacts({ movie, details }) {
   );
 }
 
-export function MovieExpandedDetails({
+export function MovieExpandedCuration({
   movie,
   details,
   collection,
   itemLists = [],
-  directors,
-  cast,
-  onPersonBrowse,
-  onPersonDiscover,
   onCollectionBrowse,
   onListBrowse,
   onEditLists,
@@ -267,17 +268,84 @@ export function MovieExpandedDetails({
   onResetCollection,
   emptyListText = 'Not in any user list yet.'
 }) {
-  const [personBio, setPersonBio] = useState(null);
-  const loading = details?.loading;
-  const expandedDirectors = directors?.length ? directors : details?.directors?.length ? details.directors : details?.director?.name ? [details.director] : [];
-  const expandedCast = (cast?.length ? cast : details?.cast || []).slice(0, 6);
   const activeCollection = collection?.id ? collection : details?.collection || {};
-  const canBrowsePeople = Boolean(onPersonBrowse);
   const canBrowseCollection = Boolean(onCollectionBrowse);
   const canBrowseLists = Boolean(onListBrowse);
   const collectionDetail = Number.isFinite(activeCollection.owned_count)
     ? `${formatCount(activeCollection.owned_count)} owned${activeCollection.unresolved_count ? `, ${formatCount(activeCollection.unresolved_count)} need identity review` : ''}`
     : `${formatCount((activeCollection.parts || []).length)} movies, ${activeCollection.source || 'TMDB'} collection`;
+
+  return (
+    <aside className="movie-expanded-curation" aria-label="Collection and lists">
+      {activeCollection?.id && (
+        <div className="collection-panel">
+          {canBrowseCollection ? (
+            <button type="button" className="collection-main-action" onClick={() => onCollectionBrowse(activeCollection)}>
+              <Clapperboard size={17} />
+              <span>
+                <strong dir="auto">{activeCollection.name}</strong>
+                <small>{collectionDetail}</small>
+              </span>
+            </button>
+          ) : (
+            <div className="collection-main-action discover-collection-static">
+              <Clapperboard size={17} />
+              <span>
+                <strong dir="auto">{activeCollection.name}</strong>
+                <small>{collectionDetail}</small>
+              </span>
+            </div>
+          )}
+          {onEditCollection ? (
+            <div className="collection-actions">
+              <button type="button" className="mini-action" onClick={() => onEditCollection(activeCollection)}>Edit</button>
+              {activeCollection.is_edited && onResetCollection ? (
+                <button type="button" className="mini-action mini-action-danger" onClick={() => onResetCollection(activeCollection)}>
+                  <RefreshCcw size={13} /> Reset
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+      <div className="lists-panel">
+        <div className="lists-panel-header">
+          <span className="mini-label">Lists</span>
+          {onEditLists ? <button type="button" className="mini-action" onClick={onEditLists}>Add to list</button> : null}
+        </div>
+        {itemLists.length ? (
+          <div className="list-chip-row">
+            {itemLists.map((list) => (
+              <span className="list-chip" key={list.id}>
+                <button type="button" onClick={canBrowseLists ? () => onListBrowse(list) : undefined}>{list.name}</button>
+                {onRemoveFromList ? (
+                  <button type="button" aria-label={`Remove ${movie.title} from ${list.name}`} onClick={() => onRemoveFromList(list.id)}>
+                    <Trash2 size={13} />
+                  </button>
+                ) : null}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <small>{emptyListText}</small>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+export function MovieExpandedDetails({
+  details,
+  directors,
+  cast,
+  onPersonBrowse,
+  onPersonDiscover
+}) {
+  const [personBio, setPersonBio] = useState(null);
+  const loading = details?.loading;
+  const expandedDirectors = directors?.length ? directors : details?.directors?.length ? details.directors : details?.director?.name ? [details.director] : [];
+  const expandedCast = (cast?.length ? cast : details?.cast || []).slice(0, 8);
+  const canBrowsePeople = Boolean(onPersonBrowse);
 
   async function openPersonBio(role, person) {
     if (!person?.id) {
@@ -300,106 +368,41 @@ export function MovieExpandedDetails({
       ) : details?.error ? (
         <p className="discover-detail-error"><AlertTriangle size={15} /> {details.error}</p>
       ) : (
-        <div className="movie-expanded-lower-row">
-          <section className="movie-expanded-credits-panel" aria-label="Director and top cast">
-            <span className="mini-label">Director &amp; top cast</span>
-            <div className="movie-expanded-credit-groups">
-              <div className="director-panel">
-                <span className="mini-label">Director</span>
-                {expandedDirectors.length ? (
-                  expandedDirectors.slice(0, 2).map((person) => (
-                    <PersonCreditCard
-                      key={person.id || person.name}
-                      person={person}
-                      role="director"
-                      canBrowse={canBrowsePeople}
-                      onBrowse={onPersonBrowse}
-                      onDiscover={onPersonDiscover}
-                      onBio={openPersonBio}
-                    />
-                  ))
-                ) : (
-                  <small>No director data found.</small>
-                )}
-              </div>
-              <div className="cast-panel">
-                <span className="mini-label">Top cast</span>
-                {expandedCast.length ? (
-                  <div className="person-grid">
-                    {expandedCast.map((person) => (
-                      <PersonCreditCard
-                        key={`${person.id || person.name}-${person.character || ''}`}
-                        person={person}
-                        role="actor"
-                        canBrowse={canBrowsePeople}
-                        onBrowse={onPersonBrowse}
-                        onDiscover={onPersonDiscover}
-                        onBio={openPersonBio}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <small>No cast data found.</small>
-                )}
-              </div>
-            </div>
-          </section>
-          <aside className="movie-expanded-side-panel" aria-label="Collection and lists">
-            {activeCollection?.id && (
-              <div className="collection-panel">
-                {canBrowseCollection ? (
-                  <button type="button" className="collection-main-action" onClick={() => onCollectionBrowse(activeCollection)}>
-                    <Clapperboard size={17} />
-                    <span>
-                      <strong dir="auto">{activeCollection.name}</strong>
-                      <small>{collectionDetail}</small>
-                    </span>
-                  </button>
-                ) : (
-                  <div className="collection-main-action discover-collection-static">
-                    <Clapperboard size={17} />
-                    <span>
-                      <strong dir="auto">{activeCollection.name}</strong>
-                      <small>{collectionDetail}</small>
-                    </span>
-                  </div>
-                )}
-                {onEditCollection ? (
-                  <div className="collection-actions">
-                    <button type="button" className="mini-action" onClick={() => onEditCollection(activeCollection)}>Edit</button>
-                    {activeCollection.is_edited && onResetCollection ? (
-                      <button type="button" className="mini-action mini-action-danger" onClick={() => onResetCollection(activeCollection)}>
-                        <RefreshCcw size={13} /> Reset
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
+        <section className="movie-expanded-credits-panel" aria-label="Director and top cast">
+          <span className="mini-label">Director &amp; top cast</span>
+          <div className="movie-expanded-people-grid">
+            {expandedDirectors.length ? (
+              expandedDirectors.slice(0, 2).map((person) => (
+                <PersonCreditCard
+                  key={`director-${person.id || person.name}`}
+                  person={person}
+                  role="director"
+                  canBrowse={canBrowsePeople}
+                  onBrowse={onPersonBrowse}
+                  onDiscover={onPersonDiscover}
+                  onBio={openPersonBio}
+                />
+              ))
+            ) : (
+              <small className="movie-expanded-credit-empty">No director data found.</small>
             )}
-            <div className="lists-panel">
-              <div className="lists-panel-header">
-                <span className="mini-label">Lists</span>
-                {onEditLists ? <button type="button" className="mini-action" onClick={onEditLists}>Add to list</button> : null}
-              </div>
-              {itemLists.length ? (
-                <div className="list-chip-row">
-                  {itemLists.map((list) => (
-                    <span className="list-chip" key={list.id}>
-                      <button type="button" onClick={canBrowseLists ? () => onListBrowse(list) : undefined}>{list.name}</button>
-                      {onRemoveFromList ? (
-                        <button type="button" aria-label={`Remove ${movie.title} from ${list.name}`} onClick={() => onRemoveFromList(list.id)}>
-                          <Trash2 size={13} />
-                        </button>
-                      ) : null}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <small>{emptyListText}</small>
-              )}
-            </div>
-          </aside>
-        </div>
+            {expandedCast.length ? (
+              expandedCast.map((person) => (
+                <PersonCreditCard
+                  key={`${person.id || person.name}-${person.character || ''}`}
+                  person={person}
+                  role="actor"
+                  canBrowse={canBrowsePeople}
+                  onBrowse={onPersonBrowse}
+                  onDiscover={onPersonDiscover}
+                  onBio={openPersonBio}
+                />
+              ))
+            ) : (
+              <small className="movie-expanded-credit-empty">No cast data found.</small>
+            )}
+          </div>
+        </section>
       )}
       {personBio && (
         <PersonBioModal
@@ -413,8 +416,8 @@ export function MovieExpandedDetails({
 
 function PersonCreditCard({ person, role, canBrowse, onBrowse, onDiscover, onBio }) {
   const isDirector = role === 'director';
-  const className = cx(isDirector ? 'director-person' : 'person-card', !canBrowse && 'discover-person-static', canBrowse && 'person-credit-browse');
-  const browseLabel = isDirector ? (canBrowse ? 'Show directed movies' : 'Director') : (person.character || 'Cast');
+  const className = cx('person-card', isDirector && 'director-person', !canBrowse && 'discover-person-static', canBrowse && 'person-credit-browse');
+  const browseLabel = isDirector ? 'Director' : (person.character || 'Cast');
   const canDiscover = Boolean(onDiscover && person?.id);
 
   function browse() {
@@ -466,17 +469,8 @@ function PersonCreditCard({ person, role, canBrowse, onBrowse, onDiscover, onBio
         </button>
       ) : null}
       <PersonAvatar person={person} />
-      {isDirector ? (
-        <span>
-          <strong dir="auto">{person.name}</strong>
-          <small>{browseLabel}</small>
-        </span>
-      ) : (
-        <>
-          <strong dir="auto">{person.name}</strong>
-          <small>{browseLabel}</small>
-        </>
-      )}
+      <strong dir="auto">{person.name}</strong>
+      <small>{browseLabel}</small>
     </div>
   );
 }
@@ -583,7 +577,7 @@ export function LibraryMovieCard({
   const lowQuality = item.maintenance_upgrade_candidate === true;
   const genres = (canonical.genres?.length ? canonical.genres : item.plex_genres || []).slice(0, expanded ? 10 : 3);
   const directors = getRolePeople(item, details, 'director');
-  const cast = getRolePeople(item, details, 'actor').slice(0, 6);
+  const cast = getRolePeople(item, details, 'actor').slice(0, 8);
   const locale = getLocaleTag(item);
   const movieForSearch = {
     title: identity.title,
@@ -656,16 +650,12 @@ export function LibraryMovieCard({
           />
         </>
       )}
-      expandedFooter={expanded ? (
-        <MovieExpandedDetails
+      expandedBody={expanded ? (
+        <MovieExpandedCuration
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
           itemLists={itemLists}
-          directors={languageView.isArabic ? displayDetails?.directors : directors}
-          cast={languageView.isArabic ? displayDetails?.cast : cast}
-          onPersonBrowse={onPersonFilter}
-          onPersonDiscover={onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined}
           onCollectionBrowse={onCollectionFilter}
           onListBrowse={onListFilter}
           onEditLists={onEditLists}
@@ -673,6 +663,15 @@ export function LibraryMovieCard({
           onEditCollection={onEditCollection}
           onResetCollection={onResetCollection}
           emptyListText="No user lists yet."
+        />
+      ) : null}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          details={displayDetails}
+          directors={languageView.isArabic ? displayDetails?.directors : directors}
+          cast={languageView.isArabic ? displayDetails?.cast : cast}
+          onPersonBrowse={onPersonFilter}
+          onPersonDiscover={onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined}
         />
       ) : null}
     >

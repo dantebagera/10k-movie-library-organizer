@@ -6934,7 +6934,7 @@ def _normalize_tmdb_details_payload(data):
             directors.append(normalized)
 
     cast = []
-    for person in (data.get('credits', {}).get('cast', []) or [])[:7]:
+    for person in (data.get('credits', {}).get('cast', []) or [])[:8]:
         normalized = _normalize_tmdb_person(person, include_character=True)
         if normalized:
             cast.append(normalized)

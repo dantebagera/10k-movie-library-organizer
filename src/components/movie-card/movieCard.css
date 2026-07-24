@@ -2,10 +2,6 @@
   --movie-card-min-width: 460px;
   --movie-card-poster-width: 170px;
   --movie-card-poster-height: 255px;
-  --expanded-director-avatar-size: 96px;
-  --expanded-cast-avatar-size: 106px;
-  --expanded-director-avatar-width: 96px;
-  --expanded-director-avatar-height: 118px;
   --expanded-cast-avatar-width: 106px;
   --expanded-cast-avatar-height: 132px;
   --expanded-movie-card-min-height: 796px;
@@ -316,6 +312,11 @@
 
 .unified-movie-extra {
   display: contents;
+}
+
+.unified-movie-expanded-body {
+  min-width: 0;
+  margin-top: auto;
 }
 
 .unified-movie-aside {

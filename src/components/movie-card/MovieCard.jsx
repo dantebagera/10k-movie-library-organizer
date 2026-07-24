@@ -69,6 +69,7 @@ export function UnifiedMovieCard({
   onPlay,
   onToggle,
   children,
+  expandedBody,
   expandedFooter,
   aside
 }) {
@@ -153,6 +154,12 @@ export function UnifiedMovieCard({
         <div className="unified-movie-extra" onClick={stopCardToggle}>
           {children}
         </div>
+
+        {expandedBody ? (
+          <div className="unified-movie-expanded-body" onClick={stopCardToggle}>
+            {expandedBody}
+          </div>
+        ) : null}
 
         {rating && !expanded ? (
           <div className="unified-rating-row">

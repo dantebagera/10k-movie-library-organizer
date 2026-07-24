@@ -37,7 +37,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
 
         self.assertEqual(result["director"]["name"], "Ridley Scott")
         self.assertEqual(result["director"]["profile_url"], "https://image.tmdb.org/t/p/w185/ridley.jpg")
-        self.assertEqual(len(result["cast"]), 7)
+        self.assertEqual(len(result["cast"]), 8)
         self.assertEqual(result["cast"][0]["character"], "Role 1")
         self.assertEqual(result["collection"]["name"], "Alien Collection")
         self.assertEqual(result["collection"]["poster_url"], "https://image.tmdb.org/t/p/w185/alien-poster.jpg")

@@ -18,7 +18,7 @@ import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import {
-  DiscoverMovieCard, MovieExpandedDetails, MovieExpandedFacts, PosterEditButton, PosterStateControls
+  DiscoverMovieCard, MovieExpandedCuration, MovieExpandedDetails, MovieExpandedFacts, PosterEditButton, PosterStateControls
 } from '../../components/SharedMovieCards.jsx';
 import TorrentActions from '../../components/TorrentActions.jsx';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
@@ -1689,14 +1689,19 @@ function IndexerMovieCard({
           />
         </>
       )}
-      expandedFooter={expanded ? (
-        <MovieExpandedDetails
+      expandedBody={expanded ? (
+        <MovieExpandedCuration
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
           itemLists={itemLists}
           onEditLists={onEditLists}
           onRemoveFromList={onRemoveFromList}
+        />
+      ) : null}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          details={displayDetails}
         />
       ) : null}
     >
