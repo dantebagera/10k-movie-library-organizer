@@ -1,7 +1,7 @@
 .iptv-workspace {
   display: flex;
   width: 100%;
-  max-width: 1660px;
+  max-width: var(--workspace-content-max-width);
   min-height: calc(100vh - 48px);
   margin: 0 auto;
   flex-direction: column;

@@ -39,6 +39,7 @@
   --expanded-director-avatar-height: 118px;
   --expanded-cast-avatar-width: 106px;
   --expanded-cast-avatar-height: 132px;
+  --workspace-content-max-width: 1640px;
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
   font-size: 16px;
   font-synthesis: none;
@@ -297,6 +298,7 @@ input:focus-visible {
   height: 100vh;
   overflow: auto;
   padding: 24px;
+  scrollbar-gutter: stable;
 }
 
 .workspace-home {
@@ -332,8 +334,11 @@ input:focus-visible {
   flex-direction: column;
   gap: var(--space-3);
   flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--workspace-content-max-width);
   min-width: 0;
   min-height: 0;
+  margin: 0 auto;
 }
 
 .downloads-frame {
@@ -350,7 +355,7 @@ input:focus-visible {
 .ai-control-workspace {
   display: grid;
   gap: 18px;
-  max-width: 1320px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
@@ -632,7 +637,7 @@ input:focus-visible {
 }
 
 .help-workspace {
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
@@ -838,7 +843,7 @@ input:focus-visible {
   gap: var(--space-4);
   margin: 0 auto 20px;
   width: 100%;
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
 }
 
 .topbar > * {
@@ -974,7 +979,7 @@ kbd {
     "movies inspector";
   gap: 18px;
   width: 100%;
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
   min-width: 0;
 }
@@ -2090,7 +2095,7 @@ kbd {
   display: grid;
   gap: 14px;
   width: 100%;
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
@@ -2391,7 +2396,7 @@ kbd {
 }
 
 .movie-lists-workspace {
-  max-width: 1680px;
+  max-width: var(--workspace-content-max-width);
 }
 
 .movie-lists-header {
@@ -3636,7 +3641,7 @@ kbd {
   display: grid;
   gap: 18px;
   width: 100%;
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
@@ -4058,7 +4063,7 @@ kbd {
   display: grid;
   gap: 18px;
   width: 100%;
-  max-width: 1560px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
@@ -4462,7 +4467,7 @@ kbd {
   display: grid;
   gap: 18px;
   width: 100%;
-  max-width: 1640px;
+  max-width: var(--workspace-content-max-width);
   margin: 0 auto;
 }
 
