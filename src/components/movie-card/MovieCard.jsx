@@ -69,6 +69,7 @@ export function UnifiedMovieCard({
   onPlay,
   onToggle,
   children,
+  expandedFooter,
   aside
 }) {
   const interactive = Boolean(onToggle);
@@ -165,6 +166,11 @@ export function UnifiedMovieCard({
       {aside ? (
         <div className="unified-movie-aside" onClick={stopCardToggle}>
           {aside}
+        </div>
+      ) : null}
+      {expandedFooter ? (
+        <div className="unified-movie-expanded-row" onClick={stopCardToggle}>
+          {expandedFooter}
         </div>
       ) : null}
     </article>

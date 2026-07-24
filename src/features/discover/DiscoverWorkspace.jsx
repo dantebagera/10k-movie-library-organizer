@@ -18,7 +18,7 @@ import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import {
-  DiscoverMovieCard, MovieExpandedDetails, PosterEditButton, PosterStateControls
+  DiscoverMovieCard, MovieExpandedDetails, MovieExpandedFacts, PosterEditButton, PosterStateControls
 } from '../../components/SharedMovieCards.jsx';
 import TorrentActions from '../../components/TorrentActions.jsx';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
@@ -1689,6 +1689,16 @@ function IndexerMovieCard({
           />
         </>
       )}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          movie={displayMovie}
+          details={displayDetails}
+          collection={displayCollection}
+          itemLists={itemLists}
+          onEditLists={onEditLists}
+          onRemoveFromList={onRemoveFromList}
+        />
+      ) : null}
     >
       {expanded && (
         <>
@@ -1711,14 +1721,6 @@ function IndexerMovieCard({
           <p className="movie-card-plot discover-plot-visible" dir={languageView.isArabic ? 'rtl' : undefined}>
             {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
           </p>
-          <MovieExpandedDetails
-            movie={displayMovie}
-            details={displayDetails}
-            collection={displayCollection}
-            itemLists={itemLists}
-            onEditLists={onEditLists}
-            onRemoveFromList={onRemoveFromList}
-          />
           <div className="indexer-action-row indexer-action-row-expanded">
             <div className="indexer-selected-meta">
               <strong>{formatCount(selectedVariant.seeders)} seeders</strong>
@@ -1757,6 +1759,7 @@ function IndexerMovieCard({
               <Film size={15} /> Trailer
             </button>
           </div>
+          <MovieExpandedFacts movie={displayMovie} details={displayDetails} />
         </>
       )}
     </UnifiedMovieCard>

@@ -86,11 +86,14 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("onFindTorrent(movie)", indexer_card)
 
     def test_expanded_details_show_release_date_only_for_unreleased_movies(self):
-        expanded_details = APP[APP.index("function MovieExpandedDetails({"):APP.index("function PersonAvatar", APP.index("function MovieExpandedDetails({"))]
-        self.assertIn("const releaseDate = movie?.release_date || details?.release_date || '';", expanded_details)
-        self.assertIn("const releaseDateLabel = isUnreleasedMovie({ release_date: releaseDate }) ? formatReleaseDateLabel(releaseDate) : '';", expanded_details)
-        self.assertIn("(details?.tagline || details?.runtime || releaseDateLabel)", expanded_details)
-        self.assertIn("{releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}", expanded_details)
+        expanded_facts = SHARED_CARDS_SOURCE[
+            SHARED_CARDS_SOURCE.index("function MovieExpandedFacts({"):
+            SHARED_CARDS_SOURCE.index("function MovieExpandedDetails({")
+        ]
+        self.assertIn("const releaseDate = movie?.release_date || details?.release_date || '';", expanded_facts)
+        self.assertIn("const releaseDateLabel = isUnreleasedMovie({ release_date: releaseDate }) ? formatReleaseDateLabel(releaseDate) : '';", expanded_facts)
+        self.assertIn("!details?.tagline && !details?.runtime && !releaseDateLabel", expanded_facts)
+        self.assertIn("{releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}", expanded_facts)
 
     def test_library_cards_keep_owned_badge_without_owned_status_label(self):
         library_card_start = APP.index("className={cx('library-movie-card'")
@@ -116,10 +119,29 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
 
     def test_expanded_details_are_shared_and_include_runtime(self):
         self.assertIn("function MovieExpandedDetails", APP)
+        self.assertIn("function MovieExpandedFacts", APP)
         self.assertNotIn("function DiscoverExpandedDetails", APP)
         self.assertGreaterEqual(APP.count("<MovieExpandedDetails"), 3)
+        self.assertGreaterEqual(APP.count("<MovieExpandedFacts"), 3)
         self.assertIn("details?.runtime", APP)
         self.assertIn("<span>Runtime</span>", APP)
+
+    def test_expanded_card_uses_two_rows_with_approved_desktop_scale(self):
+        component_source = COMPONENT.read_text(encoding="utf-8")
+        card_styles = STYLES.read_text(encoding="utf-8")
+        app_styles = APP_STYLES.read_text(encoding="utf-8")
+
+        self.assertIn("expandedFooter", component_source)
+        self.assertIn('className="unified-movie-expanded-row"', component_source)
+        self.assertIn("--expanded-movie-card-min-height: 692px", card_styles)
+        self.assertIn("--expanded-movie-card-poster-width: 240px", card_styles)
+        self.assertIn("--expanded-movie-card-poster-height: 360px", card_styles)
+        self.assertIn("grid-template-columns: var(--expanded-movie-card-poster-width) minmax(0, 1fr)", card_styles)
+        self.assertIn(".movie-expanded-lower-row", app_styles)
+        self.assertIn("grid-template-columns: minmax(0, 2.15fr) minmax(240px, 0.65fr)", app_styles)
+        self.assertIn('className="movie-expanded-credits-panel"', SHARED_CARDS_SOURCE)
+        self.assertIn('className="movie-expanded-side-panel"', SHARED_CARDS_SOURCE)
+        self.assertIn("Director &amp; top cast", SHARED_CARDS_SOURCE)
 
     def test_expanded_people_cards_include_biography_popup(self):
         expanded_details = APP[APP.index("function MovieExpandedDetails({"):APP.index("function formatVoteCount", APP.index("function MovieExpandedDetails({"))]
@@ -247,7 +269,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         styles_source = STYLES.read_text(encoding="utf-8") + APP_STYLES.read_text(encoding="utf-8")
         self.assertIn("--expanded-director-avatar-size: 96px", styles_source)
         self.assertIn("--expanded-cast-avatar-size: 106px", styles_source)
-        self.assertIn("minmax(160px, 1fr)", styles_source)
+        self.assertIn("minmax(140px, 1fr)", styles_source)
 
     def test_expanded_people_photos_use_rectangular_portrait_framing(self):
         styles_source = APP_STYLES.read_text(encoding="utf-8")
@@ -258,16 +280,16 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("border-radius: 10px", styles_source)
 
         expanded_avatar_styles = styles_source[
-            styles_source.index(".movie-expanded-people-panel .director-person .person-avatar"):
-            styles_source.index(".movie-expanded-people-panel .person-grid")
+            styles_source.index(".movie-expanded-credit-groups .director-person .person-avatar"):
+            styles_source.index(".movie-expanded-credit-groups .person-grid")
         ]
         self.assertIn("width: var(--expanded-director-avatar-width)", expanded_avatar_styles)
         self.assertIn("height: var(--expanded-director-avatar-height)", expanded_avatar_styles)
         self.assertIn("border-radius: 10px", expanded_avatar_styles)
 
         expanded_cast_avatar_styles = styles_source[
-            styles_source.index(".movie-expanded-people-panel .person-card .person-avatar"):
-            styles_source.index(".movie-expanded-people-panel .person-card strong")
+            styles_source.index(".movie-expanded-credit-groups .person-card .person-avatar"):
+            styles_source.index(".movie-expanded-credit-groups .person-card strong")
         ]
         self.assertIn("width: var(--expanded-cast-avatar-width)", expanded_cast_avatar_styles)
         self.assertIn("height: var(--expanded-cast-avatar-height)", expanded_cast_avatar_styles)
@@ -295,23 +317,25 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("object-fit: cover", avatar_image_styles)
 
         expanded_card_styles = styles_source[
-            styles_source.index(".movie-expanded-people-panel .person-card {"):
-            styles_source.index(".movie-expanded-people-panel .person-card .person-avatar")
+            styles_source.index(".movie-expanded-credit-groups .person-card {"):
+            styles_source.index(".movie-expanded-credit-groups .person-card .person-avatar")
         ]
         self.assertIn("grid-template-rows: var(--expanded-cast-avatar-height) auto auto", expanded_card_styles)
         self.assertIn("align-content: start", expanded_card_styles)
         self.assertIn("justify-items: start", expanded_card_styles)
-        self.assertIn("padding: 10px 46px 10px 10px", expanded_card_styles)
+        self.assertIn("padding: 10px", expanded_card_styles)
 
     def test_indexer_expanded_card_uses_shared_content_width_and_action_row(self):
         styles_source = APP_STYLES.read_text(encoding="utf-8")
+        card_styles = STYLES.read_text(encoding="utf-8")
         self.assertIn(".indexer-card:has(.movie-expanded-details)", styles_source)
         indexer_expanded_styles = styles_source[
             styles_source.index(".indexer-card:has(.movie-expanded-details)"):
             styles_source.index(".indexer-poster-wrap", styles_source.index(".indexer-card:has(.movie-expanded-details)"))
         ]
-        self.assertIn("grid-template-columns: 220px minmax(0, 1fr)", indexer_expanded_styles)
+        self.assertNotIn("grid-template-columns", indexer_expanded_styles)
         self.assertNotIn("190px", indexer_expanded_styles)
+        self.assertIn("grid-template-columns: var(--expanded-movie-card-poster-width) minmax(0, 1fr)", card_styles)
 
         self.assertIn("indexer-action-row indexer-action-row-expanded", APP)
         self.assertNotIn("indexer-action-rail indexer-action-rail-expanded", APP)

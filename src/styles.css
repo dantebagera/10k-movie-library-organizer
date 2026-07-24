@@ -2850,15 +2850,10 @@ kbd {
 
 .library-movie-card-expanded {
   grid-column: 1 / -1;
-  grid-template-columns: 220px minmax(0, 1fr);
 }
 
 .movie-view-poster {
   min-height: 172px;
-}
-
-.library-movie-card-expanded .movie-view-poster {
-  min-height: 330px;
 }
 
 .library-item-card:hover {
@@ -4593,12 +4588,7 @@ kbd {
 
 .discover-card-expanded {
   grid-column: span 2;
-  grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
-}
-
-.discover-card-expanded .poster {
-  min-height: 330px;
 }
 
 .discover-card-expanded .poster img {
@@ -4645,7 +4635,6 @@ kbd {
 }
 
 .indexer-card:has(.movie-expanded-details) {
-  grid-template-columns: 220px minmax(0, 1fr);
   align-items: start;
   border-color: #d4af375a;
   box-shadow: var(--shadow-card);
@@ -4658,10 +4647,6 @@ kbd {
 
 .indexer-poster-wrap .poster {
   min-height: 256px;
-}
-
-.indexer-card:has(.movie-expanded-details) .indexer-poster-wrap .poster {
-  min-height: 330px;
 }
 
 .indexer-card:has(.movie-expanded-details) .indexer-poster-wrap .poster img {
@@ -4924,8 +4909,7 @@ kbd {
   display: grid;
   gap: var(--space-3);
   border-top: 1px solid var(--border);
-  margin-top: 4px;
-  padding-top: 12px;
+  padding-top: 14px;
 }
 
 .movie-language-toolbar {
@@ -4943,78 +4927,115 @@ kbd {
   color: var(--danger);
 }
 
-.movie-expanded-people-panel {
-  grid-template-columns: 280px minmax(0, 1fr);
+.movie-expanded-lower-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.15fr) minmax(240px, 0.65fr);
   align-items: start;
-  border-top: 0;
-  padding-top: 0;
+  gap: var(--space-3);
 }
 
-.movie-expanded-people-panel .director-panel,
-.movie-expanded-people-panel .cast-panel {
+.movie-expanded-credits-panel {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, #15171a, #101113);
+  padding: 12px;
+}
+
+.movie-expanded-credit-groups {
+  display: grid;
+  grid-template-columns: minmax(168px, 180px) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.movie-expanded-credit-groups .director-panel,
+.movie-expanded-credit-groups .cast-panel {
   align-content: start;
+  border: 0;
+  background: transparent;
+  padding: 0;
 }
 
-.movie-expanded-people-panel .director-person {
+.movie-expanded-credit-groups .director-person {
   gap: 16px;
 }
 
-.movie-expanded-people-panel .director-person:has(.person-discover-button) {
+.movie-expanded-credit-groups .director-person:has(.person-discover-button) {
   min-height: var(--expanded-director-avatar-height);
   padding-right: 38px;
 }
 
-.movie-expanded-people-panel .director-person .person-discover-button {
+.movie-expanded-credit-groups .director-person .person-discover-button {
   top: calc(var(--expanded-director-avatar-height) - 34px);
   bottom: auto;
 }
 
-.movie-expanded-people-panel .director-person .person-avatar {
+.movie-expanded-credit-groups .director-person .person-avatar {
   width: var(--expanded-director-avatar-width);
   height: var(--expanded-director-avatar-height);
   border-radius: 10px;
 }
 
-.movie-expanded-people-panel .person-grid {
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+.movie-expanded-credit-groups .person-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
 }
 
-.movie-expanded-people-panel .person-card {
+.movie-expanded-credit-groups .person-card {
   grid-template-rows: var(--expanded-cast-avatar-height) auto auto;
   align-content: start;
   justify-items: start;
   min-height: 170px;
   justify-content: start;
   gap: 6px;
-  padding: 10px 46px 10px 10px;
+  padding: 10px;
 }
 
-.movie-expanded-people-panel .person-card .person-discover-button {
+.movie-expanded-credit-groups .person-card .person-discover-button {
   top: auto;
   bottom: 18px;
 }
 
-.movie-expanded-people-panel .person-card .person-avatar {
+.movie-expanded-credit-groups .person-card .person-avatar {
   width: var(--expanded-cast-avatar-width);
   height: var(--expanded-cast-avatar-height);
   border-radius: 10px;
 }
 
-.movie-expanded-people-panel .person-card strong {
-  width: 142px;
+.movie-expanded-credit-groups .person-card strong {
+  width: 100%;
   overflow: hidden;
   font-size: 0.9rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.movie-expanded-people-panel .person-card small {
-  width: 142px;
+.movie-expanded-credit-groups .person-card small {
+  width: 100%;
   overflow: hidden;
   font-size: 0.76rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.movie-expanded-side-panel {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+.movie-expanded-side-panel .collection-panel,
+.movie-expanded-side-panel .lists-panel {
+  grid-column: auto;
+}
+
+.movie-expanded-side-panel .collection-panel {
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .discover-person-static {
@@ -7673,7 +7694,8 @@ kbd {
     grid-template-columns: 1fr;
   }
 
-  .movie-expanded-people-panel,
+  .movie-expanded-lower-row,
+  .movie-expanded-credit-groups,
   .movie-expanded-facts {
     grid-template-columns: 1fr;
   }

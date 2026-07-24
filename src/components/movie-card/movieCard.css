@@ -8,6 +8,9 @@
   --expanded-director-avatar-height: 118px;
   --expanded-cast-avatar-width: 106px;
   --expanded-cast-avatar-height: 132px;
+  --expanded-movie-card-min-height: 692px;
+  --expanded-movie-card-poster-width: 240px;
+  --expanded-movie-card-poster-height: 360px;
 }
 
 .movie-list,
@@ -49,6 +52,11 @@
 .unified-movie-card-expanded {
   grid-column: 1 / -1;
   align-items: start;
+}
+
+.unified-movie-expanded-row {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .unified-movie-poster {
@@ -315,6 +323,23 @@
   min-width: 0;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+@media (min-width: 721px) {
+  .unified-movie-card-expanded {
+    grid-template-columns: var(--expanded-movie-card-poster-width) minmax(0, 1fr);
+    min-height: var(--expanded-movie-card-min-height);
+  }
+
+  .unified-movie-card-expanded .unified-movie-poster {
+    width: var(--expanded-movie-card-poster-width);
+    height: var(--expanded-movie-card-poster-height);
+    min-height: var(--expanded-movie-card-poster-height);
+  }
+
+  .unified-movie-card-expanded .unified-movie-body {
+    min-height: var(--expanded-movie-card-poster-height);
+  }
 }
 
 @media (hover: none) {

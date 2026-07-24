@@ -170,6 +170,21 @@ export function DiscoverMovieCard({
           />
         </>
       )}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          movie={displayMovie}
+          details={displayDetails}
+          collection={displayCollection}
+          itemLists={itemLists}
+          directors={displayMovie.directors}
+          cast={displayMovie.cast}
+          onPersonBrowse={onPersonBrowse}
+          onCollectionBrowse={onCollectionBrowse}
+          onListBrowse={onListBrowse}
+          onEditLists={onEditLists}
+          onRemoveFromList={onRemoveFromList}
+        />
+      ) : null}
     >
       {expanded && (
         <>
@@ -213,22 +228,25 @@ export function DiscoverMovieCard({
               </button>
             )}
           </div>
-          <MovieExpandedDetails
-            movie={displayMovie}
-            details={displayDetails}
-            collection={displayCollection}
-            itemLists={itemLists}
-            directors={displayMovie.directors}
-            cast={displayMovie.cast}
-            onPersonBrowse={onPersonBrowse}
-            onCollectionBrowse={onCollectionBrowse}
-            onListBrowse={onListBrowse}
-            onEditLists={onEditLists}
-            onRemoveFromList={onRemoveFromList}
-          />
+          <MovieExpandedFacts movie={displayMovie} details={displayDetails} />
         </>
       )}
     </UnifiedMovieCard>
+  );
+}
+
+export function MovieExpandedFacts({ movie, details }) {
+  const releaseDate = movie?.release_date || details?.release_date || '';
+  const releaseDateLabel = isUnreleasedMovie({ release_date: releaseDate }) ? formatReleaseDateLabel(releaseDate) : '';
+
+  if (!details?.tagline && !details?.runtime && !releaseDateLabel) return null;
+
+  return (
+    <div className="movie-expanded-facts">
+      {releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}
+      {details?.tagline && <div><span>Tagline</span><strong dir="auto">{details.tagline}</strong></div>}
+      {details?.runtime && <div><span>Runtime</span><strong>{details.runtime} min</strong></div>}
+    </div>
   );
 }
 
@@ -254,8 +272,6 @@ export function MovieExpandedDetails({
   const expandedDirectors = directors?.length ? directors : details?.directors?.length ? details.directors : details?.director?.name ? [details.director] : [];
   const expandedCast = (cast?.length ? cast : details?.cast || []).slice(0, 6);
   const activeCollection = collection?.id ? collection : details?.collection || {};
-  const releaseDate = movie?.release_date || details?.release_date || '';
-  const releaseDateLabel = isUnreleasedMovie({ release_date: releaseDate }) ? formatReleaseDateLabel(releaseDate) : '';
   const canBrowsePeople = Boolean(onPersonBrowse);
   const canBrowseCollection = Boolean(onCollectionBrowse);
   const canBrowseLists = Boolean(onListBrowse);
@@ -284,53 +300,51 @@ export function MovieExpandedDetails({
       ) : details?.error ? (
         <p className="discover-detail-error"><AlertTriangle size={15} /> {details.error}</p>
       ) : (
-        <>
-          {(details?.tagline || details?.runtime || releaseDateLabel) && (
-            <div className="movie-expanded-facts">
-              {releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}
-              {details?.tagline && <div><span>Tagline</span><strong dir="auto">{details.tagline}</strong></div>}
-              {details?.runtime && <div><span>Runtime</span><strong>{details.runtime} min</strong></div>}
-            </div>
-          )}
-          <div className="people-panel movie-expanded-people-panel">
-            <div className="director-panel">
-              <span className="mini-label">Director</span>
-              {expandedDirectors.length ? (
-                expandedDirectors.slice(0, 2).map((person) => (
-                  <PersonCreditCard
-                    key={person.id || person.name}
-                    person={person}
-                    role="director"
-                    canBrowse={canBrowsePeople}
-                    onBrowse={onPersonBrowse}
-                    onDiscover={onPersonDiscover}
-                    onBio={openPersonBio}
-                  />
-                ))
-              ) : (
-                <small>No director data found.</small>
-              )}
-            </div>
-            <div className="cast-panel">
-              <span className="mini-label">Top cast</span>
-              {expandedCast.length ? (
-                <div className="person-grid">
-                  {expandedCast.map((person) => (
+        <div className="movie-expanded-lower-row">
+          <section className="movie-expanded-credits-panel" aria-label="Director and top cast">
+            <span className="mini-label">Director &amp; top cast</span>
+            <div className="movie-expanded-credit-groups">
+              <div className="director-panel">
+                <span className="mini-label">Director</span>
+                {expandedDirectors.length ? (
+                  expandedDirectors.slice(0, 2).map((person) => (
                     <PersonCreditCard
-                      key={`${person.id || person.name}-${person.character || ''}`}
+                      key={person.id || person.name}
                       person={person}
-                      role="actor"
+                      role="director"
                       canBrowse={canBrowsePeople}
                       onBrowse={onPersonBrowse}
                       onDiscover={onPersonDiscover}
                       onBio={openPersonBio}
                     />
-                  ))}
-                </div>
-              ) : (
-                <small>No cast data found.</small>
-              )}
+                  ))
+                ) : (
+                  <small>No director data found.</small>
+                )}
+              </div>
+              <div className="cast-panel">
+                <span className="mini-label">Top cast</span>
+                {expandedCast.length ? (
+                  <div className="person-grid">
+                    {expandedCast.map((person) => (
+                      <PersonCreditCard
+                        key={`${person.id || person.name}-${person.character || ''}`}
+                        person={person}
+                        role="actor"
+                        canBrowse={canBrowsePeople}
+                        onBrowse={onPersonBrowse}
+                        onDiscover={onPersonDiscover}
+                        onBio={openPersonBio}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <small>No cast data found.</small>
+                )}
+              </div>
             </div>
+          </section>
+          <aside className="movie-expanded-side-panel" aria-label="Collection and lists">
             {activeCollection?.id && (
               <div className="collection-panel">
                 {canBrowseCollection ? (
@@ -384,8 +398,8 @@ export function MovieExpandedDetails({
                 <small>{emptyListText}</small>
               )}
             </div>
-          </div>
-        </>
+          </aside>
+        </div>
       )}
       {personBio && (
         <PersonBioModal
@@ -642,6 +656,25 @@ export function LibraryMovieCard({
           />
         </>
       )}
+      expandedFooter={expanded ? (
+        <MovieExpandedDetails
+          movie={displayMovie}
+          details={displayDetails}
+          collection={displayCollection}
+          itemLists={itemLists}
+          directors={languageView.isArabic ? displayDetails?.directors : directors}
+          cast={languageView.isArabic ? displayDetails?.cast : cast}
+          onPersonBrowse={onPersonFilter}
+          onPersonDiscover={onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined}
+          onCollectionBrowse={onCollectionFilter}
+          onListBrowse={onListFilter}
+          onEditLists={onEditLists}
+          onRemoveFromList={onRemoveFromList}
+          onEditCollection={onEditCollection}
+          onResetCollection={onResetCollection}
+          emptyListText="No user lists yet."
+        />
+      ) : null}
     >
       {expanded && (
         <>
@@ -665,23 +698,7 @@ export function LibraryMovieCard({
               </button>
             )}
           </div>
-          <MovieExpandedDetails
-            movie={displayMovie}
-            details={displayDetails}
-            collection={displayCollection}
-            itemLists={itemLists}
-            directors={languageView.isArabic ? displayDetails?.directors : directors}
-            cast={languageView.isArabic ? displayDetails?.cast : cast}
-            onPersonBrowse={onPersonFilter}
-            onPersonDiscover={onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined}
-            onCollectionBrowse={onCollectionFilter}
-            onListBrowse={onListFilter}
-            onEditLists={onEditLists}
-            onRemoveFromList={onRemoveFromList}
-            onEditCollection={onEditCollection}
-            onResetCollection={onResetCollection}
-            emptyListText="No user lists yet."
-          />
+          <MovieExpandedFacts movie={displayMovie} details={displayDetails} />
         </>
       )}
     </UnifiedMovieCard>
