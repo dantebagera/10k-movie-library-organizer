@@ -4929,7 +4929,7 @@ kbd {
 
 .movie-expanded-lower-row {
   display: grid;
-  grid-template-columns: minmax(0, 2.15fr) minmax(240px, 0.65fr);
+  grid-template-columns: minmax(0, 2.2fr) minmax(220px, 0.6fr);
   align-items: start;
   gap: var(--space-3);
 }
@@ -4946,7 +4946,7 @@ kbd {
 
 .movie-expanded-credit-groups {
   display: grid;
-  grid-template-columns: minmax(168px, 180px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 240px) minmax(0, 1fr);
   align-items: start;
   gap: 12px;
 }

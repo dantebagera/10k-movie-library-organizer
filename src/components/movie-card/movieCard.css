@@ -8,9 +8,9 @@
   --expanded-director-avatar-height: 118px;
   --expanded-cast-avatar-width: 106px;
   --expanded-cast-avatar-height: 132px;
-  --expanded-movie-card-min-height: 692px;
-  --expanded-movie-card-poster-width: 240px;
-  --expanded-movie-card-poster-height: 360px;
+  --expanded-movie-card-min-height: 796px;
+  --expanded-movie-card-poster-width: 309px;
+  --expanded-movie-card-poster-height: 464px;
 }
 
 .movie-list,
