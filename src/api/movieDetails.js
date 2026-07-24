@@ -65,6 +65,31 @@ export async function fetchCanonicalMovieDetails(movie, owned = null) {
   };
 }
 
+export async function fetchTransientMovieLanguage(tmdbId, language = 'ar-SA') {
+  const id = String(tmdbId || '').trim();
+  if (!id) throw new Error('A TMDB ID is required for language display.');
+  return fetchJson(
+    `/api/tmdb/details?tmdb_id=${encodeURIComponent(id)}&language=${encodeURIComponent(language)}`
+  );
+}
+
+export function mergeTransientMovieLanguage(movie, details, localized) {
+  if (!localized) return { displayMovie: movie, displayDetails: details };
+  return {
+    displayMovie: {
+      ...(movie || {}),
+      ...localized,
+      summary: localized.summary || localized.plot || movie?.summary || movie?.plot || ''
+    },
+    displayDetails: {
+      ...(details || {}),
+      ...localized,
+      loading: false,
+      error: ''
+    }
+  };
+}
+
 export function movieCollectionUrl(details) {
   const collectionId = details?.collection?.id;
   if (!collectionId) return '';

@@ -410,6 +410,58 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertFalse(payload["cached"])
         self.assertEqual(payload["release_date"], "2026-07-15")
 
+    def test_arabic_tmdb_details_are_transient_and_do_not_touch_persistent_cache(self):
+        original_key = app._tmdb_key
+        original_cache = app._tmdb_library_cache
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_library_cache = {
+            "550": {"fetched_at": 1, "data": {"tmdb_id": "550", "runtime": 139, "release_date": "1999-10-15"}}
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return app._json.dumps({
+                    "id": 550,
+                    "title": "نادي القتال",
+                    "overview": "حبكة عربية",
+                    "poster_path": "/arabic-poster.jpg",
+                    "release_date": "1999-10-15",
+                    "runtime": 139,
+                    "genres": [{"id": 18, "name": "دراما"}],
+                    "credits": {
+                        "crew": [{"id": 7467, "name": "ديفيد فينشر", "job": "Director"}],
+                        "cast": [{"id": 287, "name": "براد بيت", "character": "Tyler Durden"}],
+                    },
+                    "videos": {"results": []},
+                }, ensure_ascii=False).encode("utf-8")
+
+        try:
+            with patch("app.urllib.request.urlopen", return_value=FakeResponse()) as urlopen, \
+                 patch("app._save_tmdb_library_cache") as save_cache:
+                response = app.app.test_client().get("/api/tmdb/details?tmdb_id=550&language=ar-SA")
+        finally:
+            retained_cache = app._tmdb_library_cache
+            app._tmdb_key = original_key
+            app._tmdb_library_cache = original_cache
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["title"], "نادي القتال")
+        self.assertEqual(payload["plot"], "حبكة عربية")
+        self.assertEqual(payload["genres"], ["دراما"])
+        self.assertEqual(payload["directors"][0]["name"], "ديفيد فينشر")
+        self.assertTrue(payload["transient"])
+        self.assertEqual(payload["display_language"], "ar-SA")
+        self.assertIn("language=ar-SA", urlopen.call_args.args[0].full_url)
+        self.assertEqual(retained_cache["550"]["data"]["runtime"], 139)
+        save_cache.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

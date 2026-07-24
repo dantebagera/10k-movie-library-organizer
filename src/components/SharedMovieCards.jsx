@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { fetchJson } from '../api/client.js';
 import { mergeCanonicalMovieDetails } from '../api/movieDetails.js';
 import SelectionCheckbox from './SelectionCheckbox.jsx';
+import { MovieLanguageToggle, useTransientMovieLanguage } from './MovieLanguageToggle.jsx';
 import { UnifiedMovieCard } from './movie-card/MovieCard.jsx';
 import { cx, formatCount } from '../utils/appUtils.js';
 import {
@@ -110,13 +111,23 @@ export function DiscoverMovieCard({
 }) {
   const ownedItem = owned?.canonical_card || owned?.library_item || {};
   const ownedCanonical = ownedItem.canonical_metadata || {};
-  const displayMovie = canonicalOwnedMovie(movie, owned);
-  const displayDetails = ownedCanonical.accepted ? {
+  const baseDisplayMovie = canonicalOwnedMovie(movie, owned);
+  const baseDisplayDetails = ownedCanonical.accepted ? {
     ...mergeCanonicalMovieDetails(ownedCanonical, details || {}),
     loading: details?.loading,
     error: details?.error,
     trailer_url: details?.trailer_url || ownedCanonical.trailer_url || ''
   } : details;
+  const languageView = useTransientMovieLanguage({
+    movie: baseDisplayMovie,
+    details: baseDisplayDetails,
+    expanded
+  });
+  const displayMovie = languageView.displayMovie;
+  const displayDetails = languageView.displayDetails;
+  const displayCollection = languageView.isArabic && displayDetails?.collection?.id
+    ? { ...(collection || {}), ...displayDetails.collection }
+    : (collection?.id ? collection : displayMovie.collection || {});
   const lowQuality = Boolean(owned?.maintenance_upgrade_candidate);
   const unreleased = !owned && isUnreleasedMovie(displayMovie);
   return (
@@ -162,8 +173,11 @@ export function DiscoverMovieCard({
     >
       {expanded && (
         <>
+          <MovieLanguageToggle {...languageView.toggleProps} />
           {reason && <p className="ai-reason"><Sparkles size={14} /> {reason}</p>}
-          <p className="movie-card-plot discover-plot-visible">{displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}</p>
+          <p className="movie-card-plot discover-plot-visible" dir={languageView.isArabic ? 'rtl' : undefined}>
+            {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
+          </p>
           <div className="card-actions">
             {owned ? (
               <>
@@ -202,7 +216,7 @@ export function DiscoverMovieCard({
           <MovieExpandedDetails
             movie={displayMovie}
             details={displayDetails}
-            collection={collection?.id ? collection : displayMovie.collection || {}}
+            collection={displayCollection}
             itemLists={itemLists}
             directors={displayMovie.directors}
             cast={displayMovie.cast}
@@ -274,7 +288,7 @@ export function MovieExpandedDetails({
           {(details?.tagline || details?.runtime || releaseDateLabel) && (
             <div className="movie-expanded-facts">
               {releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}
-              {details?.tagline && <div><span>Tagline</span><strong>{details.tagline}</strong></div>}
+              {details?.tagline && <div><span>Tagline</span><strong dir="auto">{details.tagline}</strong></div>}
               {details?.runtime && <div><span>Runtime</span><strong>{details.runtime} min</strong></div>}
             </div>
           )}
@@ -323,7 +337,7 @@ export function MovieExpandedDetails({
                   <button type="button" className="collection-main-action" onClick={() => onCollectionBrowse(activeCollection)}>
                     <Clapperboard size={17} />
                     <span>
-                      <strong>{activeCollection.name}</strong>
+                      <strong dir="auto">{activeCollection.name}</strong>
                       <small>{collectionDetail}</small>
                     </span>
                   </button>
@@ -331,7 +345,7 @@ export function MovieExpandedDetails({
                   <div className="collection-main-action discover-collection-static">
                     <Clapperboard size={17} />
                     <span>
-                      <strong>{activeCollection.name}</strong>
+                      <strong dir="auto">{activeCollection.name}</strong>
                       <small>{collectionDetail}</small>
                     </span>
                   </div>
@@ -440,12 +454,12 @@ function PersonCreditCard({ person, role, canBrowse, onBrowse, onDiscover, onBio
       <PersonAvatar person={person} />
       {isDirector ? (
         <span>
-          <strong>{person.name}</strong>
+          <strong dir="auto">{person.name}</strong>
           <small>{browseLabel}</small>
         </span>
       ) : (
         <>
-          <strong>{person.name}</strong>
+          <strong dir="auto">{person.name}</strong>
           <small>{browseLabel}</small>
         </>
       )}
@@ -571,16 +585,36 @@ export function LibraryMovieCard({
     error: details.error,
     trailer_url: details.trailer_url || canonical.trailer_url || ''
   } : canonical;
+  const baseDisplayMovie = {
+    ...canonical,
+    title: identity.title,
+    year: identity.year,
+    tmdb_id: canonical.tmdb_id || item.tmdb_id || '',
+    poster_url: posterUrl,
+    genres,
+    summary: canonical.summary || canonical.plot || details?.summary || details?.plot || item.plex_summary || '',
+    plot: canonical.plot || canonical.summary || details?.plot || details?.summary || item.plex_summary || ''
+  };
+  const languageView = useTransientMovieLanguage({
+    movie: baseDisplayMovie,
+    details: canonicalDetails,
+    expanded
+  });
+  const displayMovie = languageView.displayMovie;
+  const displayDetails = languageView.displayDetails;
+  const displayCollection = languageView.isArabic && displayDetails?.collection?.id
+    ? { ...(collection || {}), ...displayDetails.collection }
+    : (collection?.id ? collection : canonical.collection || {});
 
   return (
     <UnifiedMovieCard
       className={cx('library-movie-card', expanded && 'library-movie-card-expanded')}
-      title={identity.title}
-      year={identity.year}
-      posterUrl={posterUrl}
-      rating={canonical.rating || item.plex_rating}
-      voteCount={formatVoteCount(canonical.tmdb_vote_count)}
-      chips={genres.slice(0, 2)}
+      title={displayMovie.title}
+      year={displayMovie.year}
+      posterUrl={displayMovie.poster_url}
+      rating={displayMovie.rating || displayMovie.tmdb_rating || item.plex_rating}
+      voteCount={formatVoteCount(displayMovie.tmdb_vote_count)}
+      chips={(displayMovie.genres || genres).slice(0, 2)}
       mutedChips={[locale, getQualityLabel(item), item.size_human]}
       statusLabel={lowQuality ? 'Upgrade candidate' : ''}
       statusTone={lowQuality ? 'warning' : 'neutral'}
@@ -611,8 +645,9 @@ export function LibraryMovieCard({
     >
       {expanded && (
         <>
-          <p className="library-summary movie-summary-expanded">
-            {canonical.summary || canonical.plot || details?.summary || details?.plot || item.plex_summary || 'No plot summary is available yet.'}
+          <MovieLanguageToggle {...languageView.toggleProps} />
+          <p className="library-summary movie-summary-expanded" dir={languageView.isArabic ? 'rtl' : undefined}>
+            {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
           </p>
           <div className="library-card-actions">
             <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(item.path)}>
@@ -631,12 +666,12 @@ export function LibraryMovieCard({
             )}
           </div>
           <MovieExpandedDetails
-            movie={{ title: identity.title, year: identity.year }}
-            details={canonicalDetails}
-            collection={collection?.id ? collection : canonical.collection || {}}
+            movie={displayMovie}
+            details={displayDetails}
+            collection={displayCollection}
             itemLists={itemLists}
-            directors={directors}
-            cast={cast}
+            directors={languageView.isArabic ? displayDetails?.directors : directors}
+            cast={languageView.isArabic ? displayDetails?.cast : cast}
             onPersonBrowse={onPersonFilter}
             onPersonDiscover={onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined}
             onCollectionBrowse={onCollectionFilter}

@@ -14,6 +14,7 @@ import Pagination from '../../components/Pagination.jsx';
 import Rating from '../../components/Rating.jsx';
 import PosterEditorModal from '../../components/PosterEditorModal.jsx';
 import PersonSearchCard from '../../components/PersonSearchCard.jsx';
+import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components/MovieLanguageToggle.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import {
@@ -1640,17 +1641,23 @@ function IndexerMovieCard({
   const lowQuality = owned && isLowQuality(owned.resolution);
   const variants = sortTorrentVariants(movie.variants || []);
   const selectedVariant = variants[selectedIndex] || variants[0] || {};
-  const posterMovie = owned?.poster_url ? { ...movie, poster_url: owned.poster_url } : movie;
+  const baseDisplayMovie = owned?.poster_url ? { ...movie, poster_url: owned.poster_url } : movie;
+  const languageView = useTransientMovieLanguage({ movie: baseDisplayMovie, details, expanded });
+  const displayMovie = languageView.displayMovie;
+  const displayDetails = languageView.displayDetails;
+  const displayCollection = languageView.isArabic && displayDetails?.collection?.id
+    ? { ...(collection || {}), ...displayDetails.collection }
+    : collection;
 
   return (
     <UnifiedMovieCard
       className={cx('indexer-card', expanded && 'discover-card-expanded')}
-      title={movie.title}
-      year={movie.year}
-      posterUrl={posterMovie.poster_url}
-      rating={movie.tmdb_rating}
-      voteCount={formatVoteCount(movie.tmdb_vote_count)}
-      chips={(movie.genres || []).slice(0, 2)}
+      title={displayMovie.title}
+      year={displayMovie.year}
+      posterUrl={displayMovie.poster_url}
+      rating={displayMovie.tmdb_rating}
+      voteCount={formatVoteCount(displayMovie.tmdb_vote_count)}
+      chips={(displayMovie.genres || []).slice(0, 2)}
       mutedChips={[
         selectedVariant.resolution || movie.best_resolution,
         selectedVariant.indexer,
@@ -1667,25 +1674,26 @@ function IndexerMovieCard({
       cornerControls={(
         <>
           <PosterStateControls
-            title={movie.title}
+            title={displayMovie.title}
             watched={watched}
             watchlisted={watchlisted}
             onToggleWatched={owned ? onToggleWatched : undefined}
             onToggleWatchlist={onToggleWatchlist}
           />
-          <PosterEditButton title={movie.title} onEdit={owned ? onEditPoster : undefined} />
+          <PosterEditButton title={displayMovie.title} onEdit={owned ? onEditPoster : undefined} />
           <SelectionCheckbox
             className="discover-selection-checkbox"
             checked={Boolean(selected)}
             onChange={onSelect}
-            label={`Select ${movie.title}`}
+            label={`Select ${displayMovie.title}`}
           />
         </>
       )}
     >
       {expanded && (
         <>
-          <div className="variant-stack" aria-label={`Available releases for ${movie.title}`}>
+          <MovieLanguageToggle {...languageView.toggleProps} />
+          <div className="variant-stack" aria-label={`Available releases for ${displayMovie.title}`}>
             {variants.map((variant, index) => (
               <button
                 type="button"
@@ -1700,11 +1708,13 @@ function IndexerMovieCard({
               </button>
             ))}
           </div>
-          <p className="movie-card-plot discover-plot-visible">{movie.plot || 'No plot summary is available yet.'}</p>
+          <p className="movie-card-plot discover-plot-visible" dir={languageView.isArabic ? 'rtl' : undefined}>
+            {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
+          </p>
           <MovieExpandedDetails
-            movie={movie}
-            details={details}
-            collection={collection}
+            movie={displayMovie}
+            details={displayDetails}
+            collection={displayCollection}
             itemLists={itemLists}
             onEditLists={onEditLists}
             onRemoveFromList={onRemoveFromList}

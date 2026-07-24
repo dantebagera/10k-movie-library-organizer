@@ -9880,11 +9880,15 @@ def tmdb_card_projections():
 def tmdb_details():
     global _tmdb_library_cache
     tmdb_id = request.args.get('tmdb_id', '').strip()
+    language = request.args.get('language', 'en-US').strip() or 'en-US'
     refresh = request.args.get('refresh') == '1'
     if not tmdb_id or not _tmdb_key:
         return jsonify({'error': 'tmdb_id and TMDB key required'}), 400
+    if language not in {'en-US', 'ar-SA'}:
+        return jsonify({'error': 'Unsupported TMDB display language'}), 400
+    transient = language != 'en-US'
     try:
-        cached = _tmdb_library_cache.get(str(tmdb_id))
+        cached = None if transient else _tmdb_library_cache.get(str(tmdb_id))
         if cached and not refresh and cached.get('data', {}).get('release_date'):
             data = dict(cached.get('data', {}))
             data['cached'] = True
@@ -9892,21 +9896,29 @@ def tmdb_details():
             return jsonify(data)
 
         safe_id = urllib.parse.quote(str(tmdb_id))
-        url = (f"https://api.themoviedb.org/3/movie/{safe_id}"
-               f"?api_key={urllib.parse.quote(_tmdb_key)}&language=en-US"
-               f"&append_to_response=credits,videos")
+        query = urllib.parse.urlencode({
+            'api_key': _tmdb_key,
+            'language': language,
+            'append_to_response': 'credits,videos',
+        })
+        url = f"https://api.themoviedb.org/3/movie/{safe_id}?{query}"
         req = urllib.request.Request(url, headers={'Accept': 'application/json'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = _json.loads(resp.read().decode())
 
-        details = _normalize_tmdb_details_payload(raw)
+        details = _normalize_tmdb_metadata(raw) if transient else {}
+        details.update(_normalize_tmdb_details_payload(raw))
         details['tmdb_id'] = str(tmdb_id)
         fetched_at = time.time()
-        _tmdb_library_cache[str(tmdb_id)] = {'fetched_at': fetched_at, 'data': details}
-        _save_tmdb_library_cache(_tmdb_library_cache)
+        if not transient:
+            _tmdb_library_cache[str(tmdb_id)] = {'fetched_at': fetched_at, 'data': details}
+            _save_tmdb_library_cache(_tmdb_library_cache)
         result = dict(details)
         result['cached'] = False
         result['fetched_at'] = fetched_at
+        if transient:
+            result['display_language'] = language
+            result['transient'] = True
         return jsonify(result)
     except urllib.error.HTTPError as e:
         return jsonify({'error': f'TMDB returned HTTP {e.code}'}), 502

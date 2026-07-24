@@ -113,7 +113,7 @@ export function UnifiedMovieCard({
       <div className={cx('unified-movie-body', bodyClassName)}>
         <header className="unified-movie-header">
           <div className="unified-movie-title-block">
-            <h3 className={cx(longTitle && 'unified-title-long', veryLongTitle && 'unified-title-very-long')}>
+            <h3 dir="auto" className={cx(longTitle && 'unified-title-long', veryLongTitle && 'unified-title-very-long')}>
               {displayTitle}
             </h3>
             <span>{year || 'Unknown year'}</span>
@@ -138,11 +138,11 @@ export function UnifiedMovieCard({
 
         <div className="unified-chip-row" aria-label="Movie metadata">
           {chips.filter(Boolean).map((chip) => (
-            <span className="unified-chip" key={chip}>{chip}</span>
+            <span className="unified-chip" dir="auto" key={chip}>{chip}</span>
           ))}
           {ownedBadge ? <span className="unified-owned-badge">Owned</span> : null}
           {mutedChips.filter(Boolean).map((chip) => (
-            <span className="unified-chip unified-chip-muted" key={chip}>{chip}</span>
+            <span className="unified-chip unified-chip-muted" dir="auto" key={chip}>{chip}</span>
           ))}
           {statusLabel ? (
             <span className={cx('unified-status-chip', `unified-status-${statusTone}`)}>{statusLabel}</span>
