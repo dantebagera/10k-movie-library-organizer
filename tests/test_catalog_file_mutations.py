@@ -7,6 +7,36 @@ import app
 
 
 class CatalogFileMutationTest(unittest.TestCase):
+    def test_delete_preview_reports_complete_folder_without_mutating_it(self):
+        original_dirs = app._movies_dirs
+        original_dir = app._movies_dir
+        original_user_data = app._user_data_dir
+        with tempfile.TemporaryDirectory() as movies_tmp, tempfile.TemporaryDirectory() as data_tmp:
+            movie_folder = Path(movies_tmp) / "Project Hail Mary (2026)"
+            movie_folder.mkdir()
+            movie_path = movie_folder / "Project.Hail.Mary.2026.mkv"
+            movie_path.write_bytes(b"movie")
+            (movie_folder / "Project.Hail.Mary.2026.srt").write_text("subtitles", encoding="utf-8")
+            try:
+                app._movies_dirs = [movies_tmp]
+                app._movies_dir = movies_tmp
+                app._user_data_dir = data_tmp
+                response = app.app.test_client().post("/api/delete", json={
+                    "paths": [str(movie_path)],
+                    "trash": True,
+                    "preview": True,
+                })
+                movie_still_exists = movie_path.exists()
+            finally:
+                app._movies_dirs = original_dirs
+                app._movies_dir = original_dir
+                app._user_data_dir = original_user_data
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(movie_still_exists)
+        self.assertEqual(response.get_json()["folder_count"], 1)
+        self.assertEqual(response.get_json()["actions"][0]["target"], str(movie_folder.resolve()))
+
     def test_fix_path_refuses_to_move_a_correctly_nested_movie_folder_outside_library(self):
         original_dirs = app._movies_dirs
         original_dir = app._movies_dir
@@ -180,6 +210,7 @@ class CatalogFileMutationTest(unittest.TestCase):
         original_dirs = app._movies_dirs
         original_dir = app._movies_dir
         original_user_data = app._user_data_dir
+        original_tmdb_key = app._tmdb_key
         with tempfile.TemporaryDirectory() as movies_tmp, tempfile.TemporaryDirectory() as data_tmp:
             movie_path = Path(movies_tmp) / "Unknown.1995.1080p.mkv"
             movie_path.write_bytes(b"movie")
@@ -202,6 +233,7 @@ class CatalogFileMutationTest(unittest.TestCase):
                 app._movies_dirs = [movies_tmp]
                 app._movies_dir = movies_tmp
                 app._user_data_dir = data_tmp
+                app._tmdb_key = "test-key"
                 with patch("app._active_metadata_provider", return_value="tmdb"), \
                         patch("app._resolve_tmdb_identity", return_value=app._identity_resolution("unmatched")), \
                         patch("app._file_copy_is_stable", return_value=True):
@@ -211,6 +243,7 @@ class CatalogFileMutationTest(unittest.TestCase):
                 app._movies_dirs = original_dirs
                 app._movies_dir = original_dir
                 app._user_data_dir = original_user_data
+                app._tmdb_key = original_tmdb_key
 
         self.assertEqual(first["checked"], 1)
         self.assertEqual(second["checked"], 0)

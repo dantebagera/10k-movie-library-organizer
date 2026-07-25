@@ -1,7 +1,33 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mergeCanonicalMovieDetails, mergeTransientMovieLanguage } from '../src/api/movieDetails.js';
+import {
+  markMovieDetailsCacheStale,
+  mergeCanonicalMovieDetails,
+  mergeTransientMovieLanguage
+} from '../src/api/movieDetails.js';
+
+test('catalog changes retain visible movie details while marking them for refresh', () => {
+  const cache = {
+    'owned:c:\\movies\\one.mkv': {
+      plot: 'The visible plot',
+      certification: 'R',
+      writers: [{ name: 'A Writer' }],
+      keywords: ['horror']
+    }
+  };
+
+  const staleCache = markMovieDetailsCacheStale(cache);
+
+  assert.notEqual(staleCache, cache);
+  assert.notEqual(staleCache['owned:c:\\movies\\one.mkv'], cache['owned:c:\\movies\\one.mkv']);
+  assert.equal(staleCache['owned:c:\\movies\\one.mkv'].plot, 'The visible plot');
+  assert.equal(staleCache['owned:c:\\movies\\one.mkv'].certification, 'R');
+  assert.deepEqual(staleCache['owned:c:\\movies\\one.mkv'].writers, [{ name: 'A Writer' }]);
+  assert.deepEqual(staleCache['owned:c:\\movies\\one.mkv'].keywords, ['horror']);
+  assert.equal(staleCache['owned:c:\\movies\\one.mkv'].stale, true);
+  assert.equal(cache['owned:c:\\movies\\one.mkv'].stale, undefined);
+});
 
 test('owned detail merges preserve valid card summaries when deferred fields are empty', () => {
   const summary = {

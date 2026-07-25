@@ -343,6 +343,12 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(owned_item["canonical_metadata"]["plot"], "TMDB plot wins the canonical summary.")
         self.assertEqual(details.get_json()["item"]["canonical_metadata"]["plot"], "TMDB plot wins the canonical summary.")
         self.assertEqual(details.get_json()["item"]["plex_summary"], "Plex summary must remain available without replacing the TMDB plot.")
+        for field in ("accepted", "title", "year"):
+            self.assertEqual(
+                people_item["canonical_metadata"][field],
+                full_item["canonical_metadata"][field],
+                f"People projection {field}",
+            )
         self.assertEqual(people_item["canonical_metadata"]["cast"][0]["name"], "Lead Actor 1")
         self.assertEqual(full_item["canonical_metadata"]["plot"], "TMDB plot wins the canonical summary.")
 

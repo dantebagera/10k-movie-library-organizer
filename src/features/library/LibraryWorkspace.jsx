@@ -5,7 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { announceLibraryChanged, CATALOG_GENERATION_CHANGED_EVENT, observeCatalogGeneration } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, movieCollectionUrl } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import ExportCopyDialog from '../../components/ExportCopyDialog.jsx';
@@ -139,7 +139,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
 
   useEffect(() => {
     const clearDetailCaches = () => {
-      setTmdbCache({});
+      setTmdbCache(markMovieDetailsCacheStale);
       setCollectionCache({});
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
@@ -194,10 +194,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       const requestedPage = forceScan ? 1 : currentPage;
       const data = await fetchJson(libraryFilterQuery(serverFilters, requestedPage, pageSize, forceScan));
       if (requestSeq !== libraryRequestSeq.current) return;
-      if (observeCatalogGeneration(data.catalog_generation)) {
-        setTmdbCache({});
-        setCollectionCache({});
-      }
+      observeCatalogGeneration(data.catalog_generation);
       setItems(data.items || []);
       setLibraryResult({
         total: Number(data.total || 0),
@@ -574,14 +571,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   async function loadLibraryDetails(item) {
     const cacheKey = getTmdbCacheKey(item);
     let details = tmdbCache[cacheKey];
-    if (details && !details.loading && !details.error) return details;
+    if (details && !details.loading && !details.error && !details.stale) return details;
     setTmdbCache((cache) => ({ ...cache, [cacheKey]: { loading: true, cast: [], trailer_url: '' } }));
     try {
       details = await fetchCanonicalMovieDetails(item, item);
-      if (details.catalog_generation_changed) {
-        setTmdbCache({});
-        setCollectionCache({});
-      }
       setTmdbCache((cache) => ({ ...cache, [cacheKey]: details }));
       const collectionUrl = movieCollectionUrl(details);
       if (collectionUrl && !collectionCache[details.collection.id]) {
@@ -1123,6 +1116,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
                     watchlisted={movieHasSystemState(item, userLists, 'watchlist')}
                     onToggleWatched={() => toggleSystemList('watched', item)}
                     onToggleWatchlist={() => toggleSystemList('watchlist', item)}
+                    showOwnedBadge={false}
                     selected={selectedLibraryKeys.has(librarySelectionKey(item))}
                     onSelect={(checked) => toggleLibrarySelection(item, checked)}
                   />

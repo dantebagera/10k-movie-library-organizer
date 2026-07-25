@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,11 @@ class CanonicalCatalogTest(unittest.TestCase):
                         "name": "Director",
                         "profile_url": "https://image.example/director.jpg",
                     }],
+                    "writers": [
+                        {"id": "201", "name": "Screenwriter", "job": "Screenplay"},
+                    ],
+                    "certification": "PG-13",
+                    "keywords": ["journey", "friendship"],
                     "collection": {"id": "9", "name": "Complete Collection"},
                     "updated_at": 10,
                 },
@@ -83,6 +89,9 @@ class CanonicalCatalogTest(unittest.TestCase):
                             "profile_url": "https://image.example/recovered.jpg",
                         }],
                         "directors": [],
+                        "writers": [],
+                        "certification": "",
+                        "keywords": [],
                         "updated_at": 20,
                     }
                 } if include_missing_tmdb else {}),
@@ -133,6 +142,9 @@ class CanonicalCatalogTest(unittest.TestCase):
         self.assertEqual(projection_a["directors"][0]["profile_url"], "https://image.example/director.jpg")
         self.assertEqual(projection_a["genres"], ["Drama"])
         self.assertEqual(projection_a["collection"]["name"], "Complete Collection")
+        self.assertEqual(projection_a["writers"][0]["name"], "Screenwriter")
+        self.assertEqual(projection_a["certification"], "PG-13")
+        self.assertEqual(projection_a["keywords"], ["journey", "friendship"])
         self.assertEqual(projection_a["poster_url"], "/api/library/posters/image/custom.jpg")
         self.assertTrue(projection_a["poster_override"])
 
@@ -188,6 +200,39 @@ class CanonicalCatalogTest(unittest.TestCase):
         self.assertFalse(set(CANONICAL_DEFERRED_DETAIL_FIELDS).intersection(card))
         for field in CANONICAL_CARD_FIELDS:
             self.assertEqual(card[field], details[field], field)
+
+    def test_detail_contract_backfill_query_only_returns_stale_selected_tmdb_snapshots(self):
+        _, duplicate_a, _ = self._import()
+        connection = self.store.connect()
+        try:
+            self.assertEqual(
+                self.store.canonical.tmdb_detail_contract_backfill_ids(connection),
+                ["404"],
+            )
+            connection.execute(
+                "UPDATE provider_movie_snapshots SET source_json=? WHERE snapshot_key='tmdb:42'",
+                (json.dumps({"tmdb_id": "42", "title": "Complete"}),),
+            )
+            self.assertEqual(
+                self.store.canonical.tmdb_detail_contract_backfill_ids(connection),
+                ["404", "42"],
+            )
+            connection.execute(
+                "UPDATE provider_movie_snapshots SET source_json=? WHERE snapshot_key='tmdb:42'",
+                (json.dumps({
+                    "tmdb_id": "42",
+                    "title": "Complete",
+                    "writers": [],
+                    "certification": "",
+                    "keywords": [],
+                }),),
+            )
+            self.assertEqual(
+                self.store.canonical.tmdb_detail_contract_backfill_ids(connection),
+                ["404"],
+            )
+        finally:
+            connection.close()
 
 
 if __name__ == "__main__":

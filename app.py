@@ -8,6 +8,7 @@ import hashlib
 import threading
 import subprocess
 import socket
+import sys
 import tempfile
 import concurrent.futures
 import urllib.request
@@ -24,7 +25,11 @@ from services.movie_identity import (
     same_public_identity as _same_public_identity,
 )
 from services.catalog_repository import CatalogRepository
-from services.canonical_catalog import canonical_card_projection, canonical_details_projection
+from services.canonical_catalog import (
+    CANONICAL_CONTRACT_VERSION,
+    canonical_card_projection,
+    canonical_details_projection,
+)
 from services.curation_store import UserCurationStore, normalize_curated_movie as _normalize_curated_movie
 from services.curation_routes import register_curation_routes
 from services.frontend_routes import register_frontend_routes
@@ -91,10 +96,29 @@ _startup_metrics = {
 }
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _SLOW_ROUTE_MS = int(os.environ.get('CP_SLOW_ROUTE_MS', '250') or '250')
+_TEST_MODE = str(os.environ.get('CP_TEST_MODE', '') or '').strip() == '1'
+_UNIT_TEST_PROCESS = 'unittest' in sys.modules or 'pytest' in sys.modules
+if _UNIT_TEST_PROCESS and not _TEST_MODE:
+    raise RuntimeError('Python tests require CP_TEST_MODE=1 and an isolated CP_TEST_ROOT')
+_TEST_ROOT = None
+if _TEST_MODE:
+    configured_test_root = str(os.environ.get('CP_TEST_ROOT', '') or '').strip()
+    if not configured_test_root:
+        raise RuntimeError('CP_TEST_MODE requires CP_TEST_ROOT')
+    _TEST_ROOT = Path(configured_test_root).resolve()
+    system_temp_root = Path(tempfile.gettempdir()).resolve()
+    if _TEST_ROOT != system_temp_root and system_temp_root not in _TEST_ROOT.parents:
+        raise RuntimeError('CP_TEST_ROOT must be inside the operating-system temporary directory')
+    _TEST_ROOT.mkdir(parents=True, exist_ok=True)
+
+    def _blocked_test_urlopen(*_args, **_kwargs):
+        raise RuntimeError('External provider network access is blocked in CP test mode')
+
+    urllib.request.urlopen = _blocked_test_urlopen
 register_frontend_routes(app, _BASE_DIR)
 
 # Config file stored next to app.py
-_CONFIG_FILE = os.path.join(_BASE_DIR, 'config.json')
+_CONFIG_FILE = str(_TEST_ROOT / 'config.json') if _TEST_MODE else os.path.join(_BASE_DIR, 'config.json')
 
 
 @app.before_request
@@ -129,6 +153,7 @@ def _finish_route_timer(response):
     if request.path.startswith('/api/') and duration_ms >= _SLOW_ROUTE_MS:
         print(f"[perf] {request.method} {request.path} {duration_ms:.1f}ms", flush=True)
     return response
+
 
 def _load_config():
     if os.path.exists(_CONFIG_FILE):
@@ -208,7 +233,12 @@ def _coerce_movie_dirs(config):
             result.append(path)
     return result or [r"E:\Movies"]
 
-_movies_dirs    = _coerce_movie_dirs(_cfg)
+if _TEST_MODE:
+    test_movies_root = _TEST_ROOT / 'movies'
+    test_movies_root.mkdir(parents=True, exist_ok=True)
+    _movies_dirs = [str(test_movies_root)]
+else:
+    _movies_dirs = _coerce_movie_dirs(_cfg)
 _movies_dir     = _movies_dirs[0]
 _prowlarr_url   = _cfg.get('prowlarr_url', '')
 _prowlarr_key   = _cfg.get('prowlarr_key', '')
@@ -227,7 +257,7 @@ _tmdb_include_adult = _coerce_bool(_cfg.get('tmdb_include_adult'), False)
 _library_show_adult = _coerce_bool(_cfg.get('library_show_adult'), True)
 _plex_url       = _cfg.get('plex_url', 'http://localhost:32400')
 _plex_token     = _cfg.get('plex_token', '')
-_ollama_url     = _cfg.get('ollama_url', 'http://localhost:11434')
+_ollama_url     = '' if _TEST_MODE else _cfg.get('ollama_url', 'http://localhost:11434')
 _ollama_model   = _cfg.get('ollama_model', 'gemma4:31b-cloud')
 _ollama_candidate_limit = _coerce_ollama_candidate_limit(_cfg.get('ollama_candidate_limit'))
 _ai_control_config = ai_control.coerce_config({
@@ -243,9 +273,13 @@ _streaming_label = str(_cfg.get('streaming_label', 'Stream') or 'Stream').strip(
 _streaming_url_template = str(
     _cfg.get('streaming_url_template', 'https://streamimdb.ru/embed/movie/{tmdb_id}') or ''
 ).strip()
-_user_data_dir  = _cfg.get('user_data_dir', os.path.join(_BASE_DIR, 'data'))
-_tmdb_cache_dir = _cfg.get('tmdb_cache_dir', os.path.join(_BASE_DIR, 'cache'))
-_qbt_mode       = _cfg.get('qbt_mode', 'embedded')
+_user_data_dir  = str(_TEST_ROOT / 'user-data') if _TEST_MODE else _cfg.get('user_data_dir', os.path.join(_BASE_DIR, 'data'))
+_tmdb_cache_dir = str(_TEST_ROOT / 'tmdb-cache') if _TEST_MODE else _cfg.get('tmdb_cache_dir', os.path.join(_BASE_DIR, 'cache'))
+_qbt_mode = (
+    str(os.environ.get('CP_TEST_QBT_MODE', 'embedded') or 'embedded').strip().lower()
+    if _TEST_MODE
+    else _cfg.get('qbt_mode', 'embedded')
+)
 _qbt_download_dir = _cfg.get('qbt_download_dir', '')
 _qbt_incomplete_dir = _cfg.get('qbt_incomplete_dir', '')
 _qbt_webui_port = int(_cfg.get('qbt_webui_port', DEFAULT_WEBUI_PORT) or DEFAULT_WEBUI_PORT)
@@ -296,7 +330,11 @@ def _media_asset_service():
     cache_key = str(repository.database_path)
     service = _media_asset_service_cache.get(cache_key)
     if service is None:
-        metadata_root = Path(os.environ.get('LOCALAPPDATA') or Path(_user_data_dir).resolve()) / 'Cinema Paradiso' / 'Metadata'
+        metadata_root = (
+            _TEST_ROOT / 'localappdata' / 'Cinema Paradiso' / 'Metadata'
+            if _TEST_MODE
+            else Path(os.environ.get('LOCALAPPDATA') or Path(_user_data_dir).resolve()) / 'Cinema Paradiso' / 'Metadata'
+        )
         service = MediaAssetService(repository, metadata_root)
         _media_asset_service_cache[cache_key] = service
     return service
@@ -1587,14 +1625,34 @@ def _evict_removed_library_path_from_caches(path):
     _library_cache.clear()
 
 
-def _delete_library_file(path, *, use_trash=True):
-    service = LibraryMutationService(
+def _library_mutation_service():
+    return LibraryMutationService(
         get_movies_dirs(),
         _metadata_store(),
         VIDEO_EXTENSIONS,
     )
+
+
+def _delete_library_file(path, *, use_trash=True):
+    service = _library_mutation_service()
     result = service.delete(path, use_trash=use_trash)
     _evict_removed_library_path_from_caches(result['deleted'])
+    return result
+
+
+def _plan_library_file_deletions(paths):
+    return _library_mutation_service().plan_deletions(paths, whole_movie_folders=True)
+
+
+def _delete_library_files(paths, *, use_trash=True, allowed_folder_targets=None):
+    result = _library_mutation_service().delete_many(
+        paths,
+        use_trash=use_trash,
+        whole_movie_folders=True,
+        allowed_folder_targets=allowed_folder_targets,
+    )
+    for path in result['deleted_paths']:
+        _evict_removed_library_path_from_caches(path)
     return result
 
 
@@ -1666,8 +1724,11 @@ def _normalize_tmdb_metadata(movie):
         'tagline': movie.get('tagline', ''),
         'directors': movie.get('directors', []),
         'director': movie.get('director', {}),
+        'writers': movie.get('writers', []) if isinstance(movie.get('writers', []), list) else [],
         'cast': movie.get('cast', []),
         'collection': movie.get('collection', {}),
+        'certification': str(movie.get('certification', '') or ''),
+        'keywords': movie.get('keywords', []) if isinstance(movie.get('keywords', []), list) else [],
         'trailer_url': movie.get('trailer_url', ''),
         'match_source': movie.get('match_source', ''),
         'adult': bool(movie.get('adult', False)),
@@ -2035,7 +2096,11 @@ def _country_flag(code):
 
 _res_cache = {}  # (abspath, mtime) -> resolution_str  — resolution probe cache
 _res_cache_reprobe = set()  # legacy cache entries that need one width-aware probe
-_RES_CACHE_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res_cache.json')
+_RES_CACHE_FILE = (
+    str(_TEST_ROOT / 'res_cache.json')
+    if _TEST_MODE
+    else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res_cache.json')
+)
 _RES_CACHE_VERSION = 2
 _library_status  = ''  # live status string polled by the browser during a scan
 _plex_cache_time = 0.0
@@ -2067,6 +2132,14 @@ _library_reconcile_state = {
     'review': 0,
     'pending': 0,
     'failed': 0,
+    'detail_backfill': {
+        'contract_version': CANONICAL_CONTRACT_VERSION,
+        'status': 'idle',
+        'total': 0,
+        'completed': 0,
+        'failed': 0,
+        'remaining': 0,
+    },
     'updated_at': 0,
 }
 _qbittorrent_manager = None
@@ -4452,13 +4525,34 @@ def open_file():
 @app.route('/api/delete', methods=['POST'])
 def delete_file():
     data = request.get_json(silent=True)
-    if not data or 'path' not in data:
+    if not data or ('path' not in data and 'paths' not in data):
         return jsonify({'error': 'No path provided'}), 400
 
-    path = data['path']
     use_trash = data.get('trash', True)  # default: Recycle Bin
-    abs_path = os.path.abspath(path)
     try:
+        if 'paths' in data:
+            paths = data.get('paths')
+            if not isinstance(paths, list) or not paths or len(paths) > 200:
+                return jsonify({'error': 'Paths must be a list containing 1-200 files'}), 400
+            abs_paths = [os.path.abspath(str(path)) for path in paths if str(path).strip()]
+            if len(abs_paths) != len(paths):
+                return jsonify({'error': 'Every deletion path must be non-empty'}), 400
+            if data.get('preview'):
+                return jsonify(_plan_library_file_deletions(abs_paths))
+            folder_targets = data.get('folder_targets', [])
+            if not isinstance(folder_targets, list) or len(folder_targets) > 200:
+                return jsonify({'error': 'Folder targets must be a list containing at most 200 folders'}), 400
+            abs_folder_targets = [os.path.abspath(str(path)) for path in folder_targets if str(path).strip()]
+            if len(abs_folder_targets) != len(folder_targets):
+                return jsonify({'error': 'Every folder target must be non-empty'}), 400
+            return jsonify(_delete_library_files(
+                abs_paths,
+                use_trash=use_trash,
+                allowed_folder_targets=abs_folder_targets,
+            ))
+
+        path = data['path']
+        abs_path = os.path.abspath(path)
         return jsonify(_delete_library_file(abs_path, use_trash=use_trash))
     except LibraryMutationError as error:
         return jsonify({'error': str(error)}), 403
@@ -4700,6 +4794,9 @@ def _library_people_item(item):
     return {
         'path': item.get('path', ''),
         'canonical_metadata': {
+            'accepted': bool(canonical.get('accepted')),
+            'title': canonical.get('title', ''),
+            'year': str(canonical.get('year', '') or ''),
             'cast': _trim_people_for_card(canonical.get('cast')),
             'directors': _trim_people_for_card(canonical.get('directors'), limit=4),
         },
@@ -6933,6 +7030,27 @@ def _normalize_tmdb_details_payload(data):
         if normalized:
             directors.append(normalized)
 
+    writer_jobs = {'Writer': 0, 'Screenplay': 1, 'Story': 2, 'Novel': 3}
+    writers = []
+    seen_writers = set()
+    writer_credits = sorted(
+        (
+            person for person in data.get('credits', {}).get('crew', []) or []
+            if person.get('job') in writer_jobs
+        ),
+        key=lambda person: writer_jobs.get(person.get('job'), 99),
+    )
+    for person in writer_credits:
+        normalized = _normalize_tmdb_person(person)
+        if not normalized:
+            continue
+        writer_key = normalized.get('id') or normalized.get('name', '').casefold()
+        if writer_key in seen_writers:
+            continue
+        seen_writers.add(writer_key)
+        normalized['job'] = person.get('job', '')
+        writers.append(normalized)
+
     cast = []
     for person in (data.get('credits', {}).get('cast', []) or [])[:8]:
         normalized = _normalize_tmdb_person(person, include_character=True)
@@ -6965,11 +7083,45 @@ def _normalize_tmdb_details_payload(data):
     if trailer:
         trailer_url = f"https://www.youtube.com/watch?v={trailer.get('key')}"
 
+    certification = str(data.get('certification', '') or '').strip()
+    if not certification:
+        us_release_dates = next((
+            region.get('release_dates', []) or []
+            for region in data.get('release_dates', {}).get('results', []) or []
+            if region.get('iso_3166_1') == 'US'
+        ), [])
+        certification_candidates = [
+            release for release in us_release_dates
+            if str(release.get('certification', '') or '').strip()
+        ]
+        certification_candidates.sort(key=lambda release: (
+            {3: 0, 2: 1, 4: 2, 1: 3, 5: 4, 6: 5}.get(release.get('type'), 99),
+            str(release.get('release_date', '') or ''),
+        ))
+        if certification_candidates:
+            certification = str(certification_candidates[0].get('certification') or '').strip()
+
+    raw_keywords = data.get('keywords', [])
+    if isinstance(raw_keywords, dict):
+        raw_keywords = raw_keywords.get('keywords', []) or raw_keywords.get('results', []) or []
+    keywords = []
+    seen_keywords = set()
+    for keyword in raw_keywords or []:
+        name = str(keyword.get('name', '') if isinstance(keyword, dict) else keyword or '').strip()
+        key = name.casefold()
+        if not name or key in seen_keywords:
+            continue
+        seen_keywords.add(key)
+        keywords.append(name)
+
     return {
         'director': directors[0] if directors else {},
         'directors': directors,
+        'writers': writers,
         'cast': cast,
         'collection': collection,
+        'certification': certification,
+        'keywords': keywords[:12],
         'trailer_url': trailer_url,
         'runtime': data.get('runtime'),
         'tagline': data.get('tagline', ''),
@@ -7003,7 +7155,7 @@ def _fetch_tmdb_metadata_by_id(tmdb_id, store=None, refresh=False, match_source=
         safe_id = urllib.parse.quote(tmdb_id)
         url = (f"https://api.themoviedb.org/3/movie/{safe_id}"
                f"?api_key={urllib.parse.quote(_tmdb_key)}&language=en-US"
-               f"&append_to_response=credits,videos,release_dates")
+               f"&append_to_response=credits,videos,release_dates,keywords")
         req = urllib.request.Request(url, headers={'Accept': 'application/json'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = _json.loads(resp.read().decode())
@@ -7066,6 +7218,9 @@ def _tmdb_metadata_contract_complete(metadata):
         _tmdb_card_projection_is_complete(metadata)
         and 'cast' in metadata
         and 'directors' in metadata
+        and 'writers' in metadata
+        and 'certification' in metadata
+        and 'keywords' in metadata
     )
 
 
@@ -7635,6 +7790,55 @@ def _reconcile_library_files(force_unresolved=False):
             _library_cache = {}
         return result
 
+def _tmdb_detail_contract_backfill_ids(store=None, limit=None):
+    store = store or _metadata_store()
+    connection = store.catalog.store.connect()
+    try:
+        return store.catalog.store.canonical.tmdb_detail_contract_backfill_ids(
+            connection,
+            limit=limit,
+        )
+    finally:
+        connection.close()
+
+
+def _run_tmdb_detail_contract_backfill():
+    global _library_reconcile_state
+    tmdb_ids = _tmdb_detail_contract_backfill_ids()
+    result = {
+        'contract_version': CANONICAL_CONTRACT_VERSION,
+        'status': 'running' if tmdb_ids and _tmdb_key else ('waiting_for_tmdb' if tmdb_ids else 'completed'),
+        'total': len(tmdb_ids),
+        'completed': 0,
+        'failed': 0,
+        'remaining': len(tmdb_ids),
+    }
+    with _library_reconcile_lock:
+        _library_reconcile_state = {**_library_reconcile_state, 'detail_backfill': dict(result)}
+    if not tmdb_ids or not _tmdb_key:
+        return result
+
+    store = _metadata_store()
+    for index, tmdb_id in enumerate(tmdb_ids, start=1):
+        metadata = _fetch_tmdb_metadata_by_id(tmdb_id, store=store, refresh=False)
+        if _tmdb_metadata_contract_complete(metadata):
+            result['completed'] += 1
+        else:
+            result['failed'] += 1
+        result['remaining'] = len(tmdb_ids) - index
+        result['current_tmdb_id'] = tmdb_id
+        with _library_reconcile_lock:
+            _library_reconcile_state = {**_library_reconcile_state, 'detail_backfill': dict(result)}
+
+    remaining = len(_tmdb_detail_contract_backfill_ids())
+    result['remaining'] = remaining
+    result.pop('current_tmdb_id', None)
+    result['status'] = 'completed' if remaining == 0 else 'incomplete'
+    with _library_reconcile_lock:
+        _library_reconcile_state = {**_library_reconcile_state, 'detail_backfill': dict(result)}
+    return result
+
+
 def _library_reconcile_status():
     with _library_reconcile_lock:
         return {
@@ -7643,13 +7847,29 @@ def _library_reconcile_status():
         }
 
 
-def _run_library_reconcile_loop():
+def _run_library_reconcile_loop(run_inventory=True, run_detail_backfill=False):
     global _library_reconcile_state
+    detail_backfill = (
+        _run_tmdb_detail_contract_backfill()
+        if run_detail_backfill
+        else dict(_library_reconcile_state.get('detail_backfill') or {})
+    )
+    if not run_inventory:
+        with _library_reconcile_lock:
+            _library_reconcile_state = {
+                **_library_reconcile_state,
+                'status': 'completed',
+                'detail_backfill': detail_backfill,
+                'updated_at': time.time(),
+            }
+        _mark_library_reconcile_complete()
+        return
     while True:
         result = _reconcile_library_files()
         with _library_reconcile_lock:
             _library_reconcile_state = {
                 **result,
+                'detail_backfill': detail_backfill,
                 'status': 'running' if result.get('pending') else 'completed',
                 'updated_at': time.time(),
             }
@@ -7694,27 +7914,42 @@ def _startup_reconcile_decision():
         store._document_name(store.library_inventory_file)
     )
     if not inventory_exists:
-        decision, reason = 'run', 'missing_inventory'
+        inventory_run, reason = True, 'missing_inventory'
     elif previous_signature and previous_signature != current_signature:
-        decision, reason = 'run', 'library_root_changed'
+        inventory_run, reason = True, 'library_root_changed'
     elif previous_generation and int(previous_generation or 0) > media_generation:
-        decision, reason = 'run', 'invalid_reconcile_generation'
+        inventory_run, reason = True, 'invalid_reconcile_generation'
     else:
-        decision = 'skip'
+        inventory_run = False
         reason = 'current_inventory' if previous_signature else 'bootstrapped_existing_inventory'
         if not previous_signature:
             repository.set_operational_meta('last_library_root_signature', current_signature)
             repository.set_operational_meta('last_library_reconcile_generation', media_generation)
+    detail_backfill_count = len(_tmdb_detail_contract_backfill_ids(store=store))
+    run_detail_backfill = bool(detail_backfill_count and _tmdb_key)
+    if not inventory_run and run_detail_backfill:
+        reason = 'metadata_contract_upgrade'
+    elif not inventory_run and detail_backfill_count and not _tmdb_key:
+        reason = 'metadata_contract_waiting_for_tmdb'
+    decision = 'run' if inventory_run or run_detail_backfill else 'skip'
     _startup_metrics['reconcile_decision_ms'] = round((time.perf_counter() - started) * 1000, 3)
     _startup_metrics['reconcile_decision'] = decision
     _startup_metrics['reconcile_reason'] = reason
-    return {'run': decision == 'run', 'reason': reason}
+    return {
+        'run': decision == 'run',
+        'reason': reason,
+        'run_inventory': inventory_run,
+        'run_detail_backfill': run_detail_backfill,
+        'detail_backfill_remaining': detail_backfill_count,
+    }
 
 
 def _mark_library_reconcile_complete():
     repository = _catalog_repository()
     repository.set_operational_meta('last_library_root_signature', _library_root_signature())
     repository.set_operational_meta('last_library_reconcile_generation', repository.generation('media'))
+    if not _tmdb_detail_contract_backfill_ids():
+        repository.set_operational_meta('last_tmdb_detail_contract_version', CANONICAL_CONTRACT_VERSION)
 
 
 def _start_library_reconcile(force=False):
@@ -7722,13 +7957,31 @@ def _start_library_reconcile(force=False):
     with _library_reconcile_lock:
         if _library_reconcile_thread and _library_reconcile_thread.is_alive():
             return dict(_library_reconcile_state)
-        decision = {'run': True, 'reason': 'explicit'} if force else _startup_reconcile_decision()
+        decision = {
+            'run': True,
+            'reason': 'explicit',
+            'run_inventory': True,
+            'run_detail_backfill': True,
+            'detail_backfill_remaining': int(
+                (_library_reconcile_state.get('detail_backfill') or {}).get('remaining', 0) or 0
+            ),
+        } if force else _startup_reconcile_decision()
         if not decision['run']:
             _library_reconcile_state = {
                 **_library_reconcile_state,
                 'status': 'completed',
                 'skipped': True,
                 'reason': decision['reason'],
+                'detail_backfill': {
+                    **dict(_library_reconcile_state.get('detail_backfill') or {}),
+                    'contract_version': CANONICAL_CONTRACT_VERSION,
+                    'remaining': decision.get('detail_backfill_remaining', 0),
+                    'status': (
+                        'waiting_for_tmdb'
+                        if decision.get('detail_backfill_remaining') and not _tmdb_key
+                        else 'completed'
+                    ),
+                },
                 'updated_at': time.time(),
             }
             return dict(_library_reconcile_state)
@@ -7741,6 +7994,10 @@ def _start_library_reconcile(force=False):
         }
         _library_reconcile_thread = threading.Thread(
             target=_run_library_reconcile_loop,
+            args=(
+                decision.get('run_inventory', True),
+                decision.get('run_detail_backfill', False),
+            ),
             name='cinema-library-reconcile',
             daemon=True,
         )
@@ -9173,24 +9430,45 @@ def _smart_match_plex_candidates(rating_key, title, year='', imdb_id='', tmdb_id
     return results
 
 
+def _ollama_api_json(base_url, endpoint, *, payload=None, timeout=60):
+    url = str(base_url or '').strip().rstrip('/')
+    if not url:
+        raise RuntimeError('Ollama is not configured')
+    body = _json.dumps(payload).encode() if payload is not None else None
+    headers = {'Accept': 'application/json'}
+    if body is not None:
+        headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request(
+        f"{url}{endpoint}",
+        data=body,
+        headers=headers,
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return _json.loads(response.read().decode())
+
+
 def _ollama_chat_content(messages):
     if not _ollama_url or not _ollama_model:
         raise RuntimeError('Ollama is not configured')
-    body = _json.dumps({
+    raw = _ollama_api_json(_ollama_url, '/api/chat', payload={
         'model': _ollama_model,
         'messages': messages,
         'stream': False,
         'format': 'json',
         'options': {'temperature': 0},
-    }).encode()
-    req = urllib.request.Request(
-        f"{_ollama_url}/api/chat",
-        data=body,
-        headers={'Content-Type': 'application/json'},
-    )
-    with urllib.request.urlopen(req, timeout=60) as response:
-        raw = _json.loads(response.read().decode())
+    })
     return str(raw.get('message', {}).get('content', '') or '')
+
+
+def _ollama_json_content(content):
+    text = str(content or '').strip()
+    try:
+        return _json.loads(text)
+    except _json.JSONDecodeError:
+        fenced = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', text, flags=re.IGNORECASE | re.DOTALL)
+        if not fenced:
+            raise
+        return _json.loads(fenced.group(1))
 
 
 def _smart_match_ai_batch(items):
@@ -9894,7 +10172,7 @@ def tmdb_details():
             cached
             and not refresh
             and cached_data.get('release_date')
-            and _tmdb_card_projection_is_complete(cached_data)
+            and _tmdb_metadata_contract_complete(cached_data)
         ):
             data = cached_data
             data['cached'] = True
@@ -9905,7 +10183,7 @@ def tmdb_details():
         query = urllib.parse.urlencode({
             'api_key': _tmdb_key,
             'language': language,
-            'append_to_response': 'credits,videos',
+            'append_to_response': 'credits,videos,release_dates,keywords',
         })
         url = f"https://api.themoviedb.org/3/movie/{safe_id}?{query}"
         req = urllib.request.Request(url, headers={'Accept': 'application/json'})
@@ -10611,16 +10889,114 @@ def set_ollama_config():
     return jsonify({'success': True})
 
 
-@app.route('/api/ollama/test')
-def ollama_test():
+def _ollama_model_name(item):
+    if not isinstance(item, dict):
+        return ''
+    return str(item.get('model') or item.get('name') or '').strip()
+
+
+def _ollama_model_choices(url):
+    free_cloud_models = []
+    local_models = []
+    warnings = []
+
+    try:
+        tags = _ollama_api_json(url, '/api/tags', timeout=8)
+        seen_local = set()
+        for item in tags.get('models', []):
+            model = _ollama_model_name(item)
+            key = model.casefold()
+            if not model or key.endswith('cloud') or key in seen_local:
+                continue
+            seen_local.add(key)
+            details = item.get('details') if isinstance(item.get('details'), dict) else {}
+            local_models.append({
+                'model': model,
+                'description': str(details.get('parameter_size') or '').strip(),
+            })
+    except Exception as error:
+        warnings.append(f'Local model list unavailable: {error}')
+
+    try:
+        recommendations = _ollama_api_json(url, '/api/experimental/model-recommendations', timeout=8)
+        seen_cloud = set()
+        for item in recommendations.get('recommendations', []):
+            model = _ollama_model_name(item)
+            key = model.casefold()
+            if (
+                not model
+                or not key.endswith('cloud')
+                or str(item.get('required_plan') or '').strip().casefold() != 'free'
+                or key in seen_cloud
+            ):
+                continue
+            seen_cloud.add(key)
+            free_cloud_models.append({
+                'model': model,
+                'description': str(item.get('description') or '').strip(),
+                'required_plan': 'free',
+            })
+    except Exception as error:
+        warnings.append(f'Free cloud model list unavailable: {error}')
+
+    free_cloud_models.sort(key=lambda item: item['model'].casefold())
+    local_models.sort(key=lambda item: item['model'].casefold())
+    return {
+        'configured_model': _ollama_model,
+        'free_cloud_models': free_cloud_models,
+        'local_models': local_models,
+        'warnings': warnings,
+        'reachable': len(warnings) < 2,
+    }
+
+
+@app.route('/api/ollama/models')
+def get_ollama_models():
     url = request.args.get('url', _ollama_url).strip().rstrip('/')
     if not url:
         return jsonify({'error': 'No Ollama URL configured — add it in Settings.'}), 400
+    return jsonify(_ollama_model_choices(url))
+
+
+@app.route('/api/ollama/test')
+def ollama_test():
+    url = request.args.get('url', _ollama_url).strip().rstrip('/')
+    model = request.args.get('model', _ollama_model).strip()
+    if not url:
+        return jsonify({'error': 'No Ollama URL configured — add it in Settings.'}), 400
+    if not model:
+        return jsonify({'error': 'No Ollama model selected — choose one in Settings.'}), 400
+    started_at = time.monotonic()
     try:
-        req = urllib.request.Request(f"{url}/api/tags", headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            _json.loads(resp.read().decode())
-        return jsonify({'success': True})
+        raw = _ollama_api_json(url, '/api/chat', payload={
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': 'Return only valid JSON with the exact shape {"ok":true}.'},
+                {'role': 'user', 'content': 'Confirm that this model can answer Cinema Paradiso.'},
+            ],
+            'stream': False,
+            'format': 'json',
+            'options': {'temperature': 0},
+        })
+        content = str(raw.get('message', {}).get('content', '') or '')
+        parsed = _ollama_json_content(content)
+        if not isinstance(parsed, dict) or parsed.get('ok') is not True:
+            raise ValueError('model did not return the required JSON')
+        return jsonify({
+            'success': True,
+            'model': model,
+            'elapsed_ms': round((time.monotonic() - started_at) * 1000),
+        })
+    except (socket.timeout, TimeoutError):
+        return jsonify({'error': f'Ollama model {model} timed out while generating a test response.'}), 504
+    except urllib.error.HTTPError as error:
+        return jsonify({'error': f'Ollama model {model} returned HTTP {error.code}'}), 502
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, (socket.timeout, TimeoutError)):
+            return jsonify({'error': f'Ollama model {model} timed out while generating a test response.'}), 504
+        return jsonify({'error': f'Cannot reach Ollama: {error.reason}'}), 502
+    except (_json.JSONDecodeError, ValueError, KeyError):
+        return jsonify({'error': f'Ollama model {model} did not return the required JSON response.'}), 502
     except Exception as e:
         return jsonify({'error': f'Cannot reach Ollama: {e}'}), 502
 
@@ -10700,7 +11076,7 @@ def ollama_recommend():
         'No markdown, no explanation, no extra text — only the JSON object.'
     )
 
-    body = _json.dumps({
+    payload = {
         'model': _ollama_model,
         'messages': [
             {'role': 'system', 'content': system_msg},
@@ -10708,17 +11084,16 @@ def ollama_recommend():
         ],
         'stream': False,
         'format': 'json'
-    }).encode()
+    }
 
     try:
-        req = urllib.request.Request(
-            f"{_ollama_url}/api/chat",
-            data=body,
-            headers={'Content-Type': 'application/json'}
+        raw = _ollama_api_json(
+            _ollama_url,
+            '/api/chat',
+            payload=payload,
+            timeout=60,
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = _json.loads(resp.read().decode())
-        parsed = _json.loads(raw['message']['content'])
+        parsed = _ollama_json_content(raw['message']['content'])
         recs = parsed.get('recommendations', [])
     except _json.JSONDecodeError:
         return jsonify({'error': 'Ollama returned invalid JSON. Try a different prompt.'}), 502
@@ -10756,15 +11131,20 @@ def ollama_recommend():
 
 
 if __name__ == '__main__':
-    _start_library_reconcile()
-    threading.Thread(
-        target=_qbittorrent_import_monitor.run_forever,
-        args=(lambda: _qbt_mode == 'embedded',),
-        daemon=True,
-    ).start()
-    _startup_metrics['background_queue_started'] = True
+    if not _TEST_MODE:
+        _start_library_reconcile()
+        threading.Thread(
+            target=_qbittorrent_import_monitor.run_forever,
+            args=(lambda: _qbt_mode == 'embedded',),
+            daemon=True,
+        ).start()
+        _startup_metrics['background_queue_started'] = True
+        artwork_timer = threading.Timer(1.0, _run_startup_artwork_backfill)
+        artwork_timer.daemon = True
+        artwork_timer.start()
     _startup_metrics['api_ready_ms'] = round((time.perf_counter() - _process_started_at) * 1000, 3)
-    artwork_timer = threading.Timer(1.0, _run_startup_artwork_backfill)
-    artwork_timer.daemon = True
-    artwork_timer.start()
-    app.run(debug=False, port=5000, use_reloader=False)
+    app.run(
+        debug=False,
+        port=int(os.environ.get('CP_PORT', '5000') or '5000'),
+        use_reloader=False,
+    )

@@ -15,11 +15,13 @@ import {
   X,
 } from 'lucide-react'
 import { fetchJson } from '../../api/client.js'
+import { announceLibraryChanged } from '../../api/library.js'
 import IdentityReviewPanel from '../../components/IdentityReviewPanel.jsx'
 import { ConfirmDialog, LibraryRenameModal, LibraryStat } from '../../components/LibraryControls.jsx'
 import Pagination from '../../components/Pagination.jsx'
 import { SmartMatchControls, SmartMatchReviewModal } from '../../components/SmartMatchPanel.jsx'
 import { cx, formatCount } from '../../utils/appUtils.js'
+import { deletionPlanSummary } from '../../utils/deletionPlan.js'
 import {
   metadataStatusChipClass,
   metadataStatusLabel,
@@ -182,18 +184,26 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     });
   }
 
-  function requestDelete(tab, paths, title) {
+  async function requestDelete(tab, paths, title) {
     const uniquePaths = [...new Set(paths.filter(Boolean))];
     if (!uniquePaths.length) return;
-    const preview = uniquePaths.slice(0, 5).join('\n');
-    const extra = uniquePaths.length > 5 ? `\n...and ${uniquePaths.length - 5} more` : '';
-    setConfirmAction({
-      type: 'delete',
-      tab,
-      paths: uniquePaths,
-      title,
-      body: `${uniquePaths.length} file${uniquePaths.length === 1 ? '' : 's'} will move to the Recycle Bin.\n\n${preview}${extra}`
-    });
+    try {
+      const plan = await fetchJson('/api/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: uniquePaths, trash: true, preview: true })
+      });
+      setConfirmAction({
+        type: 'delete',
+        tab,
+        paths: uniquePaths,
+        title,
+        plan,
+        body: deletionPlanSummary(plan)
+      });
+    } catch (previewError) {
+      notify(`Delete preview failed: ${previewError.message}`, 'error');
+    }
   }
 
   function requestFixPath(item) {
@@ -208,33 +218,36 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   async function runConfirmedAction() {
     if (!confirmAction) return;
     if (confirmAction.type === 'delete') {
-      await deletePaths(confirmAction.tab, confirmAction.paths);
+      await deletePaths(confirmAction.tab, confirmAction.paths, confirmAction.plan);
     } else if (confirmAction.type === 'fix-path') {
       await fixPath(confirmAction.item);
     }
     setConfirmAction(null);
   }
 
-  async function deletePaths(tab, paths) {
-    let deleted = 0;
-    const failed = [];
-    for (const path of paths) {
-      try {
-        await fetchJson('/api/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path, trash: true })
-        });
-        deleted += 1;
-      } catch (error) {
-        failed.push(error.message);
+  async function deletePaths(tab, paths, plan) {
+    const folderTargets = (plan?.actions || [])
+      .filter((action) => action.target_type === 'folder')
+      .map((action) => action.target);
+    try {
+      const result = await fetchJson('/api/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths, trash: true, folder_targets: folderTargets })
+      });
+      const deletedPaths = result.deleted_paths || [];
+      if (deletedPaths.length) {
+        removeDeletedPaths(deletedPaths);
+        announceLibraryChanged({ source: 'maintenance-delete', deleted_paths: deletedPaths });
+        const folderNote = result.folder_count
+          ? `, including ${result.folder_count} complete folder${result.folder_count === 1 ? '' : 's'}`
+          : '';
+        notify(`${deletedPaths.length} movie file${deletedPaths.length === 1 ? '' : 's'} moved to Recycle Bin${folderNote}`);
       }
+      (result.failures || []).forEach((failure) => notify(`Delete failed: ${failure.error}`, 'error'));
+    } catch (error) {
+      notify(`Delete failed: ${error.message}`, 'error');
     }
-    if (deleted) {
-      removeDeletedPaths(paths);
-      notify(`${deleted} file${deleted === 1 ? '' : 's'} moved to Recycle Bin`);
-    }
-    failed.forEach((message) => notify(`Delete failed: ${message}`, 'error'));
     setSelected((state) => ({ ...state, [tab]: new Set() }));
   }
 

@@ -1,5 +1,5 @@
 import {
-  AlertTriangle, Bell, Bookmark, BookOpen, Check, Clapperboard, Film, Loader2,
+  AlertTriangle, Bell, Bookmark, BookOpen, Check, Clapperboard, ExternalLink, Film, Loader2,
   MonitorPlay, Pencil, Play, RefreshCcw, Search, Sparkles, Trash2, Wand2, X
 } from 'lucide-react';
 import { useState } from 'react';
@@ -142,6 +142,10 @@ export function DiscoverMovieCard({
       mutedChips={[
         displayMovie.language,
         displayMovie.country_flag || displayMovie.country,
+        {
+          label: expanded ? displayDetails?.certification || displayMovie.certification : '',
+          tone: 'certification'
+        },
         owned?.resolution,
         owned?.size_human
       ]}
@@ -150,6 +154,15 @@ export function DiscoverMovieCard({
       ownedBadge={Boolean(owned)}
       expanded={expanded}
       onToggle={onToggleDetails}
+      headerActions={expanded ? (
+        <MovieImdbLink
+          imdbId={displayDetails?.imdb_id || displayMovie.imdb_id}
+          title={displayMovie.title}
+        />
+      ) : null}
+      metadataActions={expanded ? (
+        <MovieLanguageToggle {...languageView.toggleProps} />
+      ) : null}
       showPlayOverlay={Boolean(owned)}
       onPlay={owned?.path ? () => onPlay(owned.path) : undefined}
       cornerControls={(
@@ -193,11 +206,11 @@ export function DiscoverMovieCard({
     >
       {expanded && (
         <>
-          <MovieLanguageToggle {...languageView.toggleProps} />
           {reason && <p className="ai-reason"><Sparkles size={14} /> {reason}</p>}
           <p className="movie-card-plot discover-plot-visible" dir={languageView.isArabic ? 'rtl' : undefined}>
             {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
           </p>
+          <MovieKeywordRow keywords={displayDetails?.keywords || displayMovie.keywords} />
           <div className="card-actions">
             {owned ? (
               <>
@@ -243,15 +256,72 @@ export function DiscoverMovieCard({
 export function MovieExpandedFacts({ movie, details }) {
   const releaseDate = movie?.release_date || details?.release_date || '';
   const releaseDateLabel = isUnreleasedMovie({ release_date: releaseDate }) ? formatReleaseDateLabel(releaseDate) : '';
+  const writers = (details?.writers || movie?.writers || []).filter((writer) => writer?.name);
+  const visibleWriters = writers.slice(0, 2);
+  const remainingWriters = Math.max(0, writers.length - visibleWriters.length);
 
-  if (!details?.tagline && !details?.runtime && !releaseDateLabel) return null;
+  if (!details?.tagline && !details?.runtime && !releaseDateLabel && !writers.length) return null;
 
   return (
     <div className="movie-expanded-facts">
-      {releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}
-      {details?.tagline && <div><span>Tagline</span><strong dir="auto">{details.tagline}</strong></div>}
-      {details?.runtime && <div><span>Runtime</span><strong>{details.runtime} min</strong></div>}
+      {releaseDateLabel || details?.tagline ? (
+        <div className="movie-expanded-primary-facts">
+          {releaseDateLabel && <div><span>Release date</span><strong>Releases {releaseDateLabel}</strong></div>}
+          {details?.tagline && <div><span>Tagline</span><strong dir="auto">{details.tagline}</strong></div>}
+        </div>
+      ) : null}
+      {writers.length ? (
+        <div className="movie-expanded-writers">
+          <span>Writer{writers.length === 1 ? '' : 's'}</span>
+          <strong dir="auto">
+            {visibleWriters.map((writer) => writer.name).join(', ')}
+            {remainingWriters ? ` +${remainingWriters} more` : ''}
+          </strong>
+        </div>
+      ) : null}
+      {details?.runtime ? (
+        <div className="movie-expanded-runtime">
+          <span>Runtime</span>
+          <strong>{details.runtime} min</strong>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+export function MovieKeywordRow({ keywords = [] }) {
+  const normalizedKeywords = keywords
+    .map((keyword) => typeof keyword === 'string' ? keyword : keyword?.name)
+    .filter(Boolean);
+  if (!normalizedKeywords.length) return null;
+  const visibleKeywords = normalizedKeywords.slice(0, 4);
+  const remainingKeywords = normalizedKeywords.length - visibleKeywords.length;
+
+  return (
+    <div className="movie-keyword-row" aria-label="Movie keywords">
+      <span className="movie-keyword-label">Keywords</span>
+      {visibleKeywords.map((keyword) => (
+        <span className="movie-keyword-chip" dir="auto" key={keyword}>{keyword}</span>
+      ))}
+      {remainingKeywords > 0 ? <span className="movie-keyword-more">+{remainingKeywords}</span> : null}
+    </div>
+  );
+}
+
+export function MovieImdbLink({ imdbId, title }) {
+  const normalizedId = String(imdbId || '').trim();
+  if (!/^tt\d+$/i.test(normalizedId)) return null;
+  return (
+    <a
+      className="movie-imdb-link"
+      href={`https://www.imdb.com/title/${encodeURIComponent(normalizedId)}/`}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`Open ${title || 'movie'} on IMDb`}
+      title="Open on IMDb"
+    >
+      IMDb <ExternalLink size={12} />
+    </a>
   );
 }
 
@@ -569,6 +639,7 @@ export function LibraryMovieCard({
   watchlisted,
   onToggleWatched,
   onToggleWatchlist,
+  showOwnedBadge = true,
   selected,
   onSelect
 }) {
@@ -623,13 +694,30 @@ export function LibraryMovieCard({
       rating={displayMovie.rating || displayMovie.tmdb_rating || item.plex_rating}
       voteCount={formatVoteCount(displayMovie.tmdb_vote_count)}
       chips={(displayMovie.genres || genres).slice(0, 2)}
-      mutedChips={[locale, getQualityLabel(item), item.size_human]}
+      mutedChips={[
+        locale,
+        {
+          label: expanded ? displayDetails?.certification || displayMovie.certification : '',
+          tone: 'certification'
+        },
+        getQualityLabel(item),
+        item.size_human
+      ]}
       statusLabel={lowQuality ? 'Upgrade candidate' : ''}
       statusTone={lowQuality ? 'warning' : 'neutral'}
-      ownedBadge
+      ownedBadge={showOwnedBadge}
       expanded={expanded}
       selected={selected}
       onToggle={onToggle}
+      headerActions={expanded ? (
+        <MovieImdbLink
+          imdbId={displayDetails?.imdb_id || displayMovie.imdb_id}
+          title={displayMovie.title}
+        />
+      ) : null}
+      metadataActions={expanded ? (
+        <MovieLanguageToggle {...languageView.toggleProps} />
+      ) : null}
       showPlayOverlay={Boolean(item.path)}
       onPlay={() => onPlay(item.path)}
       cornerControls={(
@@ -677,10 +765,10 @@ export function LibraryMovieCard({
     >
       {expanded && (
         <>
-          <MovieLanguageToggle {...languageView.toggleProps} />
           <p className="library-summary movie-summary-expanded" dir={languageView.isArabic ? 'rtl' : undefined}>
             {displayMovie.summary || displayMovie.plot || 'No plot summary is available yet.'}
           </p>
+          <MovieKeywordRow keywords={displayDetails?.keywords || displayMovie.keywords} />
           <div className="library-card-actions">
             <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(item.path)}>
               <Play size={15} /> Play

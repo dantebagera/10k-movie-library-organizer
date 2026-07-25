@@ -8,6 +8,7 @@ APP_JSX = Path(__file__).resolve().parents[1] / "src" / "App.jsx"
 APP_PY = Path(__file__).resolve().parents[1] / "app.py"
 LIBRARY_UTILS = Path(__file__).resolve().parents[1] / "src" / "utils" / "libraryUtils.js"
 CLEANUP_UTILS = Path(__file__).resolve().parents[1] / "src" / "utils" / "cleanupUtils.js"
+CLEANUP_WORKSPACE = Path(__file__).resolve().parents[1] / "src" / "features" / "cleanup" / "CleanupWorkspace.jsx"
 CLIENT_API = Path(__file__).resolve().parents[1] / "src" / "api" / "client.js"
 CURATION_API = Path(__file__).resolve().parents[1] / "src" / "api" / "curation.js"
 SHARED_CARDS = Path(__file__).resolve().parents[1] / "src" / "components" / "SharedMovieCards.jsx"
@@ -28,6 +29,7 @@ class LibraryActionUxTest(unittest.TestCase):
         cls.source = read_frontend_source()
         cls.library_utils_source = LIBRARY_UTILS.read_text(encoding="utf-8")
         cls.cleanup_utils_source = CLEANUP_UTILS.read_text(encoding="utf-8")
+        cls.cleanup_workspace_source = CLEANUP_WORKSPACE.read_text(encoding="utf-8")
         cls.client_api_source = CLIENT_API.read_text(encoding="utf-8")
         cls.curation_api_source = CURATION_API.read_text(encoding="utf-8")
         cls.shared_cards_source = SHARED_CARDS.read_text(encoding="utf-8")
@@ -146,6 +148,20 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("window.addEventListener('cp-library-changed', refreshHealthStats)", self.source)
         self.assertIn("window.removeEventListener('cp-library-changed', refreshHealthStats)", self.source)
         self.assertIn("announceLibraryChanged({ source: 'manual-rescan'", self.source)
+
+    def test_maintenance_delete_refreshes_maintenance_and_home_counts(self):
+        self.assertIn(
+            "announceLibraryChanged({ source: 'maintenance-delete', deleted_paths: deletedPaths })",
+            self.cleanup_workspace_source,
+        )
+        self.assertIn(
+            "window.addEventListener('cp-library-changed', refreshForLibraryChange)",
+            self.cleanup_workspace_source,
+        )
+        self.assertIn(
+            "window.addEventListener('cp-library-changed', refreshHealthStats)",
+            self.source,
+        )
 
     def test_reconcile_poll_announces_backend_download_imports(self):
         self.assertIn("function reconcileSignature(state)", self.source)

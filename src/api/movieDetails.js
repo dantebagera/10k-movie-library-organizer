@@ -12,6 +12,15 @@ export function movieDetailsCacheKey(movie, owned = null) {
   return tmdbId ? `tmdb:${tmdbId}` : '';
 }
 
+export function markMovieDetailsCacheStale(cache = {}) {
+  return Object.fromEntries(
+    Object.entries(cache).map(([key, details]) => [
+      key,
+      details && typeof details === 'object' ? { ...details, stale: true } : details
+    ])
+  );
+}
+
 export function mergeCanonicalMovieDetails(summary = {}, details = {}) {
   const merged = { ...(summary || {}), ...(details || {}) };
   const textFields = [

@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
+const port = 5117;
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 45_000,
@@ -8,17 +10,11 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:5000',
+    baseURL: `http://127.0.0.1:${port}`,
     browserName: 'chromium',
     headless: true,
     viewport: { width: 1600, height: 1000 },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
-  },
-  webServer: {
-    command: '.venv\\Scripts\\python.exe app.py',
-    url: 'http://127.0.0.1:5000/api/library/status',
-    reuseExistingServer: true,
-    timeout: 60_000
   }
 });

@@ -5,7 +5,7 @@ import re
 from services.movie_identity import normalize_movie_title, ownership_keys
 
 
-CANONICAL_CONTRACT_VERSION = 2
+CANONICAL_CONTRACT_VERSION = 4
 CANONICAL_CARD_CONTRACT = "canonical_movie_card"
 CANONICAL_DETAILS_CONTRACT = "canonical_movie_details"
 CANONICAL_CARD_FIELDS = (
@@ -19,7 +19,7 @@ CANONICAL_CARD_FIELDS = (
 )
 CANONICAL_DEFERRED_DETAIL_FIELDS = (
     "backdrop_url", "runtime", "tagline", "trailer_url", "collection",
-    "cast", "directors", "director",
+    "cast", "directors", "director", "writers", "certification", "keywords",
 )
 
 
@@ -63,6 +63,9 @@ _CANONICAL_DEFAULTS = {
     "cast": [],
     "directors": [],
     "director": {},
+    "writers": [],
+    "certification": "",
+    "keywords": [],
 }
 
 
@@ -158,7 +161,13 @@ def _provider_details_state(provider, record):
         if provider == "tmdb"
         else ("plex_summary", "plex_poster", "plex_genres", "plex_rating")
     )
-    return "complete" if any(record.get(field) for field in detail_fields) else "partial"
+    if not any(record.get(field) for field in detail_fields):
+        return "partial"
+    if provider == "tmdb" and not all(
+        field in record for field in ("writers", "certification", "keywords")
+    ):
+        return "partial"
+    return "complete"
 
 
 def _provider_people_state(provider, record):
@@ -763,6 +772,32 @@ class CanonicalCatalog:
             connection, [path_key], include_details=True, include_overrides=include_overrides
         ).get(path_key, {})
 
+    def tmdb_detail_contract_backfill_ids(self, connection, *, limit=None):
+        """Return selected TMDB identities whose stored snapshot predates the detail contract."""
+        query = """
+            SELECT DISTINCT cm.tmdb_id
+            FROM canonical_movies cm
+            LEFT JOIN provider_movie_snapshots pms
+              ON pms.movie_key = cm.movie_key
+             AND pms.provider = 'tmdb'
+             AND pms.snapshot_key = 'tmdb:' || cm.tmdb_id
+            WHERE cm.selected_provider = 'tmdb'
+              AND cm.tmdb_id <> ''
+              AND (
+                    pms.snapshot_key IS NULL
+                 OR json_valid(pms.source_json) = 0
+                 OR json_type(pms.source_json, '$.writers') IS NULL
+                 OR json_type(pms.source_json, '$.certification') IS NULL
+                 OR json_type(pms.source_json, '$.keywords') IS NULL
+              )
+            ORDER BY cm.tmdb_id
+        """
+        parameters = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters = (max(0, int(limit)),)
+        return [_text(row[0]) for row in connection.execute(query, parameters).fetchall() if _text(row[0])]
+
     def project_paths(self, connection, path_keys, *, include_details=False, include_overrides=True):
         """Project a bounded path set with a constant number of relational queries."""
         path_keys = list(dict.fromkeys(_text(key) for key in path_keys if _text(key)))
@@ -892,6 +927,12 @@ class CanonicalCatalog:
             snapshot = chosen.get(path_key, {})
             snapshot_key = snapshot.get("snapshot_key", "")
             selected_snapshot_present = selected_present.get(path_key, False)
+            source_details = {}
+            if include_details and snapshot.get("source_json"):
+                try:
+                    source_details = json.loads(snapshot["source_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    source_details = {}
             requested = _text(movie.get("requested_enrichment_status")).lower()
             selected_complete = bool(
                 selected_snapshot_present and snapshot.get("details_state") == "complete"
@@ -932,6 +973,9 @@ class CanonicalCatalog:
                 "collection": collections.get(snapshot_key, {}),
                 "cast": credits.get((snapshot_key, "cast"), []),
                 "directors": credits.get((snapshot_key, "director"), []),
+                "writers": source_details.get("writers", []) if isinstance(source_details.get("writers"), list) else [],
+                "certification": _text(source_details.get("certification")),
+                "keywords": source_details.get("keywords", []) if isinstance(source_details.get("keywords"), list) else [],
             }
             if include_details:
                 plex_candidates = [

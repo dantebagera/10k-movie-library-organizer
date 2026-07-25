@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import sqlite3
+import tempfile
 import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -85,6 +87,13 @@ class CatalogStore:
         self._library_summary_cache = None
 
     def connect(self):
+        if str(os.environ.get("CP_TEST_MODE", "") or "").strip() == "1":
+            temporary_root = Path(tempfile.gettempdir()).resolve()
+            if self.database_path != temporary_root and temporary_root not in self.database_path.parents:
+                raise CatalogError(
+                    "Test-mode catalogue access is restricted to the operating-system temporary directory: "
+                    f"{self.database_path}"
+                )
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.database_path, timeout=30)
         connection.row_factory = sqlite3.Row

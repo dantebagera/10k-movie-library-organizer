@@ -1,16 +1,25 @@
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
-from services.catalog_store import CATALOG_SCHEMA_VERSION, CatalogStore
+from services.catalog_store import CATALOG_SCHEMA_VERSION, CatalogError, CatalogStore
 from tools.build_shadow_catalog import _load_documents
 from tools.catalog_migration_backup import BackupError
 
 
 class CatalogStoreTest(unittest.TestCase):
+    def test_test_mode_refuses_catalogue_database_outside_temporary_directory(self):
+        unsafe_path = Path.cwd() / "data" / "catalog" / "must-not-open.sqlite"
+        with patch.dict(os.environ, {"CP_TEST_MODE": "1"}):
+            with self.assertRaisesRegex(CatalogError, "operating-system temporary directory"):
+                CatalogStore(unsafe_path).connect()
+        self.assertFalse(unsafe_path.exists())
+
     def _documents(self):
         return {
             "app_metadata/files.json": {
@@ -282,6 +291,37 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual(first["total"], 1)
         self.assertEqual(first["candidates"][0]["relational_canonical"]["poster_url"],
                          "/api/library/posters/image/custom-1000.jpg")
+
+    def test_existing_movies_query_searches_title_year_filename_path_plot_and_genre(self):
+        documents = self._paging_documents(1)
+        file_record = next(iter(documents["app_metadata/files.json"]["files"].values()))
+        file_record["path"] = "E:/PathBeacon/Feature/Feature.FilenameBeacon.mkv"
+        file_record["filename"] = "Feature.FilenameBeacon.mkv"
+        file_record["identity_title"] = "TitleBeacon"
+        movie = documents["app_metadata/tmdb_metadata.json"]["movies"]["1000"]
+        movie.update({
+            "title": "TitleBeacon",
+            "year": "1980",
+            "plot": "A PlotBeacon remains searchable.",
+            "genres": ["GenreBeacon"],
+        })
+
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+            results = {
+                query: store.library_page({"query": query, "sort": "title"}, page=1, page_size=10)["total"]
+                for query in ("TitleBeacon", "1980", "FilenameBeacon", "PathBeacon", "PlotBeacon", "GenreBeacon")
+            }
+
+        self.assertEqual(results, {
+            "TitleBeacon": 1,
+            "1980": 1,
+            "FilenameBeacon": 1,
+            "PathBeacon": 1,
+            "PlotBeacon": 1,
+            "GenreBeacon": 1,
+        })
 
     def test_library_page_query_count_is_bounded_by_page_size(self):
         with tempfile.TemporaryDirectory() as root:

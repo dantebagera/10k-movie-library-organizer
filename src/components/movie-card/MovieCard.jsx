@@ -65,6 +65,8 @@ export function UnifiedMovieCard({
   posterClassName = '',
   bodyClassName = '',
   cornerControls,
+  headerActions,
+  metadataActions,
   showPlayOverlay = false,
   onPlay,
   onToggle,
@@ -130,6 +132,11 @@ export function UnifiedMovieCard({
                 {voteCount ? <small>{voteCount}</small> : null}
               </div>
             ) : null}
+            {headerActions ? (
+              <span className="unified-header-actions" onClick={stopCardToggle}>
+                {headerActions}
+              </span>
+            ) : null}
             {interactive ? (
               <span className="unified-expand-affordance" aria-hidden="true">
                 <ChevronDown size={18} />
@@ -143,11 +150,27 @@ export function UnifiedMovieCard({
             <span className="unified-chip" dir="auto" key={chip}>{chip}</span>
           ))}
           {ownedBadge ? <span className="unified-owned-badge">Owned</span> : null}
-          {mutedChips.filter(Boolean).map((chip) => (
-            <span className="unified-chip unified-chip-muted" dir="auto" key={chip}>{chip}</span>
-          ))}
+          {mutedChips.map((chip, index) => {
+            const label = typeof chip === 'object' ? chip?.label : chip;
+            if (!label) return null;
+            const tone = typeof chip === 'object' ? chip?.tone : '';
+            return (
+              <span
+                className={cx('unified-chip', 'unified-chip-muted', tone && `unified-chip-${tone}`)}
+                dir="auto"
+                key={`${label}-${index}`}
+              >
+                {label}
+              </span>
+            );
+          })}
           {statusLabel ? (
             <span className={cx('unified-status-chip', `unified-status-${statusTone}`)}>{statusLabel}</span>
+          ) : null}
+          {metadataActions ? (
+            <div className="unified-chip-row-actions" onClick={stopCardToggle}>
+              {metadataActions}
+            </div>
           ) : null}
         </div>
 

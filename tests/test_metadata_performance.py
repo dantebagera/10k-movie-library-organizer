@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import gzip
+import os
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,21 @@ import app
 
 
 class MetadataPerformanceTest(unittest.TestCase):
+    def test_test_runtime_paths_are_all_isolated_under_declared_temporary_root(self):
+        self.assertTrue(app._TEST_MODE, "Python tests must run with CP_TEST_MODE=1")
+        declared_root = Path(os.environ["CP_TEST_ROOT"]).resolve()
+        temporary_root = Path(tempfile.gettempdir()).resolve()
+        self.assertIn(temporary_root, (declared_root, *declared_root.parents))
+        runtime_paths = [
+            Path(app._CONFIG_FILE).resolve(),
+            Path(app._user_data_dir).resolve(),
+            Path(app._tmdb_cache_dir).resolve(),
+            Path(app._RES_CACHE_FILE).resolve(),
+            *(Path(path).resolve() for path in app._movies_dirs),
+        ]
+        for runtime_path in runtime_paths:
+            self.assertIn(declared_root, (runtime_path, *runtime_path.parents), str(runtime_path))
+
     @staticmethod
     def _seed_file_record(store, movie_path, title, year, tmdb_id=""):
         store.update_file_record(str(movie_path), {
@@ -27,7 +43,10 @@ class MetadataPerformanceTest(unittest.TestCase):
         })
 
     def test_api_response_exposes_route_timing_headers(self):
-        response = app.app.test_client().get("/api/library/status")
+        repository = Mock()
+        repository.generation.return_value = 1
+        with patch("app._catalog_repository", return_value=repository):
+            response = app.app.test_client().get("/api/library/status")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("app;dur=", response.headers.get("Server-Timing", ""))

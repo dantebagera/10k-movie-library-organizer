@@ -29,6 +29,7 @@ import { fetchJson } from '../../api/client.js'
 import { setTorrentHandlingConfig } from '../../api/qbittorrent.js'
 import MetadataAuthorityPanel from '../../components/MetadataAuthorityPanel.jsx'
 import { cx, formatCount } from '../../utils/appUtils.js'
+import { buildOllamaModelGroups, CUSTOM_OLLAMA_MODEL_VALUE } from './ollamaModels.js'
 
 const emptySettingsState = {
   library: { directory: '', directories: [''], showAdultMovies: true },
@@ -92,12 +93,27 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
   const [revealed, setRevealed] = useState({});
   const [trustedIndexerDialogOpen, setTrustedIndexerDialogOpen] = useState(false);
   const [aiControlIndexerDialogOpen, setAiControlIndexerDialogOpen] = useState(false);
+  const [ollamaModelCatalog, setOllamaModelCatalog] = useState({
+    configured_model: '',
+    free_cloud_models: [],
+    local_models: [],
+    warnings: []
+  });
+  const [ollamaCustomModel, setOllamaCustomModel] = useState(false);
+  const [ollamaExactModel, setOllamaExactModel] = useState('');
   const editedFieldsRef = useRef(new Set());
+  const ollamaModelGroups = buildOllamaModelGroups(ollamaModelCatalog, forms.ollama.model);
 
   useEffect(() => {
     let cancelled = false;
     async function loadSettings() {
       setLoading(true);
+      const ollamaModelsRequest = fetchJson('/api/ollama/models').catch((error) => ({
+        configured_model: '',
+        free_cloud_models: [],
+        local_models: [],
+        warnings: [error.message]
+      }));
       const requests = await Promise.allSettled([
         fetchJson('/api/config'),
         fetchJson('/api/app-data/config'),
@@ -108,10 +124,11 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         fetchJson('/api/streaming/config'),
         fetchJson('/api/iptv/status'),
         fetchJson('/api/ollama/config'),
+        ollamaModelsRequest,
         fetchJson('/api/ai-control/config')
       ]);
       if (cancelled) return;
-      const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, aiControl] = requests;
+      const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, ollamaModels, aiControl] = requests;
       const loadedForms = {
         library: library.status === 'fulfilled' ? {
           directory: library.value.directory || '',
@@ -172,6 +189,9 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         });
         return merged;
       });
+      if (ollamaModels.status === 'fulfilled') {
+        setOllamaModelCatalog(ollamaModels.value);
+      }
       const failed = requests.filter((request) => request.status === 'rejected');
       if (failed.length) {
         setStatuses((state) => ({
@@ -191,6 +211,40 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       ...state,
       [section]: { ...state[section], [field]: value }
     }));
+  }
+
+  function updateOllamaModelChoice(value) {
+    if (value === CUSTOM_OLLAMA_MODEL_VALUE) {
+      setOllamaCustomModel(true);
+      setOllamaExactModel('');
+      return;
+    }
+    setOllamaCustomModel(false);
+    updateField('ollama', 'model', value);
+  }
+
+  async function verifyExactOllamaModel() {
+    const model = ollamaExactModel.trim();
+    if (!model) {
+      setCardStatus('ollama', 'error', 'Enter the exact Ollama cloud model name.', 'For Gemma, use gemma4:31b-cloud.');
+      return;
+    }
+    if (!model.toLocaleLowerCase().endsWith('cloud')) {
+      setCardStatus('ollama', 'error', 'That is not a cloud model name.', 'Ollama cloud model names end with the word cloud.');
+      return;
+    }
+
+    setActionState('ollama-model-lookup', true);
+    try {
+      const data = await fetchJson(`/api/ollama/test?url=${encodeURIComponent(forms.ollama.url || '')}&model=${encodeURIComponent(model)}`);
+      updateField('ollama', 'model', model);
+      setOllamaCustomModel(false);
+      setCardStatus('ollama', 'success', 'Cloud model verified and selected.', `${data.model} returned valid JSON in ${formatCount(data.elapsed_ms)} ms. Save Ollama to keep this choice.`);
+    } catch (error) {
+      setCardStatus('ollama', 'error', 'Ollama could not use that exact model.', error.message);
+    } finally {
+      setActionState('ollama-model-lookup', false);
+    }
   }
 
   function updateTrustedReleaseIndexer(indexerId, checked) {
@@ -389,6 +443,13 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           } : state.aiControl
         }));
       }
+      if (service === 'ollama') {
+        setOllamaModelCatalog((current) => ({
+          ...current,
+          configured_model: forms.ollama.model
+        }));
+        setOllamaCustomModel(false);
+      }
       setCardStatus(service, 'success', `${serviceLabel(service)} settings saved.`, 'Run Test to verify the saved connection.');
       notify(`${serviceLabel(service)} settings saved`);
       return true;
@@ -556,7 +617,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       plex: '/api/plex/test',
       prowlarr: '/api/prowlarr/test',
       tmdb: `/api/tmdb/test?key=${encodeURIComponent(forms.tmdb.key || '')}`,
-      ollama: `/api/ollama/test?url=${encodeURIComponent(forms.ollama.url || '')}`
+      ollama: `/api/ollama/test?url=${encodeURIComponent(forms.ollama.url || '')}&model=${encodeURIComponent(forms.ollama.model || '')}`
     };
     setActionState(`${service}-test`, true);
     try {
@@ -568,7 +629,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       } else if (service === 'tmdb') {
         setCardStatus('tmdb', 'success', 'TMDB key is valid.', 'Discovery metadata is available.');
       } else {
-        setCardStatus('ollama', 'success', 'Ollama is reachable.', 'Local AI recommendations can run.');
+        setCardStatus('ollama', 'success', 'Ollama model answered correctly.', `${data.model} returned valid JSON in ${formatCount(data.elapsed_ms)} ms.`);
       }
     } catch (error) {
       setCardStatus(service, 'error', `${serviceLabel(service)} test failed.`, error.message);
@@ -1095,7 +1156,59 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
               </label>
               <label className="dialog-field">
                 <span>Model</span>
-                <input value={forms.ollama.model || ''} onChange={(event) => updateField('ollama', 'model', event.target.value)} placeholder="llama3" />
+                <select
+                  aria-label="Ollama model"
+                  value={ollamaCustomModel ? CUSTOM_OLLAMA_MODEL_VALUE : (forms.ollama.model || '')}
+                  onChange={(event) => updateOllamaModelChoice(event.target.value)}
+                >
+                  {!forms.ollama.model && <option value="">Choose a model</option>}
+                  {ollamaModelGroups.current && (
+                    <option value={ollamaModelGroups.current.model}>{ollamaModelGroups.current.model} — Current model</option>
+                  )}
+                  {ollamaModelGroups.selected && (
+                    <option value={ollamaModelGroups.selected.model}>{ollamaModelGroups.selected.model} — Verified selection</option>
+                  )}
+                  <optgroup label="Free cloud models">
+                    {ollamaModelGroups.freeCloud.length ? ollamaModelGroups.freeCloud.map((item) => (
+                      <option key={item.model} value={item.model}>{item.model} — Free Cloud</option>
+                    )) : <option disabled>No free cloud models reported</option>}
+                  </optgroup>
+                  {ollamaModelGroups.local.length ? (
+                    <optgroup label="Local models">
+                      {ollamaModelGroups.local.map((item) => (
+                        <option key={item.model} value={item.model}>{item.model}</option>
+                      ))}
+                    </optgroup>
+                  ) : null}
+                  <option value={CUSTOM_OLLAMA_MODEL_VALUE}>Find an exact cloud model…</option>
+                </select>
+                {ollamaCustomModel ? (
+                  <span className="ollama-model-lookup">
+                    <input
+                      aria-label="Exact Ollama cloud model"
+                      value={ollamaExactModel}
+                      onChange={(event) => setOllamaExactModel(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          verifyExactOllamaModel();
+                        }
+                      }}
+                      placeholder="For example: gemma4:31b-cloud"
+                      autoFocus
+                    />
+                    <ActionButton
+                      loading={saving['ollama-model-lookup']}
+                      icon={Search}
+                      label="Verify & use"
+                      onClick={verifyExactOllamaModel}
+                    />
+                  </span>
+                ) : null}
+                <small>Ollama reports only a short recommendation list, not its full cloud catalog. If a cloud model is missing, enter its exact name and CP will test it before selecting it.</small>
+                {(ollamaModelCatalog.warnings || []).length ? (
+                  <small>Model list warning: {ollamaModelCatalog.warnings.join(' ')}</small>
+                ) : null}
               </label>
               <label className="dialog-field">
                 <span>AI candidate limit</span>
@@ -1114,7 +1227,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           actions={(
             <>
               <ActionButton loading={saving['ollama-save']} icon={Save} label="Save Ollama" onClick={() => saveIntegration('ollama')} primary />
-              <ActionButton loading={saving['ollama-test']} icon={PlugZap} label="Test URL" onClick={() => testIntegration('ollama')} />
+              <ActionButton loading={saving['ollama-test']} icon={PlugZap} label="Test Model" onClick={() => testIntegration('ollama')} />
             </>
           )}
         />
@@ -1309,7 +1422,7 @@ function integrationText(title) {
     TMDB: 'Posters, plots, cast, discovery lists, and trailers.',
     'Streaming Link': 'Configurable embedded movie stream URL template.',
     'IPTV Provider': 'Separate Xtream catalog and integrated local playback.',
-    Ollama: 'Local AI recommendations through your own model.'
+    Ollama: 'AI recommendations and interpretation through your selected Ollama model.'
   }[title] || '';
 }
 

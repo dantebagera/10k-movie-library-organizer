@@ -163,6 +163,112 @@ class MediaAssetServiceTest(unittest.TestCase):
         self.assertEqual(self.repository.generation("media"), catalog_before)
         self.assertGreater(self.repository.generation("asset"), asset_before)
 
+    def test_deleting_one_movie_preserves_unrelated_local_artwork_relationships(self):
+        self.repository.upsert_record("app_metadata/tmdb_metadata.json", "43", {
+            "tmdb_id": "43", "title": "Preserved Movie", "year": "2025",
+            "poster_url": "https://image.example/preserved-poster.png",
+            "cast": [{
+                "id": "102", "name": "Preserved Person",
+                "profile_url": "https://image.example/preserved-person.png",
+            }],
+            "directors": [],
+        })
+        self.repository.upsert_record("app_metadata/files.json", "e:/movies/preserved.mkv", {
+            "path": "E:/Movies/Preserved.mkv", "filename": "Preserved.mkv",
+            "identity_status": "accepted", "identity_title": "Preserved Movie",
+            "identity_year": "2025", "identity_source": "verified_tmdb",
+            "display_provider": "tmdb", "metadata_status": "accepted",
+            "metadata_accepted": True, "tmdb_id": "43", "resolution": "1080p",
+        })
+        connection = self.repository.store.connect()
+        try:
+            preserved_movie_key = connection.execute(
+                "SELECT movie_key FROM canonical_movies WHERE tmdb_id='43'"
+            ).fetchone()[0]
+            preserved_person_key = connection.execute(
+                "SELECT person_key FROM people WHERE tmdb_id='102'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.service.queue_movie(
+            preserved_movie_key,
+            "poster",
+            "tmdb",
+            "https://image.example/preserved-poster.png",
+        )
+        self.service.queue_person(
+            preserved_person_key,
+            "tmdb",
+            "https://image.example/preserved-person.png",
+        )
+
+        self.repository.remove_path_records(["e:/movies/asset.mkv"])
+
+        connection = self.repository.store.connect()
+        try:
+            deleted_movie = connection.execute(
+                "SELECT COUNT(*) FROM canonical_movies WHERE tmdb_id='42'"
+            ).fetchone()[0]
+            preserved_movie_assets = connection.execute(
+                "SELECT COUNT(*) FROM movie_assets WHERE movie_key=? AND selected=1",
+                (preserved_movie_key,),
+            ).fetchone()[0]
+            preserved_person_assets = connection.execute(
+                "SELECT COUNT(*) FROM person_assets WHERE person_key=? AND selected=1",
+                (preserved_person_key,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertEqual(deleted_movie, 0)
+        self.assertEqual(preserved_movie_assets, 1)
+        self.assertEqual(preserved_person_assets, 1)
+
+    def test_deleting_duplicate_copy_preserves_shared_movie_artwork_relationships(self):
+        movie_key = self._movie_key()
+        person_keys = self._person_keys()
+        self.service.queue_movie(
+            movie_key,
+            "poster",
+            "tmdb",
+            "https://image.example/poster.png",
+        )
+        for person_key in person_keys:
+            self.service.queue_person(
+                person_key,
+                "tmdb",
+                "https://image.example/person.png",
+            )
+        self.repository.upsert_record("app_metadata/files.json", "e:/movies/asset-720p.mkv", {
+            "path": "E:/Movies/Asset-720p.mkv", "filename": "Asset-720p.mkv",
+            "identity_status": "accepted", "identity_title": "Asset Movie",
+            "identity_year": "2024", "identity_source": "verified_tmdb",
+            "display_provider": "tmdb", "metadata_status": "accepted",
+            "metadata_accepted": True, "tmdb_id": "42", "resolution": "720p",
+        })
+
+        self.repository.remove_path_records(["e:/movies/asset-720p.mkv"])
+
+        connection = self.repository.store.connect()
+        try:
+            remaining_files = connection.execute(
+                "SELECT COUNT(*) FROM canonical_movie_files WHERE movie_key=?",
+                (movie_key,),
+            ).fetchone()[0]
+            poster_links = connection.execute(
+                "SELECT COUNT(*) FROM movie_assets WHERE movie_key=? AND selected=1",
+                (movie_key,),
+            ).fetchone()[0]
+            portrait_links = connection.execute(
+                "SELECT COUNT(*) FROM person_assets WHERE selected=1"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertEqual(remaining_files, 1)
+        self.assertEqual(poster_links, 1)
+        self.assertEqual(portrait_links, len(person_keys))
+
     def test_invalid_mime_partial_image_and_interrupted_download_are_retryable(self):
         key = self.service.queue_movie(
             self._movie_key(), "poster", "tmdb", "https://image.example/retry.png"

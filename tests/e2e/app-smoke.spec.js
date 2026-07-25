@@ -47,6 +47,10 @@ const parityDeferredDetails = {
     deferred_fields: [],
     cast: [{ id: '1001', name: 'SQL Cast Member', character: 'Archivist' }],
     directors: [{ id: '1002', name: 'SQL Director' }],
+    writers: [{ id: '1003', name: 'SQL Writer', job: 'Screenplay' }],
+    keywords: ['catalogue', 'memory'],
+    certification: 'PG-13',
+    runtime: 118,
     collection: { id: '7001', name: 'SQL Collection' },
     trailer_url: 'https://www.youtube.com/watch?v=sql-parity'
   }
@@ -116,6 +120,60 @@ test('Downloads shows qBittorrent without migration-only review records', async 
   await expect(page.getByText('deferred completed imports')).toHaveCount(0);
 });
 
+test('Settings selects a free Ollama cloud model and tests that exact model', async ({ page }) => {
+  let savedModel = '';
+  let testedModel = '';
+
+  await page.route('**/api/ollama/config', async (route) => {
+    if (route.request().method() === 'POST') {
+      savedModel = (await route.request().postDataJSON()).model;
+      await route.fulfill({ json: { success: true } });
+      return;
+    }
+    await route.fulfill({ json: {
+      url: 'http://localhost:11434',
+      model: 'gemma4:31b-cloud',
+      candidate_limit: 20
+    } });
+  });
+  await page.route('**/api/ollama/models', (route) => route.fulfill({ json: {
+    configured_model: 'gemma4:31b-cloud',
+    free_cloud_models: [
+      { model: 'minimax-m3:cloud', description: 'Free cloud model', required_plan: 'free' },
+      { model: 'nemotron-3-super:cloud', description: 'Free cloud model', required_plan: 'free' }
+    ],
+    local_models: [{ model: 'gemma3:12b', description: '12B' }],
+    warnings: []
+  } }));
+  await page.route('**/api/ollama/test?*', async (route) => {
+    testedModel = new URL(route.request().url()).searchParams.get('model') || '';
+    await route.fulfill({ json: { success: true, model: testedModel, elapsed_ms: 1250 } });
+  });
+
+  await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+
+  const modelSelector = page.getByLabel('Ollama model');
+  await expect(modelSelector).toHaveValue('gemma4:31b-cloud');
+  await expect(modelSelector.locator('optgroup[label="Free cloud models"] option')).toHaveCount(2);
+  await modelSelector.selectOption('minimax-m3:cloud');
+  await page.getByRole('button', { name: 'Save Ollama' }).click();
+  await expect.poll(() => savedModel).toBe('minimax-m3:cloud');
+
+  await page.getByRole('button', { name: 'Test Model' }).click();
+  await expect.poll(() => testedModel).toBe('minimax-m3:cloud');
+  await expect(page.getByText('Ollama model answered correctly.')).toBeVisible();
+  await expect(page.getByText('minimax-m3:cloud returned valid JSON in 1,250 ms.')).toBeVisible();
+
+  await modelSelector.selectOption('__custom_ollama_model__');
+  await page.getByLabel('Exact Ollama cloud model').fill('gemma4:31b-cloud');
+  await page.getByRole('button', { name: 'Verify & use' }).click();
+  await expect.poll(() => testedModel).toBe('gemma4:31b-cloud');
+  await expect(modelSelector).toHaveValue('gemma4:31b-cloud');
+  await expect(page.getByText('Cloud model verified and selected.')).toBeVisible();
+  await page.getByRole('button', { name: 'Save Ollama' }).click();
+  await expect.poll(() => savedModel).toBe('gemma4:31b-cloud');
+});
+
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
@@ -165,6 +223,62 @@ test('Library people search renders portraits stored in canonical metadata', asy
   await expect.poll(() => portrait.evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
 });
 
+test('existing actor and director People search remains available in Library and Discover', async ({ page }) => {
+  const person = {
+    id: '55',
+    tmdb_id: '55',
+    name: 'Parity Filmmaker',
+    known_for_department: 'Directing',
+    known_for: ['Parity Feature']
+  };
+  const peopleItem = {
+    path: parityLibraryItem.path,
+    canonical_metadata: {
+      accepted: true,
+      title: parityMovie.title,
+      year: parityMovie.year,
+      cast: [{ id: person.id, name: person.name }],
+      directors: [{ id: person.id, name: person.name }]
+    },
+    plex_cast: [],
+    plex_directors: []
+  };
+  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+    items: [parityLibraryItem],
+    count: 1,
+    total: 1,
+    page: 1,
+    total_pages: 1,
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/library?view=people*', (route) => route.fulfill({ json: {
+    items: [peopleItem],
+    count: 1,
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/tmdb/people/search**', (route) => route.fulfill({ json: {
+    results: [person],
+    page: 1,
+    total_pages: 1,
+    total_results: 1
+  } }));
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Library search type').selectOption('people');
+  await page.getByPlaceholder('Search people in your library...').fill(person.name);
+  const libraryPerson = page.locator('.person-search-card').filter({ hasText: person.name });
+  await expect(libraryPerson.getByRole('button', { name: 'Acting credits' })).toBeVisible();
+  await expect(libraryPerson.getByRole('button', { name: 'Directed films' })).toBeVisible();
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('people');
+  await page.getByLabel('Search TMDB people').fill(person.name);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  const discoverPerson = page.locator('.person-search-card').filter({ hasText: person.name });
+  await expect(discoverPerson.getByRole('button', { name: 'Acting credits' })).toBeVisible();
+  await expect(discoverPerson.getByRole('button', { name: 'Directed films' })).toBeVisible();
+});
+
 test('Library credit clicks load the people projection before filtering owned work', async ({ page }) => {
   const cards = [
     {
@@ -185,7 +299,13 @@ test('Library credit clicks load the people projection before filtering owned wo
   await page.route('**/api/library?view=people*', (route) => route.fulfill({ json: {
     items: cards.map((item) => ({
       path: item.path,
-      canonical_metadata: { cast: [person], directors: [] },
+      canonical_metadata: {
+        accepted: item.canonical_metadata.accepted,
+        title: item.canonical_metadata.title,
+        year: item.canonical_metadata.year,
+        cast: [person],
+        directors: []
+      },
       plex_cast: [],
       plex_directors: []
     })),
@@ -268,16 +388,55 @@ test('Library server paging, filtered selection, and navigation preserve exact r
 
 test('owned Library posters render from immutable local assets without detail providers', async ({ page }) => {
   let providerDetailCalls = 0;
+  const localPosterUrl = '/api/assets/e2e-local-poster';
+  const localPoster = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const localPosterItem = {
+    ...parityLibraryItem,
+    canonical_metadata: {
+      ...parityLibraryItem.canonical_metadata,
+      poster_url: localPosterUrl
+    }
+  };
+  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+    items: [localPosterItem],
+    count: 1,
+    total: 1,
+    page: 1,
+    total_pages: 1,
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/library/details**', (route) => route.fulfill({ json: {
+    item: {
+      ...localPosterItem,
+      canonical_metadata: {
+        ...localPosterItem.canonical_metadata,
+        projection_contract: 'canonical_movie_details',
+        deferred_fields: [],
+        cast: [],
+        directors: []
+      }
+    },
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/assets/e2e-local-poster', (route) => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    headers: { 'Cache-Control': 'public, max-age=31536000, immutable' },
+    body: localPoster
+  }));
   await page.route('**/api/tmdb/details**', (route) => {
     providerDetailCalls += 1;
     return route.abort();
   });
+  const assetResponse = page.waitForResponse((response) => response.url().endsWith(localPosterUrl));
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  const response = await assetResponse;
   const poster = page.locator('.library-movie-card img[src^="/api/assets/"]').first();
   await expect(poster).toBeVisible();
   await expect.poll(() => poster.evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
-  const source = await poster.getAttribute('src');
-  const response = await page.request.get(source);
   expect(response.ok()).toBeTruthy();
   expect(response.headers()['cache-control']).toContain('immutable');
   await page.waitForTimeout(750);
@@ -287,6 +446,47 @@ test('owned Library posters render from immutable local assets without detail pr
   await expect(card).toHaveClass(/library-movie-card-expanded/);
   await page.waitForTimeout(500);
   expect(providerDetailCalls).toBe(0);
+});
+
+test('Discover unowned cards keep remote actions and do not acquire an ownership badge', async ({ page }) => {
+  const remoteMovie = {
+    tmdb_id: '84',
+    imdb_id: 'tt0000084',
+    title: 'Remote Parity Movie',
+    year: '2025',
+    poster_url: '',
+    tmdb_rating: '7.1',
+    tmdb_vote_count: 84,
+    genres: ['Mystery'],
+    plot: 'Remote provider detail.'
+  };
+  await page.route('**/api/tmdb/discover**', (route) => route.fulfill({ json: {
+    results: [remoteMovie],
+    page: 1,
+    total_pages: 1,
+    total_results: 1
+  } }));
+  await page.route('**/api/library/check', (route) => route.fulfill({ json: {
+    results: [{ found: false, tmdb_id: remoteMovie.tmdb_id }],
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/tmdb/details**', (route) => route.fulfill({ json: {
+    ...remoteMovie,
+    summary: remoteMovie.plot,
+    cast: [],
+    directors: [],
+    writers: [],
+    keywords: []
+  } }));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  const card = page.locator('.discover-movie-card').filter({ hasText: remoteMovie.title });
+  await expect(card.getByText('Owned', { exact: true })).toHaveCount(0);
+  await expect(card).toContainText('Not in library');
+  await card.click();
+  await expect(card.getByRole('button', { name: 'Find sources', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Follow', exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Play', exact: true })).toHaveCount(0);
 });
 
 test('Maintenance tabs remain interactive after the audit loads', async ({ page }) => {
@@ -300,7 +500,114 @@ test('Maintenance tabs remain interactive after the audit loads', async ({ page 
   await expect(page.locator('.app-crash-screen')).toHaveCount(0);
 });
 
+test('Duplicate cleanup confirms and submits the complete safe movie folder', async ({ page }) => {
+  const candidatePath = 'E:\\Movies\\Project Hail Mary (2026) [720p]\\Project.Hail.Mary.2026.720p.mkv';
+  const keepPath = 'E:\\Movies\\Project Hail Mary (2026) [1080p]\\Project.Hail.Mary.2026.1080p.mkv';
+  const folderTarget = 'E:\\Movies\\Project Hail Mary (2026) [720p]';
+  let executedRequest = null;
+
+  await page.route('**/api/maintenance/audit?*', async (route) => {
+    await route.fulfill({ json: {
+      summary: {
+        duplicate_groups: 1,
+        extra_copies: 1,
+        reclaimable_human: '2.0 GB',
+        unmatched_files: 0,
+        upgrade_candidates: 0,
+      },
+      storage: {
+        groups: [{
+          title: 'Project Hail Mary (2026)',
+          recommended_count: 1,
+          files: [
+            { path: keepPath, filename: 'Project.Hail.Mary.2026.1080p.mkv', role: 'keep', recommendation: 'keep', resolution: '1080p', size_human: '4.0 GB' },
+            { path: candidatePath, filename: 'Project.Hail.Mary.2026.720p.mkv', role: 'candidate', recommendation: 'recommended', resolution: '720p', size_human: '2.0 GB' },
+          ]
+        }],
+        pagination: { total: 1, page: 1, total_pages: 1, page_start: 1, page_end: 1 }
+      },
+      identity: { items: [], pagination: { total: 0, page: 1, total_pages: 1 } }
+    } });
+  });
+  await page.route('**/api/delete', async (route) => {
+    const body = await route.request().postDataJSON();
+    if (body.preview) {
+      await route.fulfill({ json: {
+        paths: [candidatePath],
+        folder_count: 1,
+        file_count: 0,
+        actions: [{
+          target_type: 'folder',
+          target: folderTarget,
+          folder: folderTarget,
+          paths: [candidatePath],
+          sidecar_count: 4,
+        }]
+      } });
+      return;
+    }
+    executedRequest = body;
+    await route.fulfill({ json: {
+      success: true,
+      deleted_paths: [candidatePath],
+      folder_count: 1,
+      file_count: 0,
+      actions: [],
+      failures: [],
+      trashed: true,
+    } });
+  });
+
+  await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
+  const candidateRow = page.locator('.cleanup-file-row').filter({ hasText: 'Project.Hail.Mary.2026.720p.mkv' });
+  await candidateRow.getByRole('button', { name: 'Delete' }).click();
+
+  const dialog = page.getByRole('dialog', { name: /Move Project\.Hail\.Mary\.2026\.720p\.mkv to Recycle Bin/ });
+  await expect(dialog).toContainText('1 complete movie folder will move to the Recycle Bin');
+  await expect(dialog).toContainText('including 4 sidecar files');
+  await expect(dialog).toContainText(folderTarget);
+  await dialog.getByRole('button', { name: 'Move to Recycle Bin' }).click();
+
+  await expect.poll(() => executedRequest).not.toBeNull();
+  expect(executedRequest.paths).toEqual([candidatePath]);
+  expect(executedRequest.folder_targets).toEqual([folderTarget]);
+  await expect(page.getByText('1 movie file moved to Recycle Bin, including 1 complete folder')).toBeVisible();
+});
+
 test('Maintenance upgrade summary opens the authoritative Library filter', async ({ page }) => {
+  const upgradeItem = {
+    ...parityLibraryItem,
+    resolution: '720p',
+    maintenance_upgrade_candidate: true,
+    canonical_metadata: {
+      ...parityLibraryItem.canonical_metadata,
+      title: 'Upgrade Fixture'
+    }
+  };
+  await page.route('**/api/maintenance/audit?*', (route) => route.fulfill({ json: {
+    summary: {
+      duplicate_groups: 0,
+      extra_copies: 0,
+      reclaimable_human: '0 B',
+      unmatched_files: 0,
+      upgrade_candidates: 1
+    },
+    storage: {
+      groups: [],
+      pagination: { total: 0, page: 1, total_pages: 1, page_start: 0, page_end: 0 }
+    },
+    identity: { items: [], pagination: { total: 0, page: 1, total_pages: 1 } }
+  } }));
+  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+    items: [upgradeItem],
+    count: 1,
+    total: 1,
+    page: 1,
+    total_pages: 1,
+    facets: { genres: [], sources: [], languages: [], countries: [] },
+    stats: { total: 1, low: 1, matched: 1, pending: 0, unmatched: 0 },
+    catalog_generation: 1
+  } }));
   await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: /Upgrade candidates/ }).click();
 
@@ -390,6 +697,7 @@ test('every stateful workspace preserves its page state after sidebar navigation
 test('Library, Discover-owned, and Movie List cards render one canonical movie contract', async ({ page }) => {
   await mockCardParityApis(page);
   let tmdbDetailsRequests = 0;
+  let localizedDetailsRequests = 0;
   let libraryDetailsRequests = 0;
   await page.route('**/api/library/details**', async (route) => {
     libraryDetailsRequests += 1;
@@ -397,12 +705,31 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   });
   await page.route('**/api/tmdb/details**', async (route) => {
     const requestUrl = new URL(route.request().url());
+    if (requestUrl.searchParams.get('language') === 'ar-SA') {
+      localizedDetailsRequests += 1;
+      await route.fulfill({ json: {
+        tmdb_id: parityMovie.tmdb_id,
+        imdb_id: parityMovie.imdb_id,
+        title: 'فيلم تكافؤ العرض',
+        year: parityMovie.year,
+        plot: 'حبكة عربية مؤقتة.',
+        summary: 'حبكة عربية مؤقتة.',
+        genres: ['دراما'],
+        certification: 'PG-13',
+        writers: [{ id: '1003', name: 'كاتب SQL', job: 'Screenplay' }],
+        keywords: ['فهرس', 'ذاكرة'],
+        cast: [{ id: '1001', name: 'ممثل SQL', character: 'أمين الأرشيف' }],
+        directors: [{ id: '1002', name: 'مخرج SQL' }],
+        collection: { id: '7001', name: 'مجموعة SQL' }
+      } });
+      return;
+    }
     if (requestUrl.searchParams.get('tmdb_id') === parityMovie.tmdb_id) tmdbDetailsRequests += 1;
     await route.fulfill({ status: 503, json: { error: 'TMDB unavailable' } });
   });
 
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
-  const libraryCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  const libraryCard = page.locator('.library-movie-card').first();
   await expect(libraryCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(libraryCard).toContainText(parityMovie.year);
   const libraryRequestsBeforeExpand = tmdbDetailsRequests;
@@ -411,9 +738,23 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await expect(libraryCard).toContainText('SQL Director');
   await expect(libraryCard).toContainText('SQL Cast Member');
   await expect(libraryCard).toContainText('SQL Collection');
+  await expect(libraryCard).toContainText('SQL Writer');
+  await expect(libraryCard).toContainText('catalogue');
+  await expect(libraryCard).toContainText('PG-13');
+  await expect(libraryCard.getByRole('link', { name: `Open ${parityMovie.title} on IMDb` })).toHaveAttribute(
+    'href',
+    `https://www.imdb.com/title/${parityMovie.imdb_id}/`
+  );
   await expect(libraryCard.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
   await expect(libraryCard.getByRole('button', { name: 'Follow', exact: true })).toHaveCount(0);
   expect(tmdbDetailsRequests).toBe(libraryRequestsBeforeExpand);
+  await libraryCard.locator('.movie-language-toggle').click();
+  await expect(libraryCard).toContainText('حبكة عربية مؤقتة.');
+  await expect(libraryCard.locator('.library-summary')).toHaveAttribute('dir', 'rtl');
+  expect(localizedDetailsRequests).toBe(1);
+  expect(tmdbDetailsRequests).toBe(libraryRequestsBeforeExpand);
+  await libraryCard.locator('.movie-language-toggle').click();
+  await expect(libraryCard).toContainText(parityMovie.plot);
   await libraryCard.getByRole('heading', { name: parityMovie.title }).click();
   await expect(libraryCard).not.toHaveClass(/library-movie-card-expanded/);
   await libraryCard.getByRole('heading', { name: parityMovie.title }).click();

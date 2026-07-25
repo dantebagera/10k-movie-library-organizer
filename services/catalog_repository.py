@@ -618,7 +618,11 @@ class CatalogRepository:
                         (name, _json_text(document)),
                     )
                     changed_documents.add(name)
-            self.store.canonical.rebuild(connection)
+            self.store.canonical.sync_changes(
+                connection,
+                "app_metadata/files.json",
+                path_keys,
+            )
             self._bump_generation(connection, changed_documents)
             for name in changed_documents:
                 self._cache.pop(name, None)

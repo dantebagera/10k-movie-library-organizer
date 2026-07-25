@@ -3011,10 +3011,22 @@ kbd {
 
 .movie-expanded-facts {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(130px, 0.4fr);
-  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(90px, 0.35fr);
+  align-items: start;
+  gap: var(--space-3);
   border-top: 1px solid var(--border);
   padding-top: 12px;
+}
+
+.movie-expanded-primary-facts {
+  display: grid;
+  gap: 8px;
+}
+
+.movie-expanded-runtime {
+  justify-self: end;
+  min-width: 90px;
+  margin-right: 14px;
 }
 
 .collection-panel {
@@ -4212,6 +4224,18 @@ kbd {
   gap: var(--space-2);
 }
 
+.ollama-model-lookup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ollama-model-lookup .btn {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
 .settings-checkbox-group {
   display: grid;
   gap: 8px;
@@ -4888,7 +4912,11 @@ kbd {
 }
 
 .movie-language-toggle {
-  gap: 6px;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 0.82rem;
+  font-weight: 900;
 }
 
 .movie-language-error {

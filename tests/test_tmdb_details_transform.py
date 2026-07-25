@@ -20,6 +20,9 @@ class TmdbDetailsTransformTest(unittest.TestCase):
                 "crew": [
                     {"id": 1, "name": "Editor Person", "job": "Editor", "profile_path": "/editor.jpg"},
                     {"id": 2, "name": "Ridley Scott", "job": "Director", "profile_path": "/ridley.jpg"},
+                    {"id": 3, "name": "Dan O'Bannon", "job": "Writer", "profile_path": "/writer.jpg"},
+                    {"id": 3, "name": "Dan O'Bannon", "job": "Screenplay", "profile_path": "/writer.jpg"},
+                    {"id": 4, "name": "Ronald Shusett", "job": "Story"},
                 ],
                 "cast": [
                     {"id": idx, "name": f"Actor {idx}", "character": f"Role {idx}", "profile_path": f"/actor-{idx}.jpg"}
@@ -29,6 +32,22 @@ class TmdbDetailsTransformTest(unittest.TestCase):
             "videos": {
                 "results": [
                     {"site": "YouTube", "type": "Trailer", "key": "official-key", "official": True},
+                ]
+            },
+            "release_dates": {
+                "results": [{
+                    "iso_3166_1": "US",
+                    "release_dates": [
+                        {"certification": "R", "type": 4, "release_date": "1979-05-22T00:00:00.000Z"},
+                        {"certification": "R", "type": 3, "release_date": "1979-05-25T00:00:00.000Z"},
+                    ],
+                }]
+            },
+            "keywords": {
+                "keywords": [
+                    {"id": 1, "name": "space"},
+                    {"id": 2, "name": "alien"},
+                    {"id": 3, "name": "space"},
                 ]
             },
         }
@@ -43,6 +62,9 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(result["collection"]["poster_url"], "https://image.tmdb.org/t/p/w185/alien-poster.jpg")
         self.assertEqual(result["trailer_url"], "https://www.youtube.com/watch?v=official-key")
         self.assertEqual(result["release_date"], "1979-05-25")
+        self.assertEqual([writer["name"] for writer in result["writers"]], ["Dan O'Bannon", "Ronald Shusett"])
+        self.assertEqual(result["certification"], "R")
+        self.assertEqual(result["keywords"], ["space", "alien"])
 
     def test_details_keep_primary_and_regional_release_year_evidence(self):
         payload = {
@@ -377,8 +399,13 @@ class TmdbDetailsTransformTest(unittest.TestCase):
                 "fetched_at": 1,
                 "data": {
                     "tmdb_id": "1368337",
+                    "title": "The Odyssey",
+                    "plot": "Old cached plot.",
+                    "genres": ["Adventure"],
                     "runtime": 100,
                     "release_date": "2026-07-15",
+                    "cast": [],
+                    "directors": [],
                 },
             }
         }
@@ -399,8 +426,19 @@ class TmdbDetailsTransformTest(unittest.TestCase):
                     "runtime": 100,
                     "genres": [{"id": 12, "name": "Adventure"}],
                     "vote_average": 8.1,
-                    "credits": {"crew": [], "cast": []},
+                    "imdb_id": "tt31564624",
+                    "credits": {
+                        "crew": [{"id": 1, "name": "Christopher Nolan", "job": "Writer"}],
+                        "cast": [],
+                    },
                     "videos": {"results": []},
+                    "release_dates": {
+                        "results": [{
+                            "iso_3166_1": "US",
+                            "release_dates": [{"certification": "PG-13", "type": 3}],
+                        }]
+                    },
+                    "keywords": {"keywords": [{"id": 1, "name": "odyssey"}]},
                 }).encode()
 
         try:
@@ -419,6 +457,11 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(payload["plot"], "Odysseus begins his long voyage home.")
         self.assertEqual(payload["genres"], ["Adventure"])
         self.assertEqual(payload["release_date"], "2026-07-15")
+        self.assertEqual(payload["certification"], "PG-13")
+        self.assertEqual(payload["writers"][0]["name"], "Christopher Nolan")
+        self.assertEqual(payload["keywords"], ["odyssey"])
+        self.assertIn("release_dates", urlopen.call_args.args[0].full_url)
+        self.assertIn("keywords", urlopen.call_args.args[0].full_url)
 
     def test_arabic_tmdb_details_are_transient_and_do_not_touch_persistent_cache(self):
         original_key = app._tmdb_key

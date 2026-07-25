@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:ownership-cache": "node --test tests/browser_ownership_cache.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/run_playwright_e2e.ps1"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

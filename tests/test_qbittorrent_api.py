@@ -81,8 +81,12 @@ class QBittorrentApiTests(unittest.TestCase):
             "dir": app._movies_dir,
             "prowlarr_url": app._prowlarr_url,
             "prowlarr_key": app._prowlarr_key,
+            "user_data_dir": app._user_data_dir,
+            "catalog_repositories": dict(app._catalog_repository_cache),
         }
         self.temp = tempfile.TemporaryDirectory()
+        app._user_data_dir = self.temp.name
+        app._catalog_repository_cache.clear()
         app._movies_dirs = [self.temp.name]
         app._movies_dir = self.temp.name
         app._qbt_mode = "embedded"
@@ -109,6 +113,9 @@ class QBittorrentApiTests(unittest.TestCase):
         app._movies_dir = self.original["dir"]
         app._prowlarr_url = self.original["prowlarr_url"]
         app._prowlarr_key = self.original["prowlarr_key"]
+        app._catalog_repository_cache.clear()
+        app._catalog_repository_cache.update(self.original["catalog_repositories"])
+        app._user_data_dir = self.original["user_data_dir"]
         self.temp.cleanup()
 
     def test_migration_only_import_audit_routes_are_removed(self):

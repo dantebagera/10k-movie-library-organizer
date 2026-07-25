@@ -20,7 +20,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from './api/client.js';
 import { announceLibraryReconciled, CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks, observeCatalogGeneration } from './api/library.js';
-import { fetchCanonicalMovieDetails, movieDetailsCacheKey } from './api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from './api/movieDetails.js';
 import {
   announceCurationChanged,
   fetchCurationJson,
@@ -278,7 +278,7 @@ function ArchiveApp() {
   }, [activeSection, mountedSections]);
 
   useEffect(() => {
-    const clearDetailCache = () => setDetails({});
+    const clearDetailCache = () => setDetails(markMovieDetailsCacheStale);
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCache);
     return () => window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCache);
   }, []);
@@ -480,13 +480,13 @@ function ArchiveApp() {
   } : null;
 
   useEffect(() => {
-    if (loading.movies || !selectedDetailsKey || details[selectedDetailsKey]) return;
+    if (loading.movies || !selectedDetailsKey || (details[selectedDetailsKey] && !details[selectedDetailsKey].stale)) return;
     let cancelled = false;
     async function loadDetails() {
       try {
         const data = await fetchCanonicalMovieDetails(selectedMovie, selectedOwnership);
         if (!cancelled) {
-          setDetails((state) => data?.catalog_generation_changed ? { [selectedDetailsKey]: data } : { ...state, [selectedDetailsKey]: data });
+          setDetails((state) => ({ ...state, [selectedDetailsKey]: data }));
         }
       } catch (error) {
         if (!cancelled) setDetails((state) => ({ ...state, [selectedDetailsKey]: { error: error.message, cast: [], directors: [], trailer_url: '' } }));

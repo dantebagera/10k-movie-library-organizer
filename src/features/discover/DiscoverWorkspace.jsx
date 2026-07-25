@@ -5,7 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import ListEditorModal from '../../components/ListEditorModal.jsx';
@@ -136,7 +136,7 @@ export default function DiscoverWorkspace({
 
   useEffect(() => {
     const clearDetailCaches = () => {
-      setDetailsCache({});
+      setDetailsCache(markMovieDetailsCacheStale);
       setCollectionCache({});
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
@@ -690,12 +690,11 @@ export default function DiscoverWorkspace({
     const cacheKey = movieDetailsCacheKey(movie, owned);
     if (!cacheKey) return null;
     let details = detailsCache[cacheKey];
-    if (!details) {
+    if (!details || details.stale) {
       setDetailsCache((state) => ({ ...state, [cacheKey]: { loading: true, cast: [], directors: [], collection: {}, trailer_url: '' } }));
       try {
         details = await fetchCanonicalMovieDetails(movie, owned);
-        if (details?.catalog_generation_changed) setCollectionCache({});
-        setDetailsCache((state) => details?.catalog_generation_changed ? { [cacheKey]: details } : { ...state, [cacheKey]: details });
+        setDetailsCache((state) => ({ ...state, [cacheKey]: details }));
       } catch (error) {
         details = { error: error.message, cast: [], directors: [], collection: {}, trailer_url: '' };
         setDetailsCache((state) => ({ ...state, [cacheKey]: details }));

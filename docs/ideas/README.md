@@ -17,6 +17,7 @@ because it is documented here.
 
 | Idea | Status | Summary | Revisit condition |
 | --- | --- | --- | --- |
+| [CP Watch: Where to Watch and web services](cpwatch.md) | Approved | Combine lazy regional availability on shared movie cards with an unlimited configurable services workspace and secure provider navigation through WebView2. | Complete the Stage 0 mockup and provider-compatibility gates in the implementation plan before production coding. |
 | [Managed Ollama runtime](managed-ollama-runtime.md) | Deferred | Let CP supervise a private Ollama runtime as part of a future media-appliance package. | The target mini-PC hardware and distribution model are defined. |
 
 ## Workflow

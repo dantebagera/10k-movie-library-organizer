@@ -241,6 +241,12 @@
   letter-spacing: 0;
 }
 
+.unified-chip.unified-chip-certification {
+  border-color: #3b82f680;
+  background: #2563eb24;
+  color: #8fc5ff;
+}
+
 .unified-expand-affordance {
   display: grid;
   width: 34px;
@@ -268,6 +274,13 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.unified-chip-row-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .unified-chip,
@@ -314,9 +327,91 @@
   display: contents;
 }
 
+.unified-header-actions {
+  display: inline-flex;
+  align-items: center;
+}
+
+.movie-imdb-link {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #f5c51880;
+  border-radius: 5px;
+  background: #f5c518;
+  color: #111214;
+  padding: 0 8px;
+  font-size: 0.72rem;
+  font-weight: 950;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.movie-imdb-link:hover,
+.movie-imdb-link:focus-visible {
+  background: #ffdb4d;
+  color: #050506;
+  outline: none;
+  box-shadow: 0 0 0 3px #f5c51824;
+}
+
 .unified-movie-expanded-body {
   min-width: 0;
   margin-top: auto;
+}
+
+.movie-keyword-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.movie-keyword-label,
+.movie-expanded-writers > span {
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.movie-keyword-chip,
+.movie-keyword-more {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #17191c;
+  color: var(--text-muted);
+  padding: 0 9px;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.movie-keyword-more {
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 3px;
+}
+
+.movie-expanded-writers {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 3px;
+}
+
+.movie-expanded-writers strong {
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  white-space: normal;
 }
 
 .unified-movie-aside {

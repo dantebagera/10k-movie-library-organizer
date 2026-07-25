@@ -91,6 +91,9 @@ class LibraryReconcileTest(unittest.TestCase):
                 "plot": "Stored detail.",
                 "cast": [],
                 "directors": [],
+                "writers": [],
+                "certification": "",
+                "keywords": [],
             })
             store.update_file_record(str(movie), {
                 "identity_status": "accepted",
@@ -261,6 +264,93 @@ class LibraryReconcileTest(unittest.TestCase):
 
         self.assertTrue(decision["run"])
         self.assertEqual(decision["reason"], "library_root_changed")
+
+    def test_startup_runs_detail_backfill_when_inventory_is_current_but_tmdb_snapshot_is_stale(self):
+        with tempfile.TemporaryDirectory() as movies_tmp, tempfile.TemporaryDirectory() as data_tmp:
+            movie = Path(movies_tmp) / "Alien.1979.1080p.mkv"
+            movie.write_bytes(b"movie")
+            self.configure(movies_tmp, data_tmp)
+            store = app.AppMetadataStore(Path(data_tmp))
+            store.save_tmdb_metadata({
+                "tmdb_id": "348",
+                "title": "Alien",
+                "year": "1979",
+                "plot": "Stored detail.",
+                "cast": [],
+                "directors": [],
+            })
+            store.update_file_record(str(movie), {
+                "identity_status": "accepted",
+                "identity_title": "Alien",
+                "identity_year": "1979",
+                "metadata_status": "accepted",
+                "metadata_accepted": True,
+                "display_provider": "tmdb",
+                "tmdb_id": "348",
+            })
+            store.save_library_inventory({
+                app._norm(str(movie)): {
+                    "path": str(movie),
+                    "size": movie.stat().st_size,
+                    "modified_time": movie.stat().st_mtime,
+                },
+            })
+            store.catalog.set_operational_meta("last_library_root_signature", app._library_root_signature())
+            store.catalog.set_operational_meta("last_library_reconcile_generation", store.catalog.generation("media"))
+
+            decision = app._startup_reconcile_decision()
+
+        self.assertTrue(decision["run"])
+        self.assertFalse(decision["run_inventory"])
+        self.assertTrue(decision["run_detail_backfill"])
+        self.assertEqual(decision["reason"], "metadata_contract_upgrade")
+        self.assertEqual(decision["detail_backfill_remaining"], 1)
+
+    def test_detail_backfill_updates_each_tmdb_snapshot_and_is_resumable(self):
+        with tempfile.TemporaryDirectory() as movies_tmp, tempfile.TemporaryDirectory() as data_tmp:
+            movie = Path(movies_tmp) / "Alien.1979.1080p.mkv"
+            movie.write_bytes(b"movie")
+            self.configure(movies_tmp, data_tmp)
+            store = app.AppMetadataStore(Path(data_tmp))
+            store.save_tmdb_metadata({
+                "tmdb_id": "348",
+                "title": "Alien",
+                "year": "1979",
+                "plot": "Stored detail.",
+                "cast": [],
+                "directors": [],
+            })
+            store.update_file_record(str(movie), {
+                "identity_status": "accepted",
+                "identity_title": "Alien",
+                "identity_year": "1979",
+                "metadata_status": "accepted",
+                "metadata_accepted": True,
+                "display_provider": "tmdb",
+                "tmdb_id": "348",
+            })
+            completed = {
+                **store.get_tmdb_metadata("348"),
+                "writers": [{"id": "1", "name": "Dan O'Bannon", "job": "Writer"}],
+                "certification": "R",
+                "keywords": ["space", "alien"],
+            }
+
+            with patch("app._metadata_store", return_value=store), patch(
+                    "app._fetch_tmdb_metadata_by_id",
+                    side_effect=lambda *args, **kwargs: store.save_tmdb_metadata(completed),
+            ) as fetch:
+                result = app._run_tmdb_detail_contract_backfill()
+
+            details = app._relational_canonical_for_path(str(movie), store=store)
+
+        fetch.assert_called_once_with("348", store=store, refresh=False)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["remaining"], 0)
+        self.assertEqual(details["certification"], "R")
+        self.assertEqual(details["writers"][0]["name"], "Dan O'Bannon")
+        self.assertEqual(details["keywords"], ["space", "alien"])
 
     def test_explicit_reconcile_bypasses_startup_skip_decision(self):
         with patch("app._startup_reconcile_decision") as decision, \
