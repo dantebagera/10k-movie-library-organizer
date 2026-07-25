@@ -3,10 +3,24 @@ import unittest
 from pathlib import Path
 
 import app
-from tools.catalog_parity_audit import audit_catalog
+from tools.catalog_parity_audit import _normalized_shadow_value, audit_catalog
 
 
 class CatalogParityAuditTest(unittest.TestCase):
+    def test_local_portrait_without_remote_provenance_normalizes_to_empty(self):
+        people = _normalized_shadow_value("directors", [{
+            "id": "1",
+            "name": "Director",
+            "profile_url": "/api/assets/checksum",
+            "remote_profile_url": None,
+        }])
+
+        self.assertEqual(people, [{
+            "id": "1",
+            "name": "Director",
+            "profile_url": "",
+        }])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.original_user_data_dir = app._user_data_dir

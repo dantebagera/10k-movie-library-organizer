@@ -119,14 +119,38 @@ class CatalogMigrationBackupTest(unittest.TestCase):
             try:
                 repository.activate_from_json()
                 repository.upsert_record("app_metadata/files.json", "three", {"path": "E:/Movies/Three.mkv"})
+                repository.replace_document("app_metadata/poster_overrides.json", {
+                    "overrides": [{
+                        "id": "sql-poster",
+                        "identity": {"tmdb_id": "1"},
+                        "identity_keys": ["tmdb:1"],
+                        "poster_url": "/api/library/posters/image/sql-poster.jpg",
+                    }],
+                })
+                repository.replace_document("app_metadata/metadata_overrides.json", {
+                    "overrides": [{
+                        "id": "sql-metadata",
+                        "identity": {"tmdb_id": "1"},
+                        "identity_keys": ["tmdb:1"],
+                        "title": "SQL title",
+                    }],
+                })
                 archive, manifest = create_backup(project, Path(root) / "backups")
                 shadow_path, report = build_shadow_catalog(archive, Path(root) / "shadow.sqlite")
                 with zipfile.ZipFile(archive) as contents:
                     rollback_files = json.loads(contents.read("user-data/app_metadata/files.json"))
+                    rollback_posters = json.loads(
+                        contents.read("user-data/app_metadata/poster_overrides.json")
+                    )
+                    rollback_metadata = json.loads(
+                        contents.read("user-data/app_metadata/metadata_overrides.json")
+                    )
             finally:
                 repository.close(flush=False)
             self.assertEqual(manifest["semantic_counts"]["file_records"], 3)
             self.assertIn("three", rollback_files["files"])
+            self.assertEqual(rollback_posters["overrides"][0]["id"], "sql-poster")
+            self.assertEqual(rollback_metadata["overrides"][0]["id"], "sql-metadata")
             self.assertTrue(shadow_path.is_file())
             self.assertTrue(report["passed"])
 

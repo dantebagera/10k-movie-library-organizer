@@ -133,7 +133,11 @@ def _canonical_value(field, value):
             {
                 'id': str(person.get('id', '') or '').strip(),
                 'name': str(person.get('name', '') or '').strip(),
-                'profile_url': str(person.get('profile_url', '') or '').strip(),
+                'profile_url': str((
+                    person.get('remote_profile_url')
+                    if str(person.get('profile_url', '') or '').startswith('/api/assets/')
+                    else person.get('profile_url', '')
+                ) or '').strip(),
                 **({'character': str(person.get('character', '') or '').strip()} if field == 'cast' else {}),
                 **({'job': str(person.get('job', '') or '').strip()} if field == 'writers' else {}),
             }
@@ -144,7 +148,13 @@ def _canonical_value(field, value):
 
 
 def _canonical_projection(canonical):
-    return {field: _canonical_value(field, canonical.get(field)) for field in CANONICAL_FIELDS}
+    projection = {}
+    for field in CANONICAL_FIELDS:
+        value = canonical.get(field)
+        if field == 'poster_url' and str(value or '').startswith('/api/assets/'):
+            value = canonical.get('remote_poster_url')
+        projection[field] = _canonical_value(field, value)
+    return projection
 
 
 def _add(violations, name, row, limit):
@@ -202,6 +212,7 @@ def compare_json_shadow(user_data_dir, max_errors=100, cutover_archive=None):
     """Compare literal legacy JSON canonical behavior with the active SQL catalog."""
     user_data_dir = Path(user_data_dir)
     store = app.AppMetadataStore(user_data_dir)
+    current_snapshot = store.snapshot()
     legacy = _legacy_snapshot(user_data_dir)
     cutover_archive = Path(cutover_archive).resolve() if cutover_archive else _configured_cutover_archive(user_data_dir)
     cutover = None
@@ -269,7 +280,12 @@ def compare_json_shadow(user_data_dir, max_errors=100, cutover_archive=None):
                 _add(violations, 'legacy_only', {'path': path, 'message': 'Legacy JSON file record is missing from SQL'}, max_errors)
                 continue
             legacy_canonical = _legacy_canonical(record, key, legacy, store)
-            sql_canonical = relational_by_key.get(key) or {}
+            sql_canonical = relational_by_key.get(key) or (
+                app._catalog_library_item(candidate, store, current_snapshot).get(
+                    'canonical_metadata'
+                )
+                or {}
+            )
             left = _canonical_projection(legacy_canonical)
             right = _canonical_projection(sql_canonical)
             differences = {

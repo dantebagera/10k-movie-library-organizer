@@ -28,11 +28,11 @@ def _normalized_shadow_value(field, value):
             {
                 "id": str(person.get("id", "") or "").strip(),
                 "name": str(person.get("name", "") or "").strip(),
-                "profile_url": str(
+                "profile_url": str((
                     person.get("remote_profile_url")
                     if str(person.get("profile_url", "") or "").startswith("/api/assets/")
                     else person.get("profile_url", "")
-                ).strip(),
+                ) or "").strip(),
                 **({"character": str(person.get("character", "") or "").strip()} if field == "cast" else {}),
                 **({"job": str(person.get("job", "") or "").strip()} if field == "writers" else {}),
             }

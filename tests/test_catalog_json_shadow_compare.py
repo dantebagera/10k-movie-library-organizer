@@ -24,6 +24,41 @@ class CatalogJsonShadowCompareTest(unittest.TestCase):
 
         self.assertEqual(left, right)
 
+    def test_shadow_projection_compares_local_assets_through_remote_provenance(self):
+        local = _canonical_projection({
+            'poster_url': '/api/assets/poster-checksum',
+            'remote_poster_url': 'https://image.example/poster.jpg',
+            'cast': [{
+                'id': '1',
+                'name': 'Actor',
+                'character': 'Lead',
+                'profile_url': '/api/assets/portrait-checksum',
+                'remote_profile_url': 'https://image.example/portrait.jpg',
+            }],
+            'directors': [{
+                'id': '2',
+                'name': 'Director',
+                'profile_url': '/api/assets/missing-remote',
+                'remote_profile_url': None,
+            }],
+        })
+        remote = _canonical_projection({
+            'poster_url': 'https://image.example/poster.jpg',
+            'cast': [{
+                'id': '1',
+                'name': 'Actor',
+                'character': 'Lead',
+                'profile_url': 'https://image.example/portrait.jpg',
+            }],
+            'directors': [{
+                'id': '2',
+                'name': 'Director',
+                'profile_url': '',
+            }],
+        })
+
+        self.assertEqual(local, remote)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.original_user_data_dir = app._user_data_dir
@@ -117,6 +152,21 @@ class CatalogJsonShadowCompareTest(unittest.TestCase):
 
         self.assertFalse(report['passed'])
         self.assertEqual(len(report['violations']['canonical']), 1)
+
+    def test_unmatched_record_uses_the_canonical_non_relational_projection(self):
+        unmatched = 'E:/Movies/Unmatched Shadow.mkv'
+        self.store.update_file_record(unmatched, {
+            'filename': 'Unmatched Shadow.mkv',
+            'identity_status': 'unmatched',
+            'metadata_status': 'unmatched',
+            'metadata_accepted': False,
+        })
+        self._write_literal_json_snapshot()
+
+        report = compare_json_shadow(self.tmp.name)
+
+        self.assertTrue(report['passed'])
+        self.assertEqual(report['checked_records'], 2)
 
     def test_sql_record_created_after_the_frozen_json_snapshot_is_reported_but_not_a_parity_failure(self):
         new_path = 'E:/Movies/Added After Snapshot.2025.mkv'

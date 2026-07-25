@@ -83,3 +83,23 @@ The staged performance/artwork implementation completed on 2026-07-21 without ch
 | Rollback and single authority | JSON remains export/shadow only. Backup v3 restored schema 7, all SQL/user state, and 19,169 unique registered asset files with 0 missing or unexpected checksums. | Passed |
 
 The schema-7 acceptance measurements are recorded in `docs/sql-investigation/catalog-read-performance-final-2026-07-20.json`, `docs/sql-investigation/catalog-artwork-backfill-2026-07-20.json`, and `docs/sql-investigation/catalog-artwork-acceptance-2026-07-20.json`. The stage-by-stage gate record is `docs/sql-investigation/catalog-read-performance-stage-report.md`.
+
+## Writer and keyword search acceptance addendum
+
+The schema-8 writer and keyword implementation was exercised on 2026-07-25 against a SQLite-backup clone of the Gate 0 rehearsal catalogue. The live schema-7 catalogue was not migrated.
+
+| Acceptance area | Final evidence | Result |
+| --- | --- | --- |
+| Existing cast and directors | All 48,469 pre-existing cast/director rows retained their order and logical digest `8acfc9c7b196758c7d314b9a0ce8a7e9688052c0703724fac5cc78bb98a2412b`. | Passed |
+| Provider evidence | All 7,440 `source_json` rows retained digest `091101b63f118e112bc09bd239ef46f9fba1ccfcb4069ebd7487a855798e6180`. | Passed |
+| Other SQL state | All 25 non-migration tables retained aggregate logical digest `cb330d2102680864d089088702dd6674b6f4da79d1bde5f6cecd2d396095979c`; mismatch list was empty. | Passed |
+| Writer projection | 7,527 ordered writer credits were projected into the existing people/movie-credit owner; 3,173 people were inserted and 4,354 reused, with 0 rejected or deduplicated credits. | Passed |
+| Keyword projection | 7,925 normalized keywords and 33,909 ordered relationships were projected, with 0 rejected or deduplicated entries. | Passed |
+| Library authority | Writer and keyword queries used indexed relational plans; the restored-clone audit checked 3,730 files and 3,729 accepted movies with 0 provider calls or violations. | Passed |
+| Discover authority | People/writer discovery stays on TMDB person credits; keyword discovery resolves a TMDB keyword ID and passes it through `with_keywords`; ownership remains on `/api/library/check`. | Passed |
+| Expanded owned details | The desktop clone rendered stored writers and keywords through `/api/library/details` with a 200 response and no provider call. | Passed |
+| Assets and overrides | SQL-generated rollback documents now include metadata and poster overrides. A relocated browser clone served all 21 observed `/api/assets` requests with 200 responses, with no 409 or 500 response. | Passed |
+| SQLite and restart | Schema version 8, integrity `ok`, 0 foreign-key violations, no partial migration objects, and a second open performed no migration rewrite. | Passed |
+| Live rollout | The production catalogue remains schema 7. Migration requires Dante's separate controlled-live-rollout approval. | Pending approval |
+
+The final ownership map is `docs/plans/writer-keyword-search-authoritative-paths.md`. The complete command, path, count, digest, parity, runtime, and test record is `docs/plans/writer-keyword-search-stage-e-evidence-2026-07-25.md`.

@@ -188,11 +188,17 @@ class CatalogStore:
         foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
         if integrity != "ok" or foreign_keys:
             raise CatalogError("Version 7 catalogue failed integrity validation")
-        expected_columns = [
-            "snapshot_key", "credit_type", "position", "person_key",
-            "credited_name", "character", "profile_url",
-        ]
-        if self._table_columns(connection, "movie_credits") != expected_columns:
+        approved_column_orders = {
+            (
+                "snapshot_key", "credit_type", "position", "person_key",
+                "credited_name", "character", "profile_url",
+            ),
+            (
+                "snapshot_key", "credit_type", "position", "person_key",
+                "character", "profile_url", "credited_name",
+            ),
+        }
+        if tuple(self._table_columns(connection, "movie_credits")) not in approved_column_orders:
             raise CatalogError("Version 7 movie_credits schema does not match the approved source")
         partial_objects = {
             row[0]

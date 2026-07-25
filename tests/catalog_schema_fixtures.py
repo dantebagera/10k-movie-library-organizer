@@ -44,6 +44,42 @@ def downgrade_catalog_to_v7(store):
         )
 
 
+def use_historical_v7_credit_column_order(store):
+    """Reproduce the physical column order found in upgraded schema-7 catalogues."""
+    with store.transaction() as connection:
+        connection.execute("""
+            CREATE TABLE movie_credits_v7_historical (
+                snapshot_key TEXT NOT NULL,
+                credit_type TEXT NOT NULL CHECK(credit_type IN ('cast', 'director')),
+                position INTEGER NOT NULL,
+                person_key TEXT NOT NULL,
+                character TEXT NOT NULL DEFAULT '',
+                profile_url TEXT NOT NULL DEFAULT '',
+                credited_name TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (snapshot_key, credit_type, position),
+                FOREIGN KEY (snapshot_key) REFERENCES provider_movie_snapshots(snapshot_key) ON DELETE CASCADE,
+                FOREIGN KEY (person_key) REFERENCES people(person_key) ON DELETE CASCADE
+            )
+        """)
+        connection.execute("""
+            INSERT INTO movie_credits_v7_historical(
+                snapshot_key, credit_type, position, person_key,
+                character, profile_url, credited_name
+            )
+            SELECT snapshot_key, credit_type, position, person_key,
+                   character, profile_url, credited_name
+            FROM movie_credits
+            ORDER BY snapshot_key, credit_type, position
+        """)
+        connection.execute("DROP TABLE movie_credits")
+        connection.execute(
+            "ALTER TABLE movie_credits_v7_historical RENAME TO movie_credits"
+        )
+        connection.execute(
+            "CREATE INDEX idx_movie_credits_person ON movie_credits(person_key)"
+        )
+
+
 def downgrade_catalog_to_v6_asset_fixture(store):
     """Build the known version 6 shape supported by the existing asset migration."""
     downgrade_catalog_to_v7(store)

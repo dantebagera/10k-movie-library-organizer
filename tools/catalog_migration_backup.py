@@ -27,6 +27,8 @@ CATALOG_ROLLBACK_DOCUMENTS = {
     "app_metadata/plex_metadata.json": {"files": {}},
     "app_metadata/manual_matches.json": {"matches": {}},
     "app_metadata/identity_audit_fingerprints.json": {"files": {}},
+    "app_metadata/poster_overrides.json": {"overrides": []},
+    "app_metadata/metadata_overrides.json": {"overrides": []},
     "user_lists.json": {"lists": []},
     "user_collections.json": {"overrides": {}},
     "followed_releases.json": {"movies": []},

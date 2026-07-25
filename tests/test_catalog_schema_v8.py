@@ -7,7 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from services.catalog_store import CATALOG_SCHEMA_VERSION, CatalogError, CatalogStore
-from tests.catalog_schema_fixtures import downgrade_catalog_to_v7
+from tests.catalog_schema_fixtures import (
+    downgrade_catalog_to_v7,
+    use_historical_v7_credit_column_order,
+)
 
 
 def _digest_rows(connection, table, columns=None, where="", parameters=()):
@@ -252,6 +255,66 @@ class CatalogSchemaV8Test(unittest.TestCase):
         self.assertEqual(report["keyword_relationships_inserted"], 4)
         self.assertEqual(report["keyword_entries_deduplicated"], 1)
         self.assertEqual(report["keyword_entries_rejected"], 1)
+        self.assertEqual(integrity, "ok")
+        self.assertEqual(foreign_keys, [])
+
+    def test_historical_v7_credit_column_order_migrates_without_data_change(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = self._v7_store(root)
+            use_historical_v7_credit_column_order(store)
+            connection = store.connect()
+            try:
+                historical_columns = [
+                    row[1] for row in connection.execute(
+                        "PRAGMA table_info(movie_credits)"
+                    )
+                ]
+                before_credits = _digest_rows(
+                    connection,
+                    "movie_credits",
+                    [
+                        "snapshot_key", "credit_type", "position", "person_key",
+                        "credited_name", "character", "profile_url",
+                    ],
+                )
+            finally:
+                connection.close()
+
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=AssertionError("schema migration must remain offline"),
+            ):
+                store.initialize()
+
+            connection = store.connect()
+            try:
+                version = int(connection.execute(
+                    "SELECT value FROM catalog_meta WHERE key='schema_version'"
+                ).fetchone()[0])
+                after_credits = _digest_rows(
+                    connection,
+                    "movie_credits",
+                    [
+                        "snapshot_key", "credit_type", "position", "person_key",
+                        "credited_name", "character", "profile_url",
+                    ],
+                    "credit_type IN ('cast', 'director')",
+                )
+                integrity = connection.execute(
+                    "PRAGMA integrity_check"
+                ).fetchone()[0]
+                foreign_keys = connection.execute(
+                    "PRAGMA foreign_key_check"
+                ).fetchall()
+            finally:
+                connection.close()
+
+        self.assertEqual(historical_columns, [
+            "snapshot_key", "credit_type", "position", "person_key",
+            "character", "profile_url", "credited_name",
+        ])
+        self.assertEqual(version, 8)
+        self.assertEqual(after_credits, before_credits)
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])
 
