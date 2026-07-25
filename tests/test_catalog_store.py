@@ -113,6 +113,11 @@ class CatalogStoreTest(unittest.TestCase):
                 "cast": [{"id": "shared-actor" if index % 5 == 0 else f"actor-{index}",
                           "name": "Shared Actor" if index % 5 == 0 else f"Actor {index}"}],
                 "directors": [{"id": f"director-{index}", "name": f"Director {index}"}],
+                "writers": [{
+                    "id": f"writer-{index}", "name": f"Writer {index}", "job": "Screenplay",
+                }],
+                "keywords": [f"Keyword {index}", "shared keyword"],
+                "certification": "",
                 "collection": {"id": "collection-1", "name": "Golden Collection"} if index < 7 else {},
                 "updated_at": index + 1,
             }
@@ -366,6 +371,13 @@ class CatalogStoreTest(unittest.TestCase):
         after_cards = [row["relational_canonical"] for row in after_page["candidates"]]
         self.assertEqual(after_cards, before_cards)
         self.assertEqual(after_details["relational_canonical"], before_details["relational_canonical"])
+        self.assertEqual(after_details["relational_canonical"]["writers"], [{
+            "id": "writer-0", "name": "Writer 0", "profile_url": "", "job": "Screenplay",
+        }])
+        self.assertEqual(
+            after_details["relational_canonical"]["keywords"],
+            ["Keyword 0", "shared keyword"],
+        )
 
     def test_import_is_idempotent(self):
         with tempfile.TemporaryDirectory() as root:

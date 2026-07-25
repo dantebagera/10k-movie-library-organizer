@@ -39,6 +39,9 @@ class CatalogJsonShadowCompareTest(unittest.TestCase):
             'year': '2024',
             'plot': 'Persisted plot.',
             'genres': ['Drama'],
+            'writers': [{'id': '19', 'name': 'Shadow Writer', 'job': 'Writer'}],
+            'keywords': ['shadow keyword'],
+            'certification': '',
         })
         self.store.update_file_record(self.path, {'filename': 'Legacy Shadow.2024.mkv', 'resolution': '1080p'})
         self.store.save_plex_metadata(self.path, {'plex_title': 'Legacy Shadow', 'plex_year': '2024', 'plex_summary': 'Plex summary.'})
@@ -99,6 +102,21 @@ class CatalogJsonShadowCompareTest(unittest.TestCase):
         self.assertEqual(len(report['violations']['canonical']), 1)
         self.assertEqual(len(report['violations']['document_changed']), 1)
         self.assertEqual(sql_record['identity_title'], 'Legacy Shadow')
+
+    def test_relational_writer_keyword_drift_is_a_parity_failure(self):
+        connection = self.store.catalog.store.connect()
+        try:
+            connection.execute(
+                "DELETE FROM movie_keywords WHERE snapshot_key='tmdb:42'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        report = compare_json_shadow(self.tmp.name)
+
+        self.assertFalse(report['passed'])
+        self.assertEqual(len(report['violations']['canonical']), 1)
 
     def test_sql_record_created_after_the_frozen_json_snapshot_is_reported_but_not_a_parity_failure(self):
         new_path = 'E:/Movies/Added After Snapshot.2025.mkv'

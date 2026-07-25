@@ -1,11 +1,14 @@
 import hashlib
 import json
 import re
+import sqlite3
+import unicodedata
 
 from services.movie_identity import normalize_movie_title, ownership_keys
 
 
 CANONICAL_CONTRACT_VERSION = 4
+WRITER_JOBS = frozenset({"Writer", "Screenplay", "Story", "Novel"})
 CANONICAL_CARD_CONTRACT = "canonical_movie_card"
 CANONICAL_DETAILS_CONTRACT = "canonical_movie_details"
 CANONICAL_CARD_FIELDS = (
@@ -120,6 +123,17 @@ def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _execute_schema(connection, script):
+    statement = ""
+    for line in str(script or "").splitlines():
+        statement += line + "\n"
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("Incomplete canonical schema statement")
+
+
 def _identity_key(record):
     record = record or {}
     if _text(record.get("tmdb_id")):
@@ -149,6 +163,14 @@ def _provider_person_key(provider, snapshot_key, credit_type, position, person):
         return f"plex:{person_id}"
     seed = f"{snapshot_key}|{credit_type}|{position}|{_text((person or {}).get('name')).lower()}"
     return f"{provider}-credit:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
+
+
+def _normalized_keyword_name(value):
+    return " ".join(unicodedata.normalize("NFKC", _text(value)).casefold().split())
+
+
+def _keyword_key(normalized_name):
+    return f"keyword:{hashlib.sha256(normalized_name.encode('utf-8')).hexdigest()}"
 
 
 def _provider_details_state(provider, record):
@@ -197,7 +219,7 @@ class CanonicalCatalog:
     """Relational movie-domain projection built from persisted catalog sources."""
 
     def initialize(self, connection):
-        connection.executescript("""
+        _execute_schema(connection, """
             CREATE TABLE IF NOT EXISTS canonical_movies (
                 movie_key TEXT PRIMARY KEY,
                 title TEXT NOT NULL DEFAULT '',
@@ -257,19 +279,6 @@ class CanonicalCatalog:
                 name TEXT NOT NULL,
                 profile_url TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS movie_credits (
-                snapshot_key TEXT NOT NULL,
-                credit_type TEXT NOT NULL CHECK(credit_type IN ('cast', 'director')),
-                position INTEGER NOT NULL,
-                person_key TEXT NOT NULL,
-                credited_name TEXT NOT NULL DEFAULT '',
-                character TEXT NOT NULL DEFAULT '',
-                profile_url TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (snapshot_key, credit_type, position),
-                FOREIGN KEY (snapshot_key) REFERENCES provider_movie_snapshots(snapshot_key) ON DELETE CASCADE,
-                FOREIGN KEY (person_key) REFERENCES people(person_key) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS genres (
@@ -348,9 +357,79 @@ class CanonicalCatalog:
             CREATE INDEX IF NOT EXISTS idx_provider_snapshots_path ON provider_movie_snapshots(path_key);
             CREATE INDEX IF NOT EXISTS idx_people_tmdb ON people(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_people_name ON people(name COLLATE NOCASE);
-            CREATE INDEX IF NOT EXISTS idx_movie_credits_person ON movie_credits(person_key);
             CREATE INDEX IF NOT EXISTS idx_override_identity ON movie_override_identity_keys(identity_key);
         """)
+        self.create_v8_search_schema(connection)
+
+    @staticmethod
+    def create_movie_credits_v8(connection, table="movie_credits", *, if_not_exists=True):
+        if table not in {"movie_credits", "movie_credits_v8_new"}:
+            raise ValueError("Unsupported movie_credits table name")
+        existence = "IF NOT EXISTS " if if_not_exists else ""
+        connection.execute(f"""
+            CREATE TABLE {existence}{table} (
+                snapshot_key TEXT NOT NULL,
+                credit_type TEXT NOT NULL CHECK(credit_type IN ('cast', 'director', 'writer')),
+                position INTEGER NOT NULL,
+                person_key TEXT NOT NULL,
+                credited_name TEXT NOT NULL DEFAULT '',
+                character TEXT NOT NULL DEFAULT '',
+                profile_url TEXT NOT NULL DEFAULT '',
+                job TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (snapshot_key, credit_type, position),
+                FOREIGN KEY (snapshot_key) REFERENCES provider_movie_snapshots(snapshot_key) ON DELETE CASCADE,
+                FOREIGN KEY (person_key) REFERENCES people(person_key) ON DELETE CASCADE
+            )
+        """)
+
+    @staticmethod
+    def create_keyword_schema(connection, *, if_not_exists=True):
+        existence = "IF NOT EXISTS " if if_not_exists else ""
+        connection.execute(f"""
+            CREATE TABLE {existence}keywords (
+                keyword_key TEXT PRIMARY KEY,
+                tmdb_id TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                normalized_name TEXT NOT NULL UNIQUE
+            )
+        """)
+        connection.execute(f"""
+            CREATE TABLE {existence}movie_keywords (
+                snapshot_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                keyword_key TEXT NOT NULL,
+                PRIMARY KEY (snapshot_key, position),
+                UNIQUE (snapshot_key, keyword_key),
+                FOREIGN KEY (snapshot_key) REFERENCES provider_movie_snapshots(snapshot_key) ON DELETE CASCADE,
+                FOREIGN KEY (keyword_key) REFERENCES keywords(keyword_key) ON DELETE CASCADE
+            )
+        """)
+
+    @staticmethod
+    def create_search_indexes(connection, *, if_not_exists=True):
+        existence = "IF NOT EXISTS " if if_not_exists else ""
+        connection.execute(
+            f"CREATE INDEX {existence}idx_movie_credits_person ON movie_credits(person_key)"
+        )
+        connection.execute(f"""
+            CREATE UNIQUE INDEX {existence}idx_keywords_tmdb
+            ON keywords(tmdb_id) WHERE tmdb_id <> ''
+        """)
+        connection.execute(
+            f"CREATE INDEX {existence}idx_keywords_normalized_name ON keywords(normalized_name)"
+        )
+        connection.execute(
+            f"CREATE INDEX {existence}idx_movie_keywords_keyword "
+            "ON movie_keywords(keyword_key, snapshot_key)"
+        )
+
+    def create_v8_search_schema(self, connection):
+        self.create_movie_credits_v8(connection)
+        self.create_keyword_schema(connection)
+        self.create_search_indexes(connection)
+
+    @staticmethod
+    def upgrade_v6_additive_columns(connection):
         additive_columns = {
             "movie_credits": (
                 ("credited_name", "TEXT NOT NULL DEFAULT ''"),
@@ -377,6 +456,8 @@ class CanonicalCatalog:
             "movie_overrides",
             "movie_collections",
             "collections",
+            "movie_keywords",
+            "keywords",
             "movie_genres",
             "genres",
             "movie_credits",
@@ -508,6 +589,12 @@ class CanonicalCatalog:
                 SELECT 1 FROM movie_collections mc WHERE mc.collection_key = collections.collection_key
             )
         """)
+        connection.execute("""
+            DELETE FROM keywords
+            WHERE NOT EXISTS(
+                SELECT 1 FROM movie_keywords mk WHERE mk.keyword_key = keywords.keyword_key
+            )
+        """)
 
     def _sync_row(self, connection, row):
         row = dict(row)
@@ -597,6 +684,8 @@ class CanonicalCatalog:
             }
             cast = record.get("cast") or []
             directors = record.get("directors") or []
+            writers = record.get("writers") or []
+            keywords = record.get("keywords") or []
             genres = record.get("genres") or []
             collection = record.get("collection") or {}
             snapshot_path = ""
@@ -615,6 +704,8 @@ class CanonicalCatalog:
             }
             cast = record.get("plex_cast") or []
             directors = record.get("plex_directors") or []
+            writers = []
+            keywords = []
             genres = record.get("plex_genres") or []
             collection = {}
             snapshot_path = path_key
@@ -637,12 +728,21 @@ class CanonicalCatalog:
             _number(record.get("updated_at")), _json(record),
         ))
         connection.execute("DELETE FROM movie_credits WHERE snapshot_key = ?", (snapshot_key,))
-        for credit_type, people in (("director", directors), ("cast", cast)):
+        for credit_type, people in (("director", directors), ("cast", cast), ("writer", writers)):
+            seen_writer_credits = set()
             for position, person in enumerate(people if isinstance(people, list) else []):
                 if not isinstance(person, dict) or not _text(person.get("name")):
                     continue
-                person_key = _provider_person_key(provider, snapshot_key, credit_type, position, person)
+                job = _text(person.get("job")) if credit_type == "writer" else ""
+                if credit_type == "writer" and job not in WRITER_JOBS:
+                    continue
                 person_id = _text(person.get("id"))
+                writer_identity = person_id or _text(person.get("name")).casefold()
+                if credit_type == "writer" and (writer_identity, job) in seen_writer_credits:
+                    continue
+                if credit_type == "writer":
+                    seen_writer_credits.add((writer_identity, job))
+                person_key = _provider_person_key(provider, snapshot_key, credit_type, position, person)
                 connection.execute("""
                     INSERT INTO people(person_key, tmdb_id, provider, provider_id, name, profile_url, updated_at)
                     VALUES(?,?,?,?,?,?,?)
@@ -660,13 +760,15 @@ class CanonicalCatalog:
                     _number(record.get("updated_at")),
                 ))
                 connection.execute(
-                    "INSERT INTO movie_credits(snapshot_key, credit_type, position, person_key, credited_name, character, profile_url) VALUES(?,?,?,?,?,?,?)",
+                    "INSERT INTO movie_credits(snapshot_key, credit_type, position, person_key, credited_name, character, profile_url, job) VALUES(?,?,?,?,?,?,?,?)",
                     (
                         snapshot_key, credit_type, position, person_key,
                         _text(person.get("name")), _text(person.get("character")),
-                        _text(person.get("profile_url")),
+                        _text(person.get("profile_url")), job,
                     ),
                 )
+
+        self._replace_snapshot_keywords(connection, snapshot_key, keywords)
 
         connection.execute("DELETE FROM movie_genres WHERE snapshot_key = ?", (snapshot_key,))
         for position, genre in enumerate(genres if isinstance(genres, list) else []):
@@ -706,6 +808,182 @@ class CanonicalCatalog:
                 snapshot_key, collection_key, _text(collection.get("name")),
                 _text(collection.get("poster_url")), _text(collection.get("backdrop_url")),
             ))
+
+    @staticmethod
+    def _replace_snapshot_keywords(connection, snapshot_key, values, report=None):
+        report = report if report is not None else {}
+        connection.execute("DELETE FROM movie_keywords WHERE snapshot_key = ?", (snapshot_key,))
+        if not isinstance(values, list):
+            report["keyword_arrays_malformed"] = report.get("keyword_arrays_malformed", 0) + 1
+            return
+        if not values:
+            report["keyword_snapshots_empty"] = report.get("keyword_snapshots_empty", 0) + 1
+            return
+        seen = set()
+        for position, value in enumerate(values):
+            report["keyword_entries_processed"] = report.get("keyword_entries_processed", 0) + 1
+            if isinstance(value, dict):
+                name = _text(value.get("name"))
+                tmdb_id = _text(value.get("id"))
+            else:
+                name = _text(value)
+                tmdb_id = ""
+            normalized_name = _normalized_keyword_name(name)
+            if not name or not normalized_name:
+                report["keyword_entries_rejected"] = report.get("keyword_entries_rejected", 0) + 1
+                continue
+            keyword_key = _keyword_key(normalized_name)
+            if keyword_key in seen:
+                report["keyword_entries_deduplicated"] = report.get("keyword_entries_deduplicated", 0) + 1
+                continue
+            seen.add(keyword_key)
+            existing = connection.execute(
+                "SELECT tmdb_id, normalized_name FROM keywords WHERE keyword_key = ?",
+                (keyword_key,),
+            ).fetchone()
+            if existing and existing["normalized_name"] != normalized_name:
+                report["keyword_entries_rejected"] = report.get("keyword_entries_rejected", 0) + 1
+                continue
+            if existing and tmdb_id and existing["tmdb_id"] not in {"", tmdb_id}:
+                report["keyword_entries_rejected"] = report.get("keyword_entries_rejected", 0) + 1
+                continue
+            if tmdb_id:
+                id_owner = connection.execute(
+                    "SELECT keyword_key FROM keywords WHERE tmdb_id = ?",
+                    (tmdb_id,),
+                ).fetchone()
+                if id_owner and id_owner["keyword_key"] != keyword_key:
+                    report["keyword_entries_rejected"] = report.get("keyword_entries_rejected", 0) + 1
+                    continue
+            connection.execute("""
+                INSERT INTO keywords(keyword_key, tmdb_id, name, normalized_name)
+                VALUES(?,?,?,?)
+                ON CONFLICT(keyword_key) DO UPDATE SET
+                    tmdb_id=CASE
+                        WHEN keywords.tmdb_id='' AND excluded.tmdb_id<>'' THEN excluded.tmdb_id
+                        ELSE keywords.tmdb_id
+                    END
+            """, (keyword_key, tmdb_id, name, normalized_name))
+            connection.execute(
+                "INSERT INTO movie_keywords(snapshot_key, position, keyword_key) VALUES(?,?,?)",
+                (snapshot_key, position, keyword_key),
+            )
+            report["keyword_relationships_inserted"] = report.get("keyword_relationships_inserted", 0) + 1
+
+    def backfill_search_relations(self, connection, credit_table, checkpoint=None):
+        if credit_table not in {"movie_credits", "movie_credits_v8_new"}:
+            raise ValueError("Unsupported movie credit migration target")
+        report = {
+            "snapshots_processed": 0,
+            "snapshots_invalid_json": 0,
+            "writer_snapshots_missing": 0,
+            "writer_snapshots_empty": 0,
+            "writer_arrays_malformed": 0,
+            "writer_entries_processed": 0,
+            "writer_entries_inserted": 0,
+            "writer_entries_deduplicated": 0,
+            "writer_entries_rejected": 0,
+            "writer_people_inserted": 0,
+            "writer_people_reused": 0,
+            "keyword_snapshots_missing": 0,
+            "keyword_snapshots_empty": 0,
+            "keyword_arrays_malformed": 0,
+            "keyword_entries_processed": 0,
+            "keyword_relationships_inserted": 0,
+            "keyword_entries_deduplicated": 0,
+            "keyword_entries_rejected": 0,
+        }
+        writer_checkpoint_done = False
+        keyword_checkpoint_done = False
+        rows = connection.execute("""
+            SELECT snapshot_key, provider, updated_at, source_json
+            FROM provider_movie_snapshots
+            ORDER BY snapshot_key
+        """).fetchall()
+        for row in rows:
+            report["snapshots_processed"] += 1
+            try:
+                record = json.loads(row["source_json"])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                report["snapshots_invalid_json"] += 1
+                continue
+            if not isinstance(record, dict):
+                report["snapshots_invalid_json"] += 1
+                continue
+
+            if "writers" not in record:
+                report["writer_snapshots_missing"] += 1
+                writers = []
+            else:
+                writers = record.get("writers")
+                if not isinstance(writers, list):
+                    report["writer_arrays_malformed"] += 1
+                    writers = []
+                elif not writers:
+                    report["writer_snapshots_empty"] += 1
+            seen_writers = set()
+            for position, person in enumerate(writers):
+                report["writer_entries_processed"] += 1
+                if not isinstance(person, dict):
+                    report["writer_entries_rejected"] += 1
+                    continue
+                name = _text(person.get("name"))
+                job = _text(person.get("job"))
+                if not name or job not in WRITER_JOBS:
+                    report["writer_entries_rejected"] += 1
+                    continue
+                person_key = _provider_person_key(
+                    row["provider"], row["snapshot_key"], "writer", position, person
+                )
+                person_id = _text(person.get("id"))
+                duplicate_key = (person_id or name.casefold(), job)
+                if duplicate_key in seen_writers:
+                    report["writer_entries_deduplicated"] += 1
+                    continue
+                seen_writers.add(duplicate_key)
+                exists = connection.execute(
+                    "SELECT 1 FROM people WHERE person_key = ?",
+                    (person_key,),
+                ).fetchone()
+                connection.execute("""
+                    INSERT OR IGNORE INTO people(
+                        person_key, tmdb_id, provider, provider_id, name, profile_url, updated_at
+                    ) VALUES(?,?,?,?,?,?,?)
+                """, (
+                    person_key,
+                    person_id if row["provider"] == "tmdb" else "",
+                    row["provider"],
+                    person_id,
+                    name,
+                    _text(person.get("profile_url")),
+                    _number(row["updated_at"]),
+                ))
+                report["writer_people_reused" if exists else "writer_people_inserted"] += 1
+                connection.execute(f"""
+                    INSERT INTO {credit_table}(
+                        snapshot_key, credit_type, position, person_key,
+                        credited_name, character, profile_url, job
+                    ) VALUES(?, 'writer', ?, ?, ?, '', ?, ?)
+                """, (
+                    row["snapshot_key"], position, person_key, name,
+                    _text(person.get("profile_url")), job,
+                ))
+                report["writer_entries_inserted"] += 1
+                if checkpoint and not writer_checkpoint_done:
+                    checkpoint("during_writer_backfill")
+                    writer_checkpoint_done = True
+
+            if "keywords" not in record:
+                report["keyword_snapshots_missing"] += 1
+                keywords = []
+            else:
+                keywords = record.get("keywords")
+            before = report["keyword_relationships_inserted"]
+            self._replace_snapshot_keywords(connection, row["snapshot_key"], keywords, report)
+            if checkpoint and not keyword_checkpoint_done and report["keyword_relationships_inserted"] > before:
+                checkpoint("during_keyword_backfill")
+                keyword_checkpoint_done = True
+        return report
 
     def _sync_identity_decision(self, connection, row, movie_key, file_record, manual_record):
         provider = _text(manual_record.get("provider") or row.get("display_provider"))
@@ -871,7 +1149,12 @@ class CanonicalCatalog:
             """, (_json(snapshot_keys),)).fetchall():
                 genres[row[0]].append(row[1])
 
-        credits = {(key, credit_type): [] for key in snapshot_keys for credit_type in ("cast", "director")}
+        credits = {
+            (key, credit_type): []
+            for key in snapshot_keys
+            for credit_type in ("cast", "director", "writer")
+        }
+        keywords = {key: [] for key in snapshot_keys}
         collections = {}
         if include_details and snapshot_keys:
             for row in connection.execute("""
@@ -880,7 +1163,7 @@ class CanonicalCatalog:
                        CASE WHEN mc.credited_name<>'' THEN mc.credited_name ELSE p.name END AS name,
                        CASE WHEN a.status='ready' AND a.checksum<>''
                             THEN '/api/assets/' || a.checksum ELSE mc.profile_url END AS profile_url,
-                       mc.character, mc.profile_url AS remote_profile_url
+                       mc.character, mc.profile_url AS remote_profile_url, mc.job
                 FROM movie_credits mc JOIN people p ON p.person_key=mc.person_key
                 LEFT JOIN person_assets pa ON pa.person_key=p.person_key
                     AND pa.asset_type='portrait' AND pa.selected=1
@@ -893,7 +1176,17 @@ class CanonicalCatalog:
                     person["remote_profile_url"] = _text(row[6])
                 if row[1] == "cast":
                     person["character"] = _text(row[5])
+                elif row[1] == "writer":
+                    person["job"] = _text(row[7])
                 credits[(row[0], row[1])].append(person)
+            for row in connection.execute("""
+                SELECT mk.snapshot_key, k.name
+                FROM movie_keywords mk
+                JOIN keywords k ON k.keyword_key = mk.keyword_key
+                WHERE mk.snapshot_key IN (SELECT value FROM json_each(?))
+                ORDER BY mk.snapshot_key, mk.position
+            """, (_json(snapshot_keys),)).fetchall():
+                keywords[row[0]].append(row[1])
             for row in connection.execute("""
                 SELECT mc.snapshot_key, c.provider_id, mc.name, mc.poster_url, mc.backdrop_url
                 FROM movie_collections mc JOIN collections c ON c.collection_key=mc.collection_key
@@ -973,9 +1266,9 @@ class CanonicalCatalog:
                 "collection": collections.get(snapshot_key, {}),
                 "cast": credits.get((snapshot_key, "cast"), []),
                 "directors": credits.get((snapshot_key, "director"), []),
-                "writers": source_details.get("writers", []) if isinstance(source_details.get("writers"), list) else [],
+                "writers": credits.get((snapshot_key, "writer"), []),
                 "certification": _text(source_details.get("certification")),
-                "keywords": source_details.get("keywords", []) if isinstance(source_details.get("keywords"), list) else [],
+                "keywords": keywords.get(snapshot_key, []),
             }
             if include_details:
                 plex_candidates = [
@@ -1055,7 +1348,7 @@ class CanonicalCatalog:
         for row in connection.execute("""
                 SELECT CASE WHEN p.tmdb_id<>'' THEN p.tmdb_id ELSE p.provider_id END,
                        CASE WHEN mc.credited_name<>'' THEN mc.credited_name ELSE p.name END,
-                       mc.profile_url, mc.character
+                       mc.profile_url, mc.character, mc.job
                 FROM movie_credits mc
                 JOIN people p ON p.person_key = mc.person_key
                 WHERE mc.snapshot_key = ? AND mc.credit_type = ?
@@ -1067,6 +1360,8 @@ class CanonicalCatalog:
             }
             if credit_type == "cast":
                 person["character"] = _text(row[3])
+            elif credit_type == "writer":
+                person["job"] = _text(row[4])
             result.append(person)
         return result
 
@@ -1129,6 +1424,11 @@ class CanonicalCatalog:
             "canonical_movies": int(connection.execute("SELECT COUNT(*) FROM canonical_movies").fetchone()[0]),
             "people": int(connection.execute("SELECT COUNT(*) FROM people").fetchone()[0]),
             "credits": int(connection.execute("SELECT COUNT(*) FROM movie_credits").fetchone()[0]),
+            "writer_credits": int(connection.execute(
+                "SELECT COUNT(*) FROM movie_credits WHERE credit_type='writer'"
+            ).fetchone()[0]),
+            "keywords": int(connection.execute("SELECT COUNT(*) FROM keywords").fetchone()[0]),
+            "movie_keywords": int(connection.execute("SELECT COUNT(*) FROM movie_keywords").fetchone()[0]),
             "incomplete_files": incomplete,
             "detail_providers": dict(sorted(provider_counts.items())),
             "violations": violations,

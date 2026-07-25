@@ -19,7 +19,7 @@ CANONICAL_FIELDS = (
     'accepted', 'status', 'identity_status', 'source', 'detail_provider',
     'title', 'year', 'tmdb_id', 'imdb_id', 'plex_guid', 'poster_url',
     'poster_override', 'plot', 'summary', 'genres', 'cast', 'directors',
-    'rating', 'tmdb_rating', 'collection',
+    'rating', 'tmdb_rating', 'collection', 'writers', 'keywords',
 )
 
 DOCUMENTS = {
@@ -128,13 +128,14 @@ def _normal(value):
 def _canonical_value(field, value):
     if value in (None, '', [], {}):
         return None
-    if field in {'cast', 'directors'}:
+    if field in {'cast', 'directors', 'writers'}:
         return [
             {
                 'id': str(person.get('id', '') or '').strip(),
                 'name': str(person.get('name', '') or '').strip(),
                 'profile_url': str(person.get('profile_url', '') or '').strip(),
                 **({'character': str(person.get('character', '') or '').strip()} if field == 'cast' else {}),
+                **({'job': str(person.get('job', '') or '').strip()} if field == 'writers' else {}),
             }
             for person in (value or [])
             if isinstance(person, dict)
@@ -208,11 +209,19 @@ def compare_json_shadow(user_data_dir, max_errors=100, cutover_archive=None):
     cutover_at = 0
     if cutover_archive:
         cutover, cutover_manifest, cutover_at = _cutover_snapshot(cutover_archive)
-    sql_snapshot = store.snapshot()
     sql_by_key = {
         str(candidate.get('path_key') or ''): candidate
         for candidate in store.catalog.store.audit_library_candidates()
     }
+    connection = store.catalog.store.connect()
+    try:
+        relational_by_key = store.catalog.store.canonical.project_paths(
+            connection,
+            list(sql_by_key),
+            include_details=True,
+        )
+    finally:
+        connection.close()
     legacy_by_key = {
         app._norm(str(record.get('path') or key)): dict(record or {})
         for key, record in legacy['files'].items()
@@ -260,7 +269,7 @@ def compare_json_shadow(user_data_dir, max_errors=100, cutover_archive=None):
                 _add(violations, 'legacy_only', {'path': path, 'message': 'Legacy JSON file record is missing from SQL'}, max_errors)
                 continue
             legacy_canonical = _legacy_canonical(record, key, legacy, store)
-            sql_canonical = app._catalog_library_item(candidate, store, sql_snapshot).get('canonical_metadata') or {}
+            sql_canonical = relational_by_key.get(key) or {}
             left = _canonical_projection(legacy_canonical)
             right = _canonical_projection(sql_canonical)
             differences = {

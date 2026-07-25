@@ -30,6 +30,9 @@ class CatalogParityAuditTest(unittest.TestCase):
             "year": "2024",
             "plot": "Stored detail.",
             "cast": [{"name": "Actor"}],
+            "writers": [{"id": "9", "name": "Writer", "job": "Screenplay"}],
+            "keywords": ["parity", "offline"],
+            "certification": "",
         })
         self.store.update_file_record(path, {"filename": "Parity Movie.2024.1080p.mkv", "resolution": "1080p"})
         self.store.save_plex_metadata(path, {"plex_title": "Parity Movie", "plex_year": "2024", "plex_summary": "Plex detail."})
@@ -102,6 +105,31 @@ class CatalogParityAuditTest(unittest.TestCase):
         try:
             connection.execute(
                 "UPDATE canonical_movies SET title = 'Relational projection changed' WHERE tmdb_id = '77'"
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        report = audit_catalog(self.tmp.name)
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(len(report["violations"]["relational_shadow"]), 1)
+
+    def test_audit_rejects_writer_or_keyword_relational_drift(self):
+        path = "E:/Movies/Search Relations.2024.mkv"
+        self.store.apply_tmdb_match(path, {
+            "tmdb_id": "88",
+            "title": "Search Relations",
+            "year": "2024",
+            "writers": [{"id": "18", "name": "Expected Writer", "job": "Story"}],
+            "keywords": ["expected keyword"],
+            "certification": "",
+        })
+        self.store.update_file_record(path, {"filename": "Search Relations.2024.mkv"})
+        connection = self.store.catalog.store.connect()
+        try:
+            connection.execute(
+                "DELETE FROM movie_credits WHERE snapshot_key='tmdb:88' AND credit_type='writer'"
             )
             connection.commit()
         finally:

@@ -120,7 +120,7 @@ class CanonicalCatalogTest(unittest.TestCase):
         self.store.import_documents(documents, {})
         return missing_path, duplicate_a, duplicate_b
 
-    def test_schema_v6_normalizes_movie_people_credits_genres_collections_and_overrides(self):
+    def test_schema_v8_normalizes_movie_people_credits_keywords_collections_and_overrides(self):
         _, duplicate_a, duplicate_b = self._import()
         connection = self.store.connect()
         try:
@@ -129,6 +129,7 @@ class CanonicalCatalogTest(unittest.TestCase):
             ).fetchone()[0])
             projection_a = self.store.canonical.project_path(connection, duplicate_a)
             projection_b = self.store.canonical.project_path(connection, duplicate_b)
+            report = self.store.canonical.strict_report(connection)
             movie_count = connection.execute("SELECT COUNT(*) FROM canonical_movies").fetchone()[0]
             file_count = connection.execute("SELECT COUNT(*) FROM canonical_movie_files").fetchone()[0]
         finally:
@@ -143,10 +144,36 @@ class CanonicalCatalogTest(unittest.TestCase):
         self.assertEqual(projection_a["genres"], ["Drama"])
         self.assertEqual(projection_a["collection"]["name"], "Complete Collection")
         self.assertEqual(projection_a["writers"][0]["name"], "Screenwriter")
+        self.assertEqual(projection_a["writers"][0]["job"], "Screenplay")
         self.assertEqual(projection_a["certification"], "PG-13")
         self.assertEqual(projection_a["keywords"], ["journey", "friendship"])
+        self.assertEqual(report["writer_credits"], 1)
+        self.assertEqual(report["keywords"], 2)
+        self.assertEqual(report["movie_keywords"], 2)
         self.assertEqual(projection_a["poster_url"], "/api/library/posters/image/custom.jpg")
         self.assertTrue(projection_a["poster_override"])
+
+    def test_writer_and_keyword_details_are_relational_not_decoded_from_source_json(self):
+        _, duplicate_a, _ = self._import()
+        connection = self.store.connect()
+        try:
+            before = self.store.canonical.project_path(connection, duplicate_a)
+            connection.execute("""
+                UPDATE provider_movie_snapshots
+                SET source_json=?
+                WHERE snapshot_key='tmdb:42'
+            """, (json.dumps({
+                "writers": [{"id": "999", "name": "JSON Impostor", "job": "Writer"}],
+                "keywords": ["json-impostor"],
+                "certification": "PG-13",
+            }),))
+            after = self.store.canonical.project_path(connection, duplicate_a)
+        finally:
+            connection.close()
+
+        self.assertEqual(after["writers"], before["writers"])
+        self.assertEqual(after["keywords"], before["keywords"])
+        self.assertEqual(after["certification"], "PG-13")
 
     def test_tmdb_selected_movie_with_only_plex_fallback_is_incomplete(self):
         missing_path, _, _ = self._import()

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from services.movie_identity import normalize_movie_title, ownership_keys
 from services.smart_match import parse_release_filename
 
 
-CATALOG_SCHEMA_VERSION = 7
+CATALOG_SCHEMA_VERSION = 8
 
 
 class CatalogError(RuntimeError):
@@ -30,6 +31,17 @@ def _text(value):
 
 def _bool(value):
     return 1 if bool(value) else 0
+
+
+def _execute_schema(connection, script):
+    statement = ""
+    for line in str(script or "").splitlines():
+        statement += line + "\n"
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise CatalogError("Incomplete catalogue schema statement")
 
 
 def _number(value, default=0):
@@ -85,6 +97,7 @@ class CatalogStore:
         self.database_path = Path(database_path).resolve()
         self.canonical = CanonicalCatalog()
         self._library_summary_cache = None
+        self.last_migration_report = None
 
     def connect(self):
         if str(os.environ.get("CP_TEST_MODE", "") or "").strip() == "1":
@@ -116,9 +129,251 @@ class CatalogStore:
         finally:
             connection.close()
 
+    @staticmethod
+    def _catalog_schema_version(connection):
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        if not tables:
+            return None
+        if "catalog_meta" not in tables:
+            raise CatalogError("Catalogue schema is partial: catalog_meta is missing")
+        row = connection.execute(
+            "SELECT value FROM catalog_meta WHERE key='schema_version'"
+        ).fetchone()
+        if not row:
+            raise CatalogError("Catalogue schema is partial: schema_version is missing")
+        try:
+            return int(row[0])
+        except (TypeError, ValueError) as error:
+            raise CatalogError(f"Invalid catalogue schema version: {row[0]!r}") from error
+
+    @staticmethod
+    def _table_columns(connection, table):
+        return [row[1] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()]
+
+    @staticmethod
+    def _logical_digest(connection, table, columns, where="", parameters=()):
+        encoded_columns = ", ".join(columns)
+        query = f"SELECT {encoded_columns} FROM {table}"
+        if where:
+            query += f" WHERE {where}"
+        query += " ORDER BY " + ", ".join(columns)
+        digest = hashlib.sha256()
+        count = 0
+        for row in connection.execute(query, parameters):
+            digest.update(_json_text(list(row)).encode("utf-8"))
+            digest.update(b"\n")
+            count += 1
+        return {"rows": count, "sha256": digest.hexdigest()}
+
+    @staticmethod
+    def _migration_checkpoint(name):
+        del name
+
+    def _validate_v7_migration_source(self, connection):
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or foreign_keys:
+            raise CatalogError("Version 7 catalogue failed integrity validation")
+        expected_columns = [
+            "snapshot_key", "credit_type", "position", "person_key",
+            "credited_name", "character", "profile_url",
+        ]
+        if self._table_columns(connection, "movie_credits") != expected_columns:
+            raise CatalogError("Version 7 movie_credits schema does not match the approved source")
+        partial_objects = {
+            row[0]
+            for row in connection.execute("""
+                SELECT name FROM sqlite_master
+                WHERE name IN (
+                    'movie_credits_v8_new', 'keywords', 'movie_keywords',
+                    'idx_keywords_tmdb', 'idx_keywords_normalized_name',
+                    'idx_movie_keywords_keyword'
+                )
+            """).fetchall()
+        }
+        if partial_objects:
+            raise CatalogError(
+                "Version 7 catalogue contains partial version 8 objects: "
+                + ", ".join(sorted(partial_objects))
+            )
+        invalid_credit = connection.execute("""
+            SELECT credit_type FROM movie_credits
+            WHERE credit_type NOT IN ('cast', 'director')
+            LIMIT 1
+        """).fetchone()
+        if invalid_credit:
+            raise CatalogError(f"Version 7 contains unsupported credit type: {invalid_credit[0]}")
+
+    def _validate_v8_schema(self, connection, *, require_version=True):
+        if require_version and self._catalog_schema_version(connection) != 8:
+            raise CatalogError("Catalogue schema version is not 8")
+        expected_credit_columns = [
+            "snapshot_key", "credit_type", "position", "person_key",
+            "credited_name", "character", "profile_url", "job",
+        ]
+        if self._table_columns(connection, "movie_credits") != expected_credit_columns:
+            raise CatalogError("Version 8 movie_credits schema is incomplete")
+        if self._table_columns(connection, "keywords") != [
+            "keyword_key", "tmdb_id", "name", "normalized_name",
+        ]:
+            raise CatalogError("Version 8 keywords schema is incomplete")
+        if self._table_columns(connection, "movie_keywords") != [
+            "snapshot_key", "position", "keyword_key",
+        ]:
+            raise CatalogError("Version 8 movie_keywords schema is incomplete")
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='movie_credits'"
+        ).fetchone()
+        if not table_sql or "'writer'" not in str(table_sql[0] or "").lower():
+            raise CatalogError("Version 8 movie_credits constraint does not allow writers")
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required_indexes = {
+            "idx_movie_credits_person",
+            "idx_keywords_tmdb",
+            "idx_keywords_normalized_name",
+            "idx_movie_keywords_keyword",
+        }
+        if not required_indexes.issubset(indexes):
+            raise CatalogError(
+                "Version 8 search indexes are incomplete: "
+                + ", ".join(sorted(required_indexes - indexes))
+            )
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='movie_credits_v8_new'"
+        ).fetchone():
+            raise CatalogError("Version 8 catalogue contains a partial movie_credits table")
+
+    def _migrate_v6_to_v7(self, connection):
+        if self._catalog_schema_version(connection) != 6:
+            raise CatalogError("Version 6 to 7 migration received the wrong source version")
+        self.canonical.upgrade_v6_additive_columns(connection)
+        self._initialize_asset_schema(connection)
+        connection.execute(
+            "UPDATE catalog_meta SET value='7' WHERE key='schema_version'"
+        )
+
+    def _migrate_v7_to_v8(self, connection):
+        if self._catalog_schema_version(connection) != 7:
+            raise CatalogError("Version 7 to 8 migration received the wrong source version")
+        self._validate_v7_migration_source(connection)
+        source_columns = [
+            "snapshot_key", "credit_type", "position", "person_key",
+            "credited_name", "character", "profile_url",
+        ]
+        before = self._logical_digest(connection, "movie_credits", source_columns)
+        self._migration_checkpoint("before_table_creation")
+        self.canonical.create_movie_credits_v8(
+            connection,
+            "movie_credits_v8_new",
+            if_not_exists=False,
+        )
+        self.canonical.create_keyword_schema(connection, if_not_exists=False)
+        connection.execute("""
+            INSERT INTO movie_credits_v8_new(
+                snapshot_key, credit_type, position, person_key,
+                credited_name, character, profile_url, job
+            )
+            SELECT snapshot_key, credit_type, position, person_key,
+                   credited_name, character, profile_url, ''
+            FROM movie_credits
+            ORDER BY snapshot_key, credit_type, position
+        """)
+        self._migration_checkpoint("during_existing_credit_copy")
+        copied = self._logical_digest(
+            connection,
+            "movie_credits_v8_new",
+            source_columns,
+            "credit_type IN ('cast', 'director')",
+        )
+        if copied != before:
+            raise CatalogError(
+                f"Version 8 credit copy mismatch: source={before}, copied={copied}"
+            )
+
+        relation_report = self.canonical.backfill_search_relations(
+            connection,
+            "movie_credits_v8_new",
+            checkpoint=self._migration_checkpoint,
+        )
+        copied_after_backfill = self._logical_digest(
+            connection,
+            "movie_credits_v8_new",
+            source_columns,
+            "credit_type IN ('cast', 'director')",
+        )
+        if copied_after_backfill != before:
+            raise CatalogError("Writer backfill changed existing cast/director credits")
+
+        connection.execute("DROP TABLE movie_credits")
+        connection.execute("ALTER TABLE movie_credits_v8_new RENAME TO movie_credits")
+        self._migration_checkpoint("before_index_creation")
+        self.canonical.create_search_indexes(connection, if_not_exists=False)
+        self._migration_checkpoint("before_schema_version_update")
+        connection.execute(
+            "UPDATE catalog_meta SET value='8' WHERE key='schema_version'"
+        )
+        self._migration_checkpoint("during_final_validation")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or foreign_keys:
+            raise CatalogError(
+                f"Version 8 final integrity failed: integrity={integrity}, foreign_keys={len(foreign_keys)}"
+            )
+        self._validate_v8_schema(connection)
+        after = self._logical_digest(
+            connection,
+            "movie_credits",
+            source_columns,
+            "credit_type IN ('cast', 'director')",
+        )
+        if after != before:
+            raise CatalogError("Version 8 final credit digest does not match version 7")
+        return {
+            "from_version": 7,
+            "to_version": 8,
+            "existing_credit_digest_before": before,
+            "existing_credit_digest_after": after,
+            **relation_report,
+            "people": int(connection.execute("SELECT COUNT(*) FROM people").fetchone()[0]),
+            "credits": int(connection.execute("SELECT COUNT(*) FROM movie_credits").fetchone()[0]),
+            "writer_credits": int(connection.execute(
+                "SELECT COUNT(*) FROM movie_credits WHERE credit_type='writer'"
+            ).fetchone()[0]),
+            "keywords": int(connection.execute("SELECT COUNT(*) FROM keywords").fetchone()[0]),
+            "movie_keywords": int(connection.execute("SELECT COUNT(*) FROM movie_keywords").fetchone()[0]),
+            "integrity_check": integrity,
+            "foreign_key_violations": len(foreign_keys),
+        }
+
     def initialize(self):
+        self.last_migration_report = None
+        migration_report = None
         with self.transaction() as connection:
-            connection.executescript("""
+            starting_schema = self._catalog_schema_version(connection)
+            if starting_schema is not None:
+                if starting_schema == 6:
+                    self._migrate_v6_to_v7(connection)
+                    starting_schema = 7
+                if starting_schema == 7:
+                    migration_report = self._migrate_v7_to_v8(connection)
+                    starting_schema = 8
+                elif starting_schema != 8:
+                    raise CatalogError(
+                        f"Unsupported catalogue schema version {starting_schema}; expected 6, 7, or 8"
+                    )
+                self._validate_v8_schema(connection)
+
+            _execute_schema(connection, """
                 CREATE TABLE IF NOT EXISTS catalog_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -331,14 +586,17 @@ class CatalogStore:
                     "INSERT OR REPLACE INTO catalog_meta(key, value) VALUES('canonical_contract_version', ?)",
                     (str(CANONICAL_CONTRACT_VERSION),),
                 )
-            connection.execute(
-                "INSERT OR REPLACE INTO catalog_meta(key, value) VALUES('schema_version', ?)",
-                (str(CATALOG_SCHEMA_VERSION),),
-            )
+            if not previous_schema:
+                connection.execute(
+                    "INSERT INTO catalog_meta(key, value) VALUES('schema_version', ?)",
+                    (str(CATALOG_SCHEMA_VERSION),),
+                )
+                self._validate_v8_schema(connection)
+        self.last_migration_report = migration_report
 
     @staticmethod
     def _initialize_asset_schema(connection):
-        connection.executescript("""
+        _execute_schema(connection, """
             CREATE TABLE IF NOT EXISTS media_assets (
                 asset_key TEXT PRIMARY KEY,
                 asset_type TEXT NOT NULL CHECK(asset_type IN ('poster','portrait','discover_poster')),

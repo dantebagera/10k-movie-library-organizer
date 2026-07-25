@@ -16,14 +16,14 @@ SHADOW_FIELDS = (
     "title", "year", "tmdb_id", "imdb_id", "plex_guid", "poster_url", "backdrop_url",
     "genres", "plot", "summary", "rating", "tmdb_rating", "tmdb_vote_count",
     "language", "country", "country_flag", "release_date", "runtime", "tagline",
-    "trailer_url", "collection", "cast", "directors",
+    "trailer_url", "collection", "cast", "directors", "writers", "keywords",
 )
 
 
 def _normalized_shadow_value(field, value):
     if value in (None, "", [], {}):
         return None
-    if field in {"cast", "directors"}:
+    if field in {"cast", "directors", "writers"}:
         return [
             {
                 "id": str(person.get("id", "") or "").strip(),
@@ -34,6 +34,7 @@ def _normalized_shadow_value(field, value):
                     else person.get("profile_url", "")
                 ).strip(),
                 **({"character": str(person.get("character", "") or "").strip()} if field == "cast" else {}),
+                **({"job": str(person.get("job", "") or "").strip()} if field == "writers" else {}),
             }
             for person in (value or [])
             if isinstance(person, dict)
@@ -153,8 +154,8 @@ def audit_catalog(user_data_dir, max_errors=100):
                 for field in ("plot", "summary", "detail_provider"):
                     if canonical.get(field) and projected.get(field) != canonical.get(field):
                         _violation(violations["projections"], candidate, f"Projection lost canonical {field}", max_errors)
-            if any(canonical.get(field) for field in ("cast", "directors")):
-                if any((card.get("canonical_metadata") or {}).get(field) for field in ("cast", "directors")):
+            if any(canonical.get(field) for field in ("cast", "directors", "writers", "keywords")):
+                if any((card.get("canonical_metadata") or {}).get(field) for field in ("cast", "directors", "writers", "keywords")):
                     _violation(violations["projections"], candidate, "Card projection includes deferred people fields", max_errors)
             if canonical.get("cast") and not (people.get("canonical_metadata") or {}).get("cast"):
                 _violation(violations["projections"], candidate, "People projection lost canonical cast", max_errors)

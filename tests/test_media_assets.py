@@ -9,6 +9,7 @@ from PIL import Image
 import app as cp_app
 from services.catalog_repository import CatalogRepository
 from services.media_assets import MediaAssetError, MediaAssetService
+from tests.catalog_schema_fixtures import downgrade_catalog_to_v6_asset_fixture
 
 
 class _Response:
@@ -100,7 +101,7 @@ class MediaAssetServiceTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_schema_7_asset_migration_preserves_canonical_rows_and_catalog_generation(self):
+    def test_known_schema_6_asset_migration_chains_to_8_without_changing_canonical_rows(self):
         connection = self.repository.store.connect()
         try:
             before = tuple(connection.execute(
@@ -109,13 +110,10 @@ class MediaAssetServiceTest(unittest.TestCase):
                 "(SELECT COUNT(*) FROM provider_movie_snapshots)"
             ).fetchone())
             generation = self.repository.generation("media")
-            connection.execute("UPDATE catalog_meta SET value='6' WHERE key='schema_version'")
-            for table in ("curated_asset_refs", "person_assets", "movie_assets", "media_assets"):
-                connection.execute(f"DROP TABLE {table}")
-            connection.commit()
         finally:
             connection.close()
 
+        downgrade_catalog_to_v6_asset_fixture(self.repository.store)
         self.repository.store.initialize()
         connection = self.repository.store.connect()
         try:
@@ -128,7 +126,7 @@ class MediaAssetServiceTest(unittest.TestCase):
         finally:
             connection.close()
 
-        self.assertEqual(schema, 7)
+        self.assertEqual(schema, 8)
         self.assertEqual(after, before)
         self.assertEqual(self.repository.generation("media"), generation)
 
