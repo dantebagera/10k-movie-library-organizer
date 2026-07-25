@@ -260,7 +260,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("function appendDiscoverCriteria(params)", discover_source)
         self.assertIn("if (!isPick) appendDiscoverCriteria(params);", discover_source)
         self.assertIn("function filterDiscoverContextResults(results)", discover_source)
-        self.assertIn("if (discoverContext.type === 'person' && discoverContext.baseUrl)", discover_source)
+        self.assertIn("if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl)", discover_source)
         self.assertIn("loadContextPage('explore', discoverContext, { append: false });", discover_source)
         self.assertIn("setDiscoverContextSourceResults(results);", discover_source)
 
@@ -294,6 +294,19 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("<PeopleSearchResults", discover_source)
         self.assertIn("function PeopleSearchResults", APP)
         self.assertIn("Acting credits", APP)
+
+    def test_discover_writer_and_keyword_relationship_paths_keep_identity_and_stale_guards(self):
+        discover_source = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("role === 'writer' ? 'Writer'", discover_source)
+        self.assertIn("role === 'writer' ? 'Written films'", discover_source)
+        self.assertIn("/api/tmdb/keywords/search", discover_source)
+        self.assertIn("/api/tmdb/discover?list=catalog&keyword_id=", discover_source)
+        self.assertIn("function searchDiscoverKeywords()", discover_source)
+        self.assertIn("function openSearchedKeywordMovies(keyword)", discover_source)
+        self.assertIn("const requestSeq = discoverRequestSeq.current + 1;", discover_source)
+        self.assertIn("if (requestSeq !== discoverRequestSeq.current) return;", discover_source)
+        self.assertIn("role: ['actor', 'director', 'writer'].includes(role) ? role : 'actor'", APP)
         self.assertIn("Directed films", APP)
 
     def test_library_expanded_card_removes_duplicate_metadata_strip(self):

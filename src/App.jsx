@@ -565,7 +565,7 @@ function ArchiveApp() {
         title: movie?.title || 'Movie',
         year: movie?.year || ''
       },
-      role: role === 'director' ? 'director' : 'actor',
+      role: ['actor', 'director', 'writer'].includes(role) ? role : 'actor',
       person: {
         id: person.id,
         name: person.name || 'Unknown person'

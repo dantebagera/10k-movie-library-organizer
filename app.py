@@ -28,6 +28,7 @@ from services.movie_identity import (
 from services.catalog_repository import CatalogRepository
 from services.canonical_catalog import (
     CANONICAL_CONTRACT_VERSION,
+    WRITER_JOBS,
     canonical_card_projection,
     canonical_details_projection,
 )
@@ -6096,6 +6097,8 @@ def tmdb_discover():
     year_to = request.args.get('year_to', '').strip()
     min_rating = request.args.get('min_rating', '').strip()
     sort_override = request.args.get('sort', '').strip()
+    keyword_id = request.args.get('keyword_id', '').strip()
+    keyword_name = request.args.get('keyword_name', '').strip()
     try:
         page = max(1, min(int(request.args.get('page', '1')), 10))
     except ValueError:
@@ -6127,6 +6130,7 @@ def tmdb_discover():
             or min_rating
             or min_votes
             or sort_override
+            or keyword_id
         )
         tmdb_pages = [page]
         if page_size == 40:
@@ -6142,6 +6146,8 @@ def tmdb_discover():
             })
             if genre_id:
                 params += '&with_genres=' + urllib.parse.quote(genre_id)
+            if keyword_id:
+                params += '&with_keywords=' + urllib.parse.quote(keyword_id)
             if min_votes:
                 params += '&vote_count.gte=' + urllib.parse.quote(min_votes)
             elif genre_id:
@@ -6225,12 +6231,18 @@ def tmdb_discover():
         total_pages = int(data.get('total_pages', 1) or 1)
         if page_size == 40:
             total_pages = (total_pages + 1) // 2
-        return jsonify({
+        payload = {
             'results': movies[:page_size],
             'total_pages': min(total_pages, 10),
             'page': page,
             'total_results': data.get('total_results', len(movies)),
-        })
+        }
+        if keyword_id:
+            payload['keyword'] = {
+                'tmdb_id': keyword_id,
+                'name': keyword_name,
+            }
+        return jsonify(payload)
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return jsonify({'error': 'Invalid TMDB API key — check Settings.'}), 401
@@ -6486,6 +6498,54 @@ def tmdb_people_search():
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return jsonify({'error': 'Invalid TMDB API key — check Settings.'}), 401
+        return jsonify({'error': f'TMDB returned HTTP {e.code}'}), 502
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tmdb/keywords/search')
+def tmdb_keywords_search():
+    if not _tmdb_key:
+        return jsonify({'error': 'TMDB key not configured - add it in Settings.'}), 400
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'error': 'q (query) parameter required'}), 400
+    try:
+        page = max(1, min(int(request.args.get('page', '1')), 10))
+    except ValueError:
+        page = 1
+    try:
+        params = urllib.parse.urlencode({
+            'api_key': _tmdb_key,
+            'query': query,
+            'page': page,
+        })
+        url = f"https://api.themoviedb.org/3/search/keyword?{params}"
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode())
+
+        results = []
+        seen = set()
+        for keyword in data.get('results', []) or []:
+            keyword_id = str(keyword.get('id', '') or '').strip()
+            name = str(keyword.get('name', '') or '').strip()
+            if not keyword_id or not name or keyword_id in seen:
+                continue
+            seen.add(keyword_id)
+            results.append({
+                'tmdb_id': keyword_id,
+                'name': name,
+            })
+        return jsonify({
+            'results': results,
+            'page': int(data.get('page', page) or page),
+            'total_pages': min(int(data.get('total_pages', 1) or 1), 10),
+            'total_results': int(data.get('total_results', len(results)) or 0),
+        })
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return jsonify({'error': 'Invalid TMDB API key - check Settings.'}), 401
         return jsonify({'error': f'TMDB returned HTTP {e.code}'}), 502
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -10007,7 +10067,7 @@ def _normalize_tmdb_collection_payload(data):
 def tmdb_person_movies():
     person_id = request.args.get('person_id', '').strip()
     role = request.args.get('role', 'actor').strip().lower()
-    if role not in ('actor', 'director'):
+    if role not in ('actor', 'director', 'writer'):
         role = 'actor'
     if not person_id or not _tmdb_key:
         return jsonify({'error': 'person_id and TMDB key required'}), 400
@@ -10043,6 +10103,11 @@ def tmdb_person_movies():
             credits = [
                 item for item in (raw.get('crew', []) or [])
                 if item.get('job') == 'Director'
+            ]
+        elif role == 'writer':
+            credits = [
+                item for item in (raw.get('crew', []) or [])
+                if item.get('job') in WRITER_JOBS
             ]
 
         movies = []

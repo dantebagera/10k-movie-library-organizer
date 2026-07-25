@@ -195,6 +195,194 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(data["results"][0]["title"], "Directed Movie")
         self.assertEqual(data["results"][0]["genres"], ["Crime"])
 
+    def test_person_movies_endpoint_filters_allowed_writer_jobs_and_deduplicates_movies(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {18: "Drama"}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return app._json.dumps({
+                    "cast": [],
+                    "crew": [
+                        {"id": 1, "title": "Written Movie", "release_date": "2001-01-01", "genre_ids": [18], "job": "Writer", "popularity": 8},
+                        {"id": 1, "title": "Written Movie", "release_date": "2001-01-01", "genre_ids": [18], "job": "Screenplay", "popularity": 8},
+                        {"id": 2, "title": "Story Movie", "release_date": "2002-01-01", "genre_ids": [18], "job": "Story", "popularity": 7},
+                        {"id": 3, "title": "Novel Movie", "release_date": "2003-01-01", "genre_ids": [18], "job": "Novel", "popularity": 6},
+                        {"id": 4, "title": "Produced Movie", "release_date": "2004-01-01", "genre_ids": [18], "job": "Producer", "popularity": 10},
+                        {"id": 5, "title": "Directed Movie", "release_date": "2005-01-01", "genre_ids": [18], "job": "Director", "popularity": 9},
+                    ],
+                }).encode()
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app._metadata_store", side_effect=AssertionError("remote writer results must not persist")), \
+                    patch("app.urllib.request.urlopen", return_value=FakeResponse()) as provider_call:
+                response = app.app.test_client().get(
+                    "/api/tmdb/person_movies?person_id=55&role=writer&page=1"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["role"], "writer")
+        provider_call.assert_called_once()
+        self.assertEqual(
+            [movie["title"] for movie in data["results"]],
+            ["Written Movie", "Story Movie", "Novel Movie"],
+        )
+        self.assertEqual(data["total_results"], 3)
+
+    def test_keyword_search_returns_deduplicated_tmdb_identities_without_persistence(self):
+        original_key = app._tmdb_key
+        app._tmdb_key = "tmdb-key"
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return app._json.dumps({
+                    "page": 1,
+                    "total_pages": 2,
+                    "total_results": 3,
+                    "results": [
+                        {"id": 501, "name": "time travel"},
+                        {"id": 501, "name": "Time Travel"},
+                        {"name": "missing identity"},
+                    ],
+                }).encode()
+
+        requested_urls = []
+
+        def fake_urlopen(request, timeout=0):
+            requested_urls.append(request.full_url)
+            return FakeResponse()
+
+        try:
+            with patch("app._metadata_store", side_effect=AssertionError("remote keyword search must not persist")), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                response = app.app.test_client().get(
+                    "/api/tmdb/keywords/search?q=time+travel&page=1&include_adult=false"
+                )
+        finally:
+            app._tmdb_key = original_key
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/search/keyword?", requested_urls[0])
+        self.assertIn("query=time+travel", requested_urls[0])
+        self.assertEqual(response.get_json()["results"], [{
+            "tmdb_id": "501",
+            "name": "time travel",
+        }])
+
+    def test_keyword_search_preserves_validation_and_provider_error_contracts(self):
+        original_key = app._tmdb_key
+        client = app.app.test_client()
+        try:
+            app._tmdb_key = ""
+            missing_key = client.get("/api/tmdb/keywords/search?q=space")
+
+            app._tmdb_key = "tmdb-key"
+            missing_query = client.get("/api/tmdb/keywords/search")
+            with patch(
+                "app.urllib.request.urlopen",
+                side_effect=app.urllib.error.HTTPError(
+                    "https://api.themoviedb.org/3/search/keyword",
+                    503,
+                    "Unavailable",
+                    None,
+                    None,
+                ),
+            ):
+                provider_error = client.get("/api/tmdb/keywords/search?q=space")
+        finally:
+            app._tmdb_key = original_key
+
+        self.assertEqual(missing_key.status_code, 400)
+        self.assertEqual(missing_query.status_code, 400)
+        self.assertEqual(provider_error.status_code, 502)
+        self.assertEqual(provider_error.get_json()["error"], "TMDB returned HTTP 503")
+
+    def test_discover_filters_by_keyword_identity_and_keeps_results_remote(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {878: "Sci-Fi"}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return app._json.dumps({
+                    "page": 2,
+                    "total_pages": 3,
+                    "total_results": 1,
+                    "results": [{
+                        "id": 10,
+                        "title": "Temporal Feature",
+                        "release_date": "2024-01-02",
+                        "poster_path": "/temporal.jpg",
+                        "genre_ids": [878],
+                        "vote_average": 8.1,
+                        "vote_count": 1200,
+                        "overview": "Time folds.",
+                        "original_language": "en",
+                    }],
+                }).encode()
+
+        requested_urls = []
+
+        def fake_urlopen(request, timeout=0):
+            requested_urls.append(request.full_url)
+            return FakeResponse()
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app._metadata_store", side_effect=AssertionError("remote keyword results must not persist")), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                response = app.app.test_client().get(
+                    "/api/tmdb/discover"
+                    "?list=catalog&keyword_id=501&keyword_name=time+travel&page=2"
+                    "&genre=878&year_from=2020&min_rating=7&min_votes=1000&sort=vote_average.desc"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+
+        self.assertEqual(response.status_code, 200)
+        requested = requested_urls[0]
+        self.assertIn("/discover/movie?", requested)
+        self.assertIn("with_keywords=501", requested)
+        self.assertIn("page=2", requested)
+        self.assertNotIn("/search/movie", requested)
+        self.assertIn("with_genres=878", requested)
+        self.assertIn("primary_release_date.gte=2020-01-01", requested)
+        self.assertEqual(response.get_json()["keyword"], {
+            "tmdb_id": "501",
+            "name": "time travel",
+        })
+        self.assertEqual(response.get_json()["page"], 2)
+        self.assertEqual(response.get_json()["total_pages"], 3)
+        self.assertEqual(response.get_json()["results"][0]["title"], "Temporal Feature")
+        self.assertEqual(response.get_json()["results"][0]["genres"], ["Sci-Fi"])
+
     def test_person_movies_filters_and_sorts_the_full_filmography_before_paging(self):
         original_key = app._tmdb_key
         original_genres = app._tmdb_genres

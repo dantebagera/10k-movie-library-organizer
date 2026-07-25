@@ -92,6 +92,9 @@ export default function DiscoverWorkspace({
   const [discoverPeopleResults, setDiscoverPeopleResults] = useState([]);
   const [discoverPeopleLoading, setDiscoverPeopleLoading] = useState(false);
   const [discoverPeopleError, setDiscoverPeopleError] = useState('');
+  const [discoverKeywordResults, setDiscoverKeywordResults] = useState([]);
+  const [discoverKeywordLoading, setDiscoverKeywordLoading] = useState(false);
+  const [discoverKeywordError, setDiscoverKeywordError] = useState('');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discoverPage, setDiscoverPage] = useState(1);
   const [discoverTotalPages, setDiscoverTotalPages] = useState(1);
@@ -290,6 +293,8 @@ export default function DiscoverWorkspace({
       searchKind: discoverSearchKind,
       peopleResults: discoverPeopleResults,
       peopleError: discoverPeopleError,
+      keywordResults: discoverKeywordResults,
+      keywordError: discoverKeywordError,
       list: discoverList,
       genre: discoverGenre,
       minVotes: discoverMinVotes,
@@ -310,6 +315,10 @@ export default function DiscoverWorkspace({
   }
 
   function restoreDiscoverSnapshot(snapshot, nextHistory) {
+    discoverRequestSeq.current += 1;
+    setDiscoverLoading(false);
+    setDiscoverPeopleLoading(false);
+    setDiscoverKeywordLoading(false);
     setDiscoverResults(snapshot.results || []);
     setDiscoverPage(snapshot.page || 1);
     setDiscoverTotalPages(snapshot.totalPages || 1);
@@ -321,6 +330,8 @@ export default function DiscoverWorkspace({
     setDiscoverSearchKind(snapshot.searchKind || 'movies');
     setDiscoverPeopleResults(snapshot.peopleResults || []);
     setDiscoverPeopleError(snapshot.peopleError || '');
+    setDiscoverKeywordResults(snapshot.keywordResults || []);
+    setDiscoverKeywordError(snapshot.keywordError || '');
     setDiscoverList(snapshot.list || 'trending_week');
     setDiscoverGenre(snapshot.genre || '');
     setDiscoverMinVotes(snapshot.minVotes || '0');
@@ -391,6 +402,8 @@ export default function DiscoverWorkspace({
     const requestSeq = discoverRequestSeq.current + 1;
     discoverRequestSeq.current = requestSeq;
     setDiscoverLoading(true);
+    setDiscoverPeopleLoading(false);
+    setDiscoverKeywordLoading(false);
     setDiscoverError('');
     if (!append) {
       setDiscoverResults([]);
@@ -423,9 +436,15 @@ export default function DiscoverWorkspace({
   async function searchDiscoverPeople() {
     const query = tmdbQuery.trim();
     if (!query) return;
+    const requestSeq = discoverRequestSeq.current + 1;
+    discoverRequestSeq.current = requestSeq;
+    setDiscoverLoading(false);
     setDiscoverPeopleLoading(true);
+    setDiscoverKeywordLoading(false);
     setDiscoverPeopleError('');
     setDiscoverPeopleResults([]);
+    setDiscoverKeywordResults([]);
+    setDiscoverKeywordError('');
     setDiscoverContext(null);
     setDiscoverContextSourceResults([]);
     setDiscoverHistory([]);
@@ -433,17 +452,50 @@ export default function DiscoverWorkspace({
     setDiscoverMode('people');
     try {
       const data = await fetchJson(`/api/tmdb/people/search?q=${encodeURIComponent(query)}&page=1&include_adult=false`);
+      if (requestSeq !== discoverRequestSeq.current) return;
       setDiscoverPeopleResults(data.results || []);
     } catch (error) {
+      if (requestSeq !== discoverRequestSeq.current) return;
       setDiscoverPeopleError(error.message);
     } finally {
-      setDiscoverPeopleLoading(false);
+      if (requestSeq === discoverRequestSeq.current) setDiscoverPeopleLoading(false);
+    }
+  }
+
+  async function searchDiscoverKeywords() {
+    const query = tmdbQuery.trim();
+    if (!query) return;
+    const requestSeq = discoverRequestSeq.current + 1;
+    discoverRequestSeq.current = requestSeq;
+    setDiscoverLoading(false);
+    setDiscoverPeopleLoading(false);
+    setDiscoverKeywordLoading(true);
+    setDiscoverKeywordError('');
+    setDiscoverKeywordResults([]);
+    setDiscoverPeopleResults([]);
+    setDiscoverPeopleError('');
+    setDiscoverContext(null);
+    setDiscoverContextSourceResults([]);
+    setDiscoverHistory([]);
+    setExpandedMovieKey('');
+    setDiscoverMode('keywords');
+    try {
+      const data = await fetchJson(`/api/tmdb/keywords/search?q=${encodeURIComponent(query)}&page=1`);
+      if (requestSeq !== discoverRequestSeq.current) return;
+      setDiscoverKeywordResults(data.results || []);
+    } catch (error) {
+      if (requestSeq !== discoverRequestSeq.current) return;
+      setDiscoverKeywordError(error.message);
+    } finally {
+      if (requestSeq === discoverRequestSeq.current) setDiscoverKeywordLoading(false);
     }
   }
 
   async function loadContextPage(target, context, { append = false } = {}) {
     if (!context?.baseUrl) return;
     const isPick = target === 'pick';
+    const requestSeq = isPick ? 0 : discoverRequestSeq.current + 1;
+    if (!isPick) discoverRequestSeq.current = requestSeq;
     const currentPage = isPick ? (context.page || 1) : discoverPage;
     const nextPage = append ? currentPage + 1 : 1;
     const [baseUrl, existingQuery = ''] = context.baseUrl.split('?');
@@ -456,10 +508,13 @@ export default function DiscoverWorkspace({
       setPickError('');
     } else {
       setDiscoverLoading(true);
+      setDiscoverPeopleLoading(false);
+      setDiscoverKeywordLoading(false);
       setDiscoverError('');
     }
     try {
       const data = await fetchJson(url);
+      if (!isPick && requestSeq !== discoverRequestSeq.current) return;
       const nextResults = data.results || [];
       const nextContext = {
         ...context,
@@ -481,11 +536,12 @@ export default function DiscoverWorkspace({
       }
       checkOwnership(nextResults);
     } catch (error) {
+      if (!isPick && requestSeq !== discoverRequestSeq.current) return;
       if (isPick) setPickError(error.message);
       else setDiscoverError(error.message);
     } finally {
       if (isPick) setPickLoading(false);
-      else setDiscoverLoading(false);
+      else if (requestSeq === discoverRequestSeq.current) setDiscoverLoading(false);
     }
   }
 
@@ -512,7 +568,7 @@ export default function DiscoverWorkspace({
   function buildPersonMoviesContext(movie, role, person, labelPrefix = '') {
     const personId = person?.id || person?.tmdb_id;
     if (!personId) return;
-    const labelRole = role === 'director' ? 'Director' : 'Actor';
+    const labelRole = role === 'writer' ? 'Writer' : role === 'director' ? 'Director' : 'Actor';
     const prefix = labelPrefix || movie?.title || 'Movie';
     return {
       type: 'person',
@@ -525,7 +581,7 @@ export default function DiscoverWorkspace({
   async function openSearchedPersonFilmography(person, role) {
     const context = buildPersonMoviesContext({}, role, person);
     if (!context) return;
-    context.label = role === 'director' ? 'Directed films' : 'Acting credits';
+    context.label = role === 'writer' ? 'Written films' : role === 'director' ? 'Directed films' : 'Acting credits';
     const selectionSnapshot = {
       ...currentDiscoverSnapshot(),
       label: person.name || 'TMDB person',
@@ -538,6 +594,43 @@ export default function DiscoverWorkspace({
     setTmdbQuery('');
     setDiscoverPeopleResults([]);
     setDiscoverPeopleError('');
+    setDiscoverHistory((history) => [...history, selectionSnapshot]);
+    setExpandedMovieKey('');
+    setIsNavigatingDiscoverContext(true);
+    try {
+      await loadContextPage('explore', context, { append: false });
+    } finally {
+      setIsNavigatingDiscoverContext(false);
+    }
+  }
+
+  function buildKeywordMoviesContext(keyword) {
+    const keywordId = keyword?.tmdb_id || keyword?.id;
+    const keywordName = String(keyword?.name || '').trim();
+    if (!keywordId) return;
+    return {
+      type: 'keyword',
+      label: `Keyword: ${keywordName || keywordId}`,
+      baseUrl: `/api/tmdb/discover?list=catalog&keyword_id=${encodeURIComponent(keywordId)}&keyword_name=${encodeURIComponent(keywordName)}`,
+      emptyText: `No TMDB movies found for ${keywordName || 'that keyword'}.`
+    };
+  }
+
+  async function openSearchedKeywordMovies(keyword) {
+    const context = buildKeywordMoviesContext(keyword);
+    if (!context) return;
+    const selectionSnapshot = {
+      ...currentDiscoverSnapshot(),
+      label: keyword.name || 'TMDB keyword',
+      mode: 'keywords',
+      searchKind: 'keywords',
+      keywordResults: discoverKeywordResults,
+      keywordError: discoverKeywordError
+    };
+    setDiscoverSearchKind('movies');
+    setTmdbQuery('');
+    setDiscoverKeywordResults([]);
+    setDiscoverKeywordError('');
     setDiscoverHistory((history) => [...history, selectionSnapshot]);
     setExpandedMovieKey('');
     setIsNavigatingDiscoverContext(true);
@@ -883,7 +976,7 @@ export default function DiscoverWorkspace({
     if (!discoverContext) return;
     const criteriaKey = discoverCriteriaKey();
     if (discoverContext.criteriaKey === criteriaKey) return;
-    if (discoverContext.type === 'person' && discoverContext.baseUrl) {
+    if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl) {
       loadContextPage('explore', discoverContext, { append: false });
       return;
     }
@@ -903,6 +996,7 @@ export default function DiscoverWorkspace({
       loadBrowse({ query: browseQuery });
     } else if (activeTab === 'explore') {
       if (discoverSearchKind === 'people') searchDiscoverPeople();
+      else if (discoverSearchKind === 'keywords') searchDiscoverKeywords();
       else loadDiscover({ append: false, search: tmdbQuery, page: 1 });
     }
   }, [searchRequest]);
@@ -1053,8 +1147,14 @@ export default function DiscoverWorkspace({
       searchDiscoverPeople();
       return;
     }
+    if (discoverSearchKind === 'keywords') {
+      searchDiscoverKeywords();
+      return;
+    }
     setDiscoverPeopleResults([]);
     setDiscoverPeopleError('');
+    setDiscoverKeywordResults([]);
+    setDiscoverKeywordError('');
     loadDiscover({ append: false, search: tmdbQuery, page: 1 });
   }
 
@@ -1103,9 +1203,15 @@ export default function DiscoverWorkspace({
             <select
               value={discoverSearchKind}
               onChange={(event) => {
+                discoverRequestSeq.current += 1;
+                setDiscoverLoading(false);
+                setDiscoverPeopleLoading(false);
+                setDiscoverKeywordLoading(false);
                 setDiscoverSearchKind(event.target.value);
                 setDiscoverPeopleResults([]);
                 setDiscoverPeopleError('');
+                setDiscoverKeywordResults([]);
+                setDiscoverKeywordError('');
               }}
               aria-label="TMDB search type"
             >
@@ -1552,7 +1658,7 @@ function PeopleSearchResults({ people, loading, error, onOpenFilmography }) {
           person={person}
           meta={person.known_for_department || 'TMDB person'}
           knownFor={person.known_for}
-          roles={['actor', 'director']}
+          roles={['actor', 'director', 'writer']}
           onOpenFilmography={onOpenFilmography}
         />
       ))}

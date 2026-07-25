@@ -285,6 +285,50 @@ test('existing actor and director People search remains available in Library and
   await expect(discoverPerson.getByRole('button', { name: 'Directed films' })).toBeVisible();
 });
 
+test('Discover People search ignores a stale response and clears its loading state', async ({ page }) => {
+  let releaseSlowSearch;
+  let slowSearchStarted = false;
+  const slowSearchGate = new Promise((resolve) => {
+    releaseSlowSearch = resolve;
+  });
+
+  await page.route('**/api/tmdb/people/search**', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q');
+    if (query === 'Slow Person') {
+      slowSearchStarted = true;
+      await slowSearchGate;
+      await route.fulfill({ json: {
+        results: [{ tmdb_id: '701', name: 'Slow Person', known_for_department: 'Acting', known_for: [] }],
+        page: 1,
+        total_pages: 1,
+        total_results: 1
+      } });
+      return;
+    }
+    await route.fulfill({ json: {
+      results: [{ tmdb_id: '702', name: 'Current Person', known_for_department: 'Writing', known_for: [] }],
+      page: 1,
+      total_pages: 1,
+      total_results: 1
+    } });
+  });
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('people');
+  const searchInput = page.getByLabel('Search TMDB people');
+  await searchInput.fill('Slow Person');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => slowSearchStarted).toBe(true);
+
+  await searchInput.fill('Current Person');
+  await page.locator('form.discover-search-panel').evaluate((form) => form.requestSubmit());
+  await expect(page.locator('.person-search-card').filter({ hasText: 'Current Person' })).toBeVisible();
+
+  releaseSlowSearch();
+  await expect(page.locator('.person-search-card').filter({ hasText: 'Slow Person' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled();
+});
+
 test('Library credit clicks load the people projection before filtering owned work', async ({ page }) => {
   const cards = [
     {
