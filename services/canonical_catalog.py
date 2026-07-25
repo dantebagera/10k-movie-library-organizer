@@ -165,7 +165,7 @@ def _provider_person_key(provider, snapshot_key, credit_type, position, person):
     return f"{provider}-credit:{hashlib.sha256(seed.encode('utf-8')).hexdigest()}"
 
 
-def _normalized_keyword_name(value):
+def normalize_keyword_name(value):
     return " ".join(unicodedata.normalize("NFKC", _text(value)).casefold().split())
 
 
@@ -828,7 +828,7 @@ class CanonicalCatalog:
             else:
                 name = _text(value)
                 tmdb_id = ""
-            normalized_name = _normalized_keyword_name(name)
+            normalized_name = normalize_keyword_name(name)
             if not name or not normalized_name:
                 report["keyword_entries_rejected"] = report.get("keyword_entries_rejected", 0) + 1
                 continue

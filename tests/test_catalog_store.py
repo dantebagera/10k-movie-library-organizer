@@ -7,7 +7,12 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from services.catalog_store import CATALOG_SCHEMA_VERSION, CatalogError, CatalogStore
+from services.catalog_store import (
+    CATALOG_SCHEMA_VERSION,
+    CatalogError,
+    CatalogStore,
+    _keyword_prefix_bounds,
+)
 from tools.build_shadow_catalog import _load_documents
 from tools.catalog_migration_backup import BackupError
 
@@ -327,6 +332,159 @@ class CatalogStoreTest(unittest.TestCase):
             "PlotBeacon": 1,
             "GenreBeacon": 1,
         })
+
+    def test_library_writer_and_keyword_filters_use_relational_search_without_changing_movies_query(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(12), {})
+
+            actor_paths = store.library_selection_paths({
+                "role": "actor", "person_id": "shared-actor", "sort": "title",
+            })
+            director_paths = store.library_selection_paths({
+                "role": "director", "person_name": "DIRECTOR 3", "sort": "title",
+            })
+            writer_paths = store.library_selection_paths({
+                "role": "writer", "person_id": "writer-3", "sort": "title",
+            })
+            writer_name_paths = store.library_selection_paths({
+                "role": "writer", "person_name": "WRITER 3", "sort": "title",
+            })
+            keyword_paths = store.library_selection_paths({
+                "keyword_query": "  SHARED   KEYWORD  ", "sort": "title",
+            })
+            exact_keyword_paths = store.library_selection_paths({
+                "keyword_name": "  KEYWORD 3  ", "sort": "title",
+            })
+            movies_writer_query = store.library_page(
+                {"query": "Writer 3", "sort": "title"}, page=1, page_size=20,
+            )
+            movies_keyword_query = store.library_page(
+                {"query": "shared keyword", "sort": "title"}, page=1, page_size=20,
+            )
+
+            with store.transaction() as connection:
+                connection.execute("UPDATE provider_movie_snapshots SET source_json='{}'")
+
+            writer_after_json_removal = store.library_selection_paths({
+                "role": "writer", "person_id": "writer-3", "sort": "title",
+            })
+            keyword_after_json_removal = store.library_selection_paths({
+                "keyword_name": "keyword 3", "sort": "title",
+            })
+
+        self.assertEqual(len(actor_paths), 3)
+        self.assertEqual([Path(path).name for path in director_paths], ["003 - Movie's Test.mkv"])
+        self.assertEqual(writer_paths, director_paths)
+        self.assertEqual(writer_name_paths, writer_paths)
+        self.assertEqual(len(keyword_paths), 12)
+        self.assertEqual(exact_keyword_paths, writer_paths)
+        self.assertEqual(movies_writer_query["total"], 0)
+        self.assertEqual(movies_keyword_query["total"], 0)
+        self.assertEqual(writer_after_json_removal, writer_paths)
+        self.assertEqual(keyword_after_json_removal, exact_keyword_paths)
+
+    def test_library_keyword_entities_are_normalized_deduplicated_owned_and_bounded(self):
+        documents = self._paging_documents(12)
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1003"]["keywords"] = [
+            {"id": "501", "name": "Shared Keyword"},
+            {"name": "KEYWORD 3"},
+        ]
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1004"]["keywords"].append(
+            "رحلة عبر الزمن"
+        )
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+
+            shared = store.library_keywords("  SHARED   KEYWORD  ", limit=5)
+            numbered = store.library_keywords("keyword 1", limit=2)
+            non_latin = store.library_keywords("رحلة")
+            empty = store.library_keywords("does not exist", limit=5)
+
+        self.assertEqual(shared, [{
+            "keyword_key": shared[0]["keyword_key"],
+            "tmdb_id": "501",
+            "name": "shared keyword",
+            "normalized_name": "shared keyword",
+            "movie_count": 12,
+        }])
+        self.assertEqual(
+            [(row["normalized_name"], row["movie_count"]) for row in numbered],
+            [("keyword 1", 1), ("keyword 10", 1)],
+        )
+        self.assertEqual(
+            [(row["normalized_name"], row["movie_count"]) for row in non_latin],
+            [("رحلة عبر الزمن", 1)],
+        )
+        self.assertEqual(empty, [])
+
+    def test_library_keyword_queries_use_relational_indexes(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(12), {})
+
+            normalized, upper_bound = _keyword_prefix_bounds("keyword")
+            keyword_where, keyword_parameters = store._library_filter_sql({
+                "keyword_query": "keyword",
+            })
+            where, parameters = store._library_filter_sql({
+                "role": "writer", "person_id": "writer-3",
+            })
+            connection = store.connect()
+            try:
+                plans = [
+                    str(row["detail"])
+                    for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN {store._library_keywords_sql()}",
+                        (normalized, upper_bound, normalized, 50),
+                    ).fetchall()
+                ]
+                plans.extend(
+                    str(row["detail"])
+                    for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN {store._library_effective_cte()} "
+                        f"SELECT e.path_key FROM effective AS e{keyword_where}",
+                        keyword_parameters,
+                    ).fetchall()
+                )
+                writer_plan = [
+                    str(row["detail"])
+                    for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN {store._library_effective_cte()} "
+                        f"SELECT e.path_key FROM effective AS e{where}",
+                        parameters,
+                    ).fetchall()
+                ]
+            finally:
+                connection.close()
+
+        joined = "\n".join(plans)
+        self.assertIn("idx_keywords_normalized_name", joined)
+        self.assertIn("idx_movie_keywords_keyword", joined)
+        self.assertIn("sqlite_autoindex_movie_credits_1", "\n".join(writer_plan))
+
+    def test_library_writer_identity_does_not_merge_same_name_people(self):
+        documents = self._paging_documents(2)
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1000"]["writers"] = [{
+            "id": "writer-a", "name": "Shared Writer", "job": "Screenplay",
+        }]
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1001"]["writers"] = [{
+            "id": "writer-b", "name": "Shared Writer", "job": "Story",
+        }]
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+
+            first = store.library_selection_paths({
+                "role": "writer", "person_id": "writer-a", "person_name": "Shared Writer",
+            })
+            second = store.library_selection_paths({
+                "role": "writer", "person_id": "writer-b", "person_name": "Shared Writer",
+            })
+
+        self.assertEqual([Path(path).name for path in first], ["000 - Movie's Test.mkv"])
+        self.assertEqual([Path(path).name for path in second], ["001 - Movie's Test.mkv"])
 
     def test_library_page_query_count_is_bounded_by_page_size(self):
         with tempfile.TemporaryDirectory() as root:

@@ -93,6 +93,9 @@ export function getStoredRolePeople(item, role) {
   if (role === 'director') {
     return canonical.directors?.length ? canonical.directors : item?.plex_directors || [];
   }
+  if (role === 'writer') {
+    return canonical.writers || [];
+  }
   return canonical.cast?.length ? canonical.cast : item?.plex_cast || [];
 }
 
@@ -100,6 +103,9 @@ export function getRolePeople(item, details, role) {
   if (role === 'director') {
     const tmdbDirectors = details?.directors?.length ? details.directors : details?.director?.name ? [details.director] : [];
     return mergePeople(getStoredRolePeople(item, role), tmdbDirectors);
+  }
+  if (role === 'writer') {
+    return mergePeople(getStoredRolePeople(item, role), details?.writers || []);
   }
   return mergePeople(getStoredRolePeople(item, role), details?.cast || []);
 }
@@ -122,7 +128,7 @@ export function buildLibraryPeopleIndex(items = [], query = '') {
     if (!item?.canonical_metadata?.accepted) continue;
     const identity = getMovieIdentity(item);
     const movieKey = item.path ? `path:${String(item.path).toLowerCase()}` : movieIdentityKey(moviePayload(item));
-    for (const role of ['actor', 'director']) {
+    for (const role of ['actor', 'director', 'writer']) {
       for (const person of getStoredRolePeople(item, role)) {
         const name = String(person?.name || '').trim();
         if (!name) continue;

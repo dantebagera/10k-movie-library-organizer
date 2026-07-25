@@ -239,6 +239,9 @@ class CatalogRepository:
     def library_selection_paths(self, filters=None):
         return self.store.library_selection_paths(self._normalize_filter_paths(filters))
 
+    def library_keywords(self, query="", *, limit=50):
+        return self.store.library_keywords(query, limit=limit)
+
     def library_candidates_for_paths(self, paths):
         path_keys = [
             os.path.normcase(os.path.normpath(str(path or "")))

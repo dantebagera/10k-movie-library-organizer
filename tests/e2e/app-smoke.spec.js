@@ -185,7 +185,7 @@ test('Library switches between canonical movie and raw file views', async ({ pag
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
 });
 
-test('Library people search renders portraits stored in canonical metadata', async ({ page }) => {
+test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
   const profileUrl = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
   const peopleItem = {
     path: 'E:/Movies/Apollo.13.1995.mkv',
@@ -194,7 +194,8 @@ test('Library people search renders portraits stored in canonical metadata', asy
       title: 'Apollo 13',
       year: '1995',
       cast: [{ id: '31', name: 'Tom Hanks', profile_url: profileUrl }],
-      directors: []
+      directors: [],
+      writers: [{ id: '99', name: 'William Broyles Jr.', profile_url: profileUrl }]
     },
     plex_cast: [],
     plex_directors: []
@@ -221,6 +222,11 @@ test('Library people search renders portraits stored in canonical metadata', asy
   const portrait = card.getByRole('img', { name: 'Tom Hanks profile' });
   await expect(portrait).toBeVisible();
   await expect.poll(() => portrait.evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+
+  await page.getByPlaceholder('Search people in your library...').fill('William Broyles');
+  await expect(
+    page.locator('.person-search-card').filter({ hasText: 'William Broyles Jr.' })
+  ).toBeVisible();
 });
 
 test('existing actor and director People search remains available in Library and Discover', async ({ page }) => {

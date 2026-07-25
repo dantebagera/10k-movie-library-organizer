@@ -290,7 +290,8 @@ test('library people index stays local to accepted movies and can enforce a loca
       title: 'Braveheart',
       year: '1995',
       directors: [{ id: 2461, name: 'Mel Gibson' }],
-      cast: [{ id: 2461, name: 'Mel Gibson' }, { name: 'Sophie Marceau' }]
+      cast: [{ id: 2461, name: 'Mel Gibson' }, { name: 'Sophie Marceau' }],
+      writers: [{ id: 2461, name: 'Mel Gibson', job: 'Screenplay' }]
     }
   };
   const unaccepted = {
@@ -312,12 +313,21 @@ test('library people index stays local to accepted movies and can enforce a loca
     id: '2461',
     name: 'Mel Gibson',
     profile_url: 'https://image.tmdb.org/mel.jpg',
-    roles: ['actor', 'director'],
+    roles: ['actor', 'director', 'writer'],
     movieCount: 2,
     knownFor: ['Braveheart (1995)', 'What Women Want (2000)'],
     localIdentity: false
   }]);
   assert.deepEqual(getStoredRolePeople(accepted, 'actor'), accepted.canonical_metadata.cast);
+  assert.deepEqual(getStoredRolePeople(accepted, 'writer'), accepted.canonical_metadata.writers);
+  assert.equal(
+    itemMatchesRoleFilter(
+      accepted,
+      {},
+      { role: 'writer', id: '2461', name: 'Mel Gibson', localOnly: true }
+    ),
+    true
+  );
   assert.equal(
     itemMatchesRoleFilter(
       { ...accepted, canonical_metadata: { ...accepted.canonical_metadata, cast: [] } },

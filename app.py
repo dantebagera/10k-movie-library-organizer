@@ -4812,6 +4812,7 @@ def _library_people_item(item):
             'year': str(canonical.get('year', '') or ''),
             'cast': _trim_people_for_card(canonical.get('cast')),
             'directors': _trim_people_for_card(canonical.get('directors'), limit=4),
+            'writers': _trim_people_for_card(canonical.get('writers'), limit=None),
         },
         'plex_cast': _trim_people_for_card(item.get('plex_cast')),
         'plex_directors': _trim_people_for_card(item.get('plex_directors'), limit=4),
@@ -4871,6 +4872,9 @@ def _library_query_filters(values=None):
         'role': value('role'),
         'person_id': value('person_id'),
         'person_name': value('person_name'),
+        'keyword_id': value('keyword_id'),
+        'keyword_name': value('keyword_name'),
+        'keyword_query': value('keyword_query'),
         'collection_id': value('collection_id'),
         'collection_path_keys': collection_paths,
         'list_id': value('list_id'),
@@ -4918,6 +4922,18 @@ def library():
     refresh_metadata = request.args.get('refresh_metadata') == '1'
     view = request.args.get('view', '').strip()
     try:
+        if view == 'keywords':
+            store = _metadata_store()
+            keywords = store.catalog.library_keywords(
+                request.args.get('q', ''),
+                limit=request.args.get('limit', 50, type=int),
+            )
+            return jsonify({
+                'items': keywords,
+                'count': len(keywords),
+                'source': 'catalog',
+                'catalog_generation': store.catalog.generation('media'),
+            })
         previous_paths = {
             _norm(item.get('path', ''))
             for item in (_library_cache.get('items') or [])

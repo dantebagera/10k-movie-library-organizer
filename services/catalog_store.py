@@ -9,7 +9,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from services.canonical_catalog import CANONICAL_CONTRACT_VERSION, CanonicalCatalog
+from services.canonical_catalog import (
+    CANONICAL_CONTRACT_VERSION,
+    CanonicalCatalog,
+    normalize_keyword_name,
+)
 from services.movie_identity import normalize_movie_title, ownership_keys
 from services.smart_match import parse_release_filename
 
@@ -31,6 +35,11 @@ def _text(value):
 
 def _bool(value):
     return 1 if bool(value) else 0
+
+
+def _keyword_prefix_bounds(value):
+    normalized = normalize_keyword_name(value)
+    return normalized, f"{normalized}{chr(0x10FFFF)}"
 
 
 def _execute_schema(connection, script):
@@ -1129,7 +1138,7 @@ class CatalogStore:
         person_id = _text(filters.get("person_id"))
         person_name = _text(filters.get("person_name")).lower()
         if role and (person_id or person_name):
-            credit_type = "director" if role == "director" else "cast"
+            credit_type = {"director": "director", "writer": "writer"}.get(role, "cast")
             person_clause = "COALESCE(NULLIF(p.tmdb_id, ''), p.provider_id) = ?" if person_id else "LOWER(p.name) = ?"
             clauses.append(f"""
                 EXISTS(
@@ -1138,6 +1147,43 @@ class CatalogStore:
                 )
             """)
             parameters.extend((credit_type, person_id or person_name))
+        keyword_id = _text(filters.get("keyword_id"))
+        keyword_name = normalize_keyword_name(filters.get("keyword_name"))
+        keyword_query = normalize_keyword_name(filters.get("keyword_query"))
+        if keyword_id:
+            clauses.append("""
+                e.snapshot_key IN (
+                    SELECT mk.snapshot_key
+                    FROM keywords AS k INDEXED BY idx_keywords_tmdb
+                    JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
+                      ON mk.keyword_key = k.keyword_key
+                    WHERE k.tmdb_id <> '' AND k.tmdb_id = ?
+                )
+            """)
+            parameters.append(keyword_id)
+        elif keyword_name:
+            clauses.append("""
+                e.snapshot_key IN (
+                    SELECT mk.snapshot_key
+                    FROM keywords AS k INDEXED BY idx_keywords_normalized_name
+                    JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
+                      ON mk.keyword_key = k.keyword_key
+                    WHERE k.normalized_name = ?
+                )
+            """)
+            parameters.append(keyword_name)
+        elif keyword_query:
+            lower_bound, upper_bound = _keyword_prefix_bounds(keyword_query)
+            clauses.append("""
+                e.snapshot_key IN (
+                    SELECT mk.snapshot_key
+                    FROM keywords AS k INDEXED BY idx_keywords_normalized_name
+                    JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
+                      ON mk.keyword_key = k.keyword_key
+                    WHERE k.normalized_name >= ? AND k.normalized_name < ?
+                )
+            """)
+            parameters.extend((lower_bound, upper_bound))
         collection_paths = list(filters.get("collection_path_keys") or [])
         collection_id = _text(filters.get("collection_id"))
         if collection_paths:
@@ -1311,6 +1357,50 @@ class CatalogStore:
                     f"{cte} SELECT e.path FROM effective e{where} "
                     f"ORDER BY {self._library_sort_sql(filters.get('sort'))}",
                     parameters,
+                ).fetchall()
+            ]
+        finally:
+            connection.close()
+
+    def _library_keywords_sql(self):
+        return f"""
+            {self._library_effective_cte()}
+            SELECT
+                k.keyword_key,
+                k.tmdb_id,
+                k.name,
+                k.normalized_name,
+                COUNT(DISTINCT e.path_key) AS movie_count
+            FROM keywords AS k INDEXED BY idx_keywords_normalized_name
+            JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
+              ON mk.keyword_key = k.keyword_key
+            JOIN effective AS e ON e.snapshot_key = mk.snapshot_key
+            WHERE k.normalized_name >= ? AND k.normalized_name < ?
+            GROUP BY k.keyword_key, k.tmdb_id, k.name, k.normalized_name
+            ORDER BY
+                CASE WHEN k.normalized_name = ? THEN 0 ELSE 1 END,
+                movie_count DESC,
+                k.name COLLATE NOCASE,
+                k.keyword_key
+            LIMIT ?
+        """
+
+    def library_keywords(self, query="", *, limit=50):
+        normalized, upper_bound = _keyword_prefix_bounds(query)
+        limit = min(max(int(limit or 50), 1), 100)
+        connection = self.connect()
+        try:
+            return [
+                {
+                    "keyword_key": row["keyword_key"],
+                    "tmdb_id": row["tmdb_id"],
+                    "name": row["name"],
+                    "normalized_name": row["normalized_name"],
+                    "movie_count": int(row["movie_count"] or 0),
+                }
+                for row in connection.execute(
+                    self._library_keywords_sql(),
+                    (normalized, upper_bound, normalized, limit),
                 ).fetchall()
             ]
         finally:

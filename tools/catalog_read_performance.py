@@ -117,14 +117,47 @@ def _catalog_inventory(database_path):
                 """
             )
         ]
+        writer_row = connection.execute("""
+            SELECT COALESCE(NULLIF(p.tmdb_id, ''), p.provider_id) AS person_id, p.name
+            FROM movie_credits mc
+            JOIN people p ON p.person_key = mc.person_key
+            WHERE mc.credit_type = 'writer'
+            ORDER BY p.name COLLATE NOCASE, person_id
+            LIMIT 1
+        """).fetchone()
+        keyword_row = connection.execute("""
+            SELECT k.tmdb_id, k.name, k.normalized_name
+            FROM keywords k
+            JOIN movie_keywords mk ON mk.keyword_key = k.keyword_key
+            ORDER BY k.name COLLATE NOCASE, k.keyword_key
+            LIMIT 1
+        """).fetchone()
+        search_representatives = {
+            "writer": dict(writer_row) if writer_row else {},
+            "keyword": dict(keyword_row) if keyword_row else {},
+        }
         cte = store._library_effective_cte()
         query_plans = {}
-        for name, filters in {
+        plan_filters = {
             "first_page_added": {"sort": "added"},
             "combined_search_genre_year": {
                 "query": "avatar", "genre": "Science Fiction", "year_from": "2000", "sort": "year-desc",
             },
-        }.items():
+        }
+        if writer_row:
+            plan_filters["writer_search"] = {
+                "role": "writer",
+                "person_id": str(writer_row["person_id"] or ""),
+                "person_name": str(writer_row["name"] or ""),
+                "sort": "title",
+            }
+        if keyword_row:
+            plan_filters["keyword_search"] = {
+                "keyword_id": str(keyword_row["tmdb_id"] or ""),
+                "keyword_name": str(keyword_row["name"] or ""),
+                "sort": "title",
+            }
+        for name, filters in plan_filters.items():
             where, parameters = store._library_filter_sql(filters)
             rows = connection.execute(
                 f"EXPLAIN QUERY PLAN {cte} SELECT e.path_key FROM effective e{where} "
@@ -140,13 +173,14 @@ def _catalog_inventory(database_path):
             "meta": meta,
             "row_counts": counts,
             "representative_paths": representative,
+            "search_representatives": search_representatives,
             "query_plans": query_plans,
         }
     finally:
         connection.close()
 
 
-def _route_probe(paths):
+def _route_probe(paths, search_representatives=None):
     repository = app._catalog_repository()
     repository._cache.clear()
     client = app.app.test_client()
@@ -159,6 +193,7 @@ def _route_probe(paths):
         raise AssertionError(f"Provider request attempted during owned catalog benchmark: {url}")
 
     details = []
+    searches = {}
     with traced_catalog_connections(trace), patch("app.urllib.request.urlopen", side_effect=blocked_provider):
         for index, movie_path in enumerate(paths):
             if index == 0:
@@ -195,6 +230,41 @@ def _route_probe(paths):
         finally:
             app._library_cache = original_cache
 
+        writer = dict((search_representatives or {}).get("writer") or {})
+        keyword = dict((search_representatives or {}).get("keyword") or {})
+        search_requests = {}
+        if writer:
+            search_requests["writer_cards"] = {
+                "view": "cards",
+                "role": "writer",
+                "person_id": writer.get("person_id", ""),
+                "person_name": writer.get("name", ""),
+            }
+        if keyword:
+            search_requests["keyword_entities"] = {
+                "view": "keywords",
+                "q": keyword.get("normalized_name") or keyword.get("name", ""),
+            }
+            search_requests["keyword_cards"] = {
+                "view": "cards",
+                "keyword_id": keyword.get("tmdb_id", ""),
+                "keyword_name": keyword.get("name", ""),
+            }
+        for name, query in search_requests.items():
+            trace.reset()
+            started = time.perf_counter()
+            response = client.get("/api/library", query_string=query)
+            elapsed = (time.perf_counter() - started) * 1000
+            payload = response.get_json(silent=True) or {}
+            searches[name] = {
+                "status": response.status_code,
+                "elapsed_ms": round(elapsed, 3),
+                "route_ms": float(response.headers.get("X-CP-Route-MS") or 0),
+                "query_count": trace.count(),
+                "returned": len(payload.get("items") or []),
+                "total": int(payload.get("total", payload.get("count", 0)) or 0),
+            }
+
     detail_times = [row["elapsed_ms"] for row in details]
     detail_queries = [row["query_count"] for row in details]
     return {
@@ -205,6 +275,7 @@ def _route_probe(paths):
             "max": max(detail_queries) if detail_queries else 0,
         },
         "provider_calls": provider_calls,
+        "searches": searches,
         "library": {
             "cold": {
                 "status": cold.status_code,
@@ -258,7 +329,7 @@ def build_report(project_root, base_url=""):
         "captured_at": time.time(),
         "project_root": str(Path(project_root).resolve()),
         "catalog": inventory,
-        "in_process": _route_probe(paths),
+        "in_process": _route_probe(paths, inventory.get("search_representatives")),
     }
     if base_url:
         report["live_http"] = _live_probe(base_url, paths)

@@ -27,7 +27,7 @@ import {
 
 function LibraryPeopleSearchResults({ people, query, onOpenFilmography }) {
   if (!query.trim()) {
-    return <div className="empty-state library-empty"><strong>Search people in your library.</strong><span>Only accepted movies and their stored cast or director metadata are used.</span></div>;
+    return <div className="empty-state library-empty"><strong>Search people in your library.</strong><span>Only accepted movies and their stored actor, director, or writer metadata are used.</span></div>;
   }
   if (!people.length) {
     return <div className="empty-state library-empty"><strong>No owned people match that search.</strong><span>Try a different spelling or search movie titles instead.</span></div>;

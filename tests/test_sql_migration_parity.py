@@ -98,6 +98,13 @@ class SqlMigrationParityTest(unittest.TestCase):
                 {"id": 20, "name": "Lead Director"},
                 {"id": 21, "name": "Second Director"},
             ],
+            "writers": [
+                {"id": 30, "name": "Lead Writer", "job": "Screenplay"},
+            ],
+            "keywords": [
+                {"id": 501, "name": "Time Travel"},
+                "Mystery",
+            ],
         }
         corrected = self._accepted_movie("Wrong.Provider.2020.1080p.mkv", shared)
         self.store.save_plex_metadata(str(corrected), {
@@ -304,6 +311,20 @@ class SqlMigrationParityTest(unittest.TestCase):
             cards = client.get("/api/library?view=cards")
             movie_list_cards = client.get("/api/library?view=movie-list")
             people = client.get("/api/library?view=people")
+            keywords = client.get("/api/library?view=keywords&q=time")
+            keywords_with_refresh_ignored = client.get(
+                "/api/library?view=keywords&q=time&refresh_metadata=1&force_scan=1"
+            )
+            writer_cards = client.get(
+                "/api/library?view=cards&role=writer&person_id=30&person_name=Lead+Writer"
+            )
+            keyword_cards = client.get("/api/library?view=cards&keyword_name=TIME+TRAVEL")
+            writer_selection = client.post("/api/library/selection", json={
+                "filters": {"role": "writer", "person_id": "30", "person_name": "Lead Writer"},
+            })
+            keyword_selection = client.post("/api/library/selection", json={
+                "filters": {"keyword_id": "501"},
+            })
             details = client.get("/api/library/details", query_string={"path": str(self.paths["corrected"])})
             ownership = client.post("/api/library/check", json={
                 "include_items": True,
@@ -314,6 +335,12 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(cards.status_code, 200)
         self.assertEqual(movie_list_cards.status_code, 200)
         self.assertEqual(people.status_code, 200)
+        self.assertEqual(keywords.status_code, 200)
+        self.assertEqual(keywords_with_refresh_ignored.status_code, 200)
+        self.assertEqual(writer_cards.status_code, 200)
+        self.assertEqual(keyword_cards.status_code, 200)
+        self.assertEqual(writer_selection.status_code, 200)
+        self.assertEqual(keyword_selection.status_code, 200)
         self.assertEqual(details.status_code, 200)
         self.assertEqual(ownership.status_code, 200)
         full_item = next(item for item in full.get_json()["items"] if item["tmdb_id"] == "100")
@@ -350,6 +377,16 @@ class SqlMigrationParityTest(unittest.TestCase):
                 f"People projection {field}",
             )
         self.assertEqual(people_item["canonical_metadata"]["cast"][0]["name"], "Lead Actor 1")
+        self.assertEqual(people_item["canonical_metadata"]["writers"][0]["name"], "Lead Writer")
+        self.assertEqual(keywords.get_json()["items"][0]["normalized_name"], "time travel")
+        self.assertEqual(
+            keywords_with_refresh_ignored.get_json()["items"],
+            keywords.get_json()["items"],
+        )
+        self.assertEqual(writer_cards.get_json()["total"], 1)
+        self.assertEqual(keyword_cards.get_json()["total"], 1)
+        self.assertEqual(writer_selection.get_json()["paths"], [str(self.paths["corrected"])])
+        self.assertEqual(keyword_selection.get_json()["paths"], [str(self.paths["corrected"])])
         self.assertEqual(full_item["canonical_metadata"]["plot"], "TMDB plot wins the canonical summary.")
 
     def test_owned_details_route_never_uses_full_catalog_or_snapshot(self):
