@@ -1,4 +1,4 @@
-import { Clapperboard, Film } from 'lucide-react';
+import { Clapperboard, Film, PenLine } from 'lucide-react';
 import { useState } from 'react';
 
 function PersonPortrait({ person }) {
@@ -22,6 +22,7 @@ function PersonPortrait({ person }) {
 export default function PersonSearchCard({ person, meta, knownFor = [], roles = [], onOpenFilmography }) {
   const canBrowseActing = roles.includes('actor');
   const canBrowseDirecting = roles.includes('director');
+  const canBrowseWriting = roles.includes('writer');
 
   return (
     <article className="person-search-card">
@@ -40,6 +41,11 @@ export default function PersonSearchCard({ person, meta, knownFor = [], roles = 
         {canBrowseDirecting && (
           <button type="button" className="btn btn-secondary" onClick={() => onOpenFilmography(person, 'director')}>
             <Clapperboard size={15} /> Directed films
+          </button>
+        )}
+        {canBrowseWriting && (
+          <button type="button" className="btn btn-secondary" onClick={() => onOpenFilmography(person, 'writer')}>
+            <PenLine size={15} /> Written films
           </button>
         )}
       </div>

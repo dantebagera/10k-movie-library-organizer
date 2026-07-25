@@ -14,6 +14,7 @@ import Pagination from '../../components/Pagination.jsx';
 import Rating from '../../components/Rating.jsx';
 import PosterEditorModal from '../../components/PosterEditorModal.jsx';
 import PersonSearchCard from '../../components/PersonSearchCard.jsx';
+import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
 import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components/MovieLanguageToggle.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
@@ -1195,8 +1196,20 @@ export default function DiscoverWorkspace({
             <input
               value={activeTab === 'browse' ? browseQuery : tmdbQuery}
               onChange={(event) => (activeTab === 'browse' ? setBrowseQuery : setTmdbQuery)(event.target.value)}
-              placeholder={activeTab === 'browse' ? 'Search movie indexers...' : discoverSearchKind === 'people' ? 'Search TMDB people...' : 'Search TMDB movies...'}
-              aria-label={activeTab === 'browse' ? 'Search movie indexers' : discoverSearchKind === 'people' ? 'Search TMDB people' : 'Search TMDB movies'}
+              placeholder={activeTab === 'browse'
+                ? 'Search movie indexers...'
+                : discoverSearchKind === 'people'
+                  ? 'Search TMDB people...'
+                  : discoverSearchKind === 'keywords'
+                    ? 'Search TMDB keywords...'
+                    : 'Search TMDB movies...'}
+              aria-label={activeTab === 'browse'
+                ? 'Search movie indexers'
+                : discoverSearchKind === 'people'
+                  ? 'Search TMDB people'
+                  : discoverSearchKind === 'keywords'
+                    ? 'Search TMDB keywords'
+                    : 'Search TMDB movies'}
             />
           </label>
           {activeTab === 'explore' && (
@@ -1217,10 +1230,11 @@ export default function DiscoverWorkspace({
             >
               <option value="movies">Movies</option>
               <option value="people">People</option>
+              <option value="keywords">Keywords</option>
             </select>
           )}
-          <button type="submit" className="btn btn-primary discover-search-submit" disabled={activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading}>
-            {(activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading) ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Search
+          <button type="submit" className="btn btn-primary discover-search-submit" disabled={activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading}>
+            {(activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading) ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Search
           </button>
         </form>
       )}
@@ -1235,7 +1249,7 @@ export default function DiscoverWorkspace({
             onReset={resetDiscoverPath}
             onCrumb={jumpDiscoverPath}
           />
-          {discoverSearchKind !== 'people' && <div className="discover-toolbar">
+          {discoverSearchKind === 'movies' && <div className="discover-toolbar">
             <select value={discoverList} onChange={(event) => selectDiscoverList(event.target.value)}>
               {discoverLists.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
@@ -1293,7 +1307,7 @@ export default function DiscoverWorkspace({
                 : `${formatCount(discoverTotalResults || discoverResults.length)} titles`}
             </span>
           </div>}
-          {discoverSearchKind !== 'people' && filteredDiscoverResults.length > 0 && (
+          {discoverSearchKind === 'movies' && filteredDiscoverResults.length > 0 && (
             <div className="bulk-selection-bar discover-bulk-selection">
               <SelectionCheckbox
                 className="discover-selection-master"
@@ -1319,6 +1333,13 @@ export default function DiscoverWorkspace({
               error={discoverPeopleError}
               people={discoverPeopleResults}
               onOpenFilmography={openSearchedPersonFilmography}
+            />
+          ) : discoverSearchKind === 'keywords' ? (
+            <KeywordSearchResults
+              loading={discoverKeywordLoading}
+              error={discoverKeywordError}
+              keywords={discoverKeywordResults}
+              onOpenKeyword={openSearchedKeywordMovies}
             />
           ) : <DiscoverResultGrid
             error={discoverError}
@@ -1660,6 +1681,30 @@ function PeopleSearchResults({ people, loading, error, onOpenFilmography }) {
           knownFor={person.known_for}
           roles={['actor', 'director', 'writer']}
           onOpenFilmography={onOpenFilmography}
+        />
+      ))}
+    </div>
+  );
+}
+
+function KeywordSearchResults({ keywords, loading, error, onOpenKeyword }) {
+  if (loading) {
+    return <div className="discover-grid keyword-search-grid"><div className="keyword-search-card skeleton-card" /></div>;
+  }
+  if (error) {
+    return <div className="empty-state discover-empty"><strong>Could not search TMDB keywords.</strong><span>{error}</span></div>;
+  }
+  if (!keywords.length) {
+    return <div className="empty-state discover-empty"><strong>Search TMDB keywords by name.</strong><span>Select a keyword identity to discover its movies.</span></div>;
+  }
+  return (
+    <div className="discover-grid keyword-search-grid">
+      {keywords.map((keyword) => (
+        <KeywordSearchCard
+          key={keyword.tmdb_id}
+          keyword={keyword}
+          scope="discover"
+          onOpen={onOpenKeyword}
         />
       ))}
     </div>

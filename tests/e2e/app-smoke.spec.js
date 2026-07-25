@@ -187,6 +187,7 @@ test('Library switches between canonical movie and raw file views', async ({ pag
 
 test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
   const profileUrl = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+  let writerFilterUrl = '';
   const peopleItem = {
     path: 'E:/Movies/Apollo.13.1995.mkv',
     canonical_metadata: {
@@ -201,6 +202,8 @@ test('Library people search renders stored actors and writers from canonical met
     plex_directors: []
   };
   await page.route('**/api/library?view=cards*', async (route) => {
+    const url = route.request().url();
+    if (new URL(url).searchParams.get('role') === 'writer') writerFilterUrl = url;
     await route.fulfill({ json: {
       items: [{
         path: peopleItem.path,
@@ -224,9 +227,13 @@ test('Library people search renders stored actors and writers from canonical met
   await expect.poll(() => portrait.evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
 
   await page.getByPlaceholder('Search people in your library...').fill('William Broyles');
-  await expect(
-    page.locator('.person-search-card').filter({ hasText: 'William Broyles Jr.' })
-  ).toBeVisible();
+  const writerCard = page.locator('.person-search-card').filter({ hasText: 'William Broyles Jr.' });
+  await expect(writerCard).toBeVisible();
+  const writerAction = writerCard.getByRole('button', { name: 'Written films' });
+  await expect(writerAction).toBeVisible();
+  await writerAction.click();
+  await expect.poll(() => writerFilterUrl).not.toBe('');
+  expect(new URL(writerFilterUrl).searchParams.get('person_id')).toBe('99');
 });
 
 test('existing actor and director People search remains available in Library and Discover', async ({ page }) => {
@@ -244,11 +251,13 @@ test('existing actor and director People search remains available in Library and
       title: parityMovie.title,
       year: parityMovie.year,
       cast: [{ id: person.id, name: person.name }],
-      directors: [{ id: person.id, name: person.name }]
+      directors: [{ id: person.id, name: person.name }],
+      writers: [{ id: person.id, name: person.name, job: 'Writer' }]
     },
     plex_cast: [],
     plex_directors: []
   };
+  let discoverWriterUrl = '';
   await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
     items: [parityLibraryItem],
     count: 1,
@@ -268,6 +277,17 @@ test('existing actor and director People search remains available in Library and
     total_pages: 1,
     total_results: 1
   } }));
+  await page.route('**/api/tmdb/person_movies**', (route) => {
+    discoverWriterUrl = route.request().url();
+    return route.fulfill({ json: {
+      results: [parityMovie],
+      page: 1,
+      total_pages: 1,
+      total_results: 1,
+      role: 'writer',
+      person_id: person.id
+    } });
+  });
 
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   await page.getByLabel('Library search type').selectOption('people');
@@ -275,6 +295,7 @@ test('existing actor and director People search remains available in Library and
   const libraryPerson = page.locator('.person-search-card').filter({ hasText: person.name });
   await expect(libraryPerson.getByRole('button', { name: 'Acting credits' })).toBeVisible();
   await expect(libraryPerson.getByRole('button', { name: 'Directed films' })).toBeVisible();
+  await expect(libraryPerson.getByRole('button', { name: 'Written films' })).toBeVisible();
 
   await page.goto('/discover', { waitUntil: 'domcontentloaded' });
   await page.getByLabel('TMDB search type').selectOption('people');
@@ -283,6 +304,257 @@ test('existing actor and director People search remains available in Library and
   const discoverPerson = page.locator('.person-search-card').filter({ hasText: person.name });
   await expect(discoverPerson.getByRole('button', { name: 'Acting credits' })).toBeVisible();
   await expect(discoverPerson.getByRole('button', { name: 'Directed films' })).toBeVisible();
+  const discoverWriterAction = discoverPerson.getByRole('button', { name: 'Written films' });
+  await expect(discoverWriterAction).toBeVisible();
+  await discoverWriterAction.click();
+  await expect.poll(() => discoverWriterUrl).not.toBe('');
+  expect(new URL(discoverWriterUrl).searchParams.get('role')).toBe('writer');
+});
+
+test('Library Keywords resolves a stored identity and filters owned SQL movies', async ({ page }) => {
+  const keywordMovie = {
+    ...parityLibraryItem,
+    path: 'E:/Movies/Space.Archive.2024.mkv',
+    canonical_metadata: {
+      ...parityLibraryItem.canonical_metadata,
+      title: 'Space Archive',
+      year: '2024',
+      tmdb_id: '5010'
+    }
+  };
+  let selectedKeywordUrl = '';
+
+  await page.route('**/api/library?view=keywords*', (route) => route.fulfill({ json: {
+    items: [{ keyword_key: 'tmdb:501', tmdb_id: '501', name: 'space opera', normalized_name: 'space opera', movie_count: 1 }],
+    count: 1,
+    source: 'catalog',
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/library?view=cards*', (route) => {
+    const url = route.request().url();
+    const selectedKeyword = new URL(url).searchParams.get('keyword_id');
+    if (selectedKeyword === '501') {
+      selectedKeywordUrl = url;
+      return route.fulfill({ json: {
+        items: [keywordMovie],
+        count: 1,
+        total: 1,
+        page: 1,
+        total_pages: 1,
+        page_start: 1,
+        page_end: 1,
+        catalog_generation: 1
+      } });
+    }
+    return route.fulfill({ json: {
+      items: [parityLibraryItem],
+      count: 1,
+      total: 1,
+      page: 1,
+      total_pages: 1,
+      page_start: 1,
+      page_end: 1,
+      catalog_generation: 1
+    } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Library search type').selectOption('keywords');
+  await page.getByPlaceholder('Search keywords in your library...').fill('space');
+
+  const keywordCard = page.locator('.keyword-search-card').filter({ hasText: 'space opera' });
+  await expect(keywordCard).toContainText('1 owned movie');
+  await keywordCard.getByRole('button', { name: 'View owned movies' }).click();
+
+  await expect(page.getByLabel('Library search type')).toHaveValue('movies');
+  await expect(page.getByText('Space Archive', { exact: true })).toBeVisible();
+  await expect(page.locator('.metadata-filter-chip')).toContainText('Keyword: space opera');
+  expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
+});
+
+test('Library Keywords ignores an older in-flight SQL suggestion response', async ({ page }) => {
+  let releaseSlowSearch;
+  let slowSearchStarted = false;
+  const slowSearchGate = new Promise((resolve) => {
+    releaseSlowSearch = resolve;
+  });
+
+  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+    items: [],
+    count: 0,
+    total: 0,
+    page: 1,
+    total_pages: 1,
+    page_start: 0,
+    page_end: 0,
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/library?view=keywords*', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q');
+    if (query === 'slow') {
+      slowSearchStarted = true;
+      await slowSearchGate;
+      await route.fulfill({ json: {
+        items: [{ keyword_key: 'tmdb:1', tmdb_id: '1', name: 'slow keyword', movie_count: 1 }],
+        count: 1,
+        catalog_generation: 1
+      } });
+      return;
+    }
+    await route.fulfill({ json: {
+      items: [{ keyword_key: 'tmdb:2', tmdb_id: '2', name: 'current keyword', movie_count: 1 }],
+      count: 1,
+      catalog_generation: 1
+    } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Library search type').selectOption('keywords');
+  const keywordInput = page.getByLabel('Search keywords in your library');
+  await keywordInput.fill('slow');
+  await expect.poll(() => slowSearchStarted).toBe(true);
+
+  await keywordInput.fill('current');
+  await expect(page.locator('.keyword-search-card').filter({ hasText: 'current keyword' })).toBeVisible();
+  releaseSlowSearch();
+  await expect(page.locator('.keyword-search-card').filter({ hasText: 'slow keyword' })).toHaveCount(0);
+});
+
+test('Discover Keywords keeps TMDB identity, ownership attachment, and back navigation', async ({ page }) => {
+  const keywordMovie = {
+    tmdb_id: '8801',
+    title: 'Remote Space Archive',
+    year: '2024',
+    poster_url: '',
+    genres: ['Science Fiction'],
+    tmdb_rating: '7.8',
+    tmdb_vote_count: 900,
+    plot: 'A remote keyword result.'
+  };
+  let selectedKeywordUrl = '';
+
+  await page.route('**/api/tmdb/keywords/search**', (route) => route.fulfill({ json: {
+    results: [{ tmdb_id: '501', name: 'space opera' }],
+    page: 1,
+    total_pages: 1,
+    total_results: 1
+  } }));
+  await page.route('**/api/tmdb/discover**', (route) => {
+    const url = route.request().url();
+    if (new URL(url).searchParams.get('keyword_id') === '501') {
+      selectedKeywordUrl = url;
+      return route.fulfill({ json: {
+        results: [keywordMovie],
+        keyword: { tmdb_id: '501', name: 'space opera' },
+        page: 1,
+        total_pages: 1,
+        total_results: 1
+      } });
+    }
+    return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
+  });
+  await page.route('**/api/library/check', async (route) => route.fulfill({ json: {
+    results: [{
+      found: true,
+      path: 'E:/Movies/Remote.Space.Archive.2024.mkv',
+      resolution: '1080p',
+      size_human: '4 GB',
+      tmdb_id: keywordMovie.tmdb_id,
+      title: keywordMovie.title,
+      year: keywordMovie.year,
+      canonical_card: {
+        path: 'E:/Movies/Remote.Space.Archive.2024.mkv',
+        canonical_metadata: { accepted: true, ...keywordMovie }
+      }
+    }],
+    catalog_generation: 1
+  } }));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('keywords');
+  await page.getByLabel('Search TMDB keywords').fill('space');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  const keywordCard = page.locator('.keyword-search-card').filter({ hasText: 'space opera' });
+  await expect(keywordCard).toBeVisible();
+  await keywordCard.getByRole('button', { name: 'Discover movies' }).click();
+
+  await expect(page.getByText('Remote Space Archive', { exact: true })).toBeVisible();
+  await expect(page.locator('.unified-owned-badge').filter({ hasText: 'Owned' })).toBeVisible();
+  expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByLabel('TMDB search type')).toHaveValue('keywords');
+  await expect(page.locator('.keyword-search-card').filter({ hasText: 'space opera' })).toBeVisible();
+});
+
+test('Discover Keywords ignores a stale TMDB keyword response', async ({ page }) => {
+  let releaseSlowSearch;
+  let slowSearchStarted = false;
+  const slowSearchGate = new Promise((resolve) => {
+    releaseSlowSearch = resolve;
+  });
+
+  await page.route('**/api/tmdb/keywords/search**', async (route) => {
+    const query = new URL(route.request().url()).searchParams.get('q');
+    if (query === 'slow') {
+      slowSearchStarted = true;
+      await slowSearchGate;
+      await route.fulfill({ json: {
+        results: [{ tmdb_id: '1', name: 'slow keyword' }],
+        page: 1,
+        total_pages: 1,
+        total_results: 1
+      } });
+      return;
+    }
+    await route.fulfill({ json: {
+      results: [{ tmdb_id: '2', name: 'current keyword' }],
+      page: 1,
+      total_pages: 1,
+      total_results: 1
+    } });
+  });
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('keywords');
+  const keywordInput = page.getByLabel('Search TMDB keywords');
+  await keywordInput.fill('slow');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => slowSearchStarted).toBe(true);
+
+  await keywordInput.fill('current');
+  await page.locator('form.discover-search-panel').evaluate((form) => form.requestSubmit());
+  await expect(page.locator('.keyword-search-card').filter({ hasText: 'current keyword' })).toBeVisible();
+  releaseSlowSearch();
+  await expect(page.locator('.keyword-search-card').filter({ hasText: 'slow keyword' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled();
+});
+
+test('Keyword modes surface their authoritative SQL and TMDB errors', async ({ page }) => {
+  await page.route('**/api/library?view=keywords*', (route) => route.fulfill({
+    status: 500,
+    json: { error: 'Stored keyword lookup failed.' }
+  }));
+  await page.route('**/api/tmdb/keywords/search**', (route) => route.fulfill({
+    status: 502,
+    json: { error: 'TMDB keyword lookup failed.' }
+  }));
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Library search type').selectOption('keywords');
+  await expect(page.getByText('Search keywords in your library.')).toBeVisible();
+  await page.getByLabel('Search keywords in your library').fill('broken');
+  await expect(page.getByText('Could not search stored keywords.')).toBeVisible();
+  await expect(page.getByText('Stored keyword lookup failed.')).toBeVisible();
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('keywords');
+  await expect(page.getByText('Search TMDB keywords by name.')).toBeVisible();
+  await page.getByLabel('Search TMDB keywords').fill('broken');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByText('Could not search TMDB keywords.')).toBeVisible();
+  await expect(page.getByText('TMDB keyword lookup failed.')).toBeVisible();
 });
 
 test('Discover People search ignores a stale response and clears its loading state', async ({ page }) => {

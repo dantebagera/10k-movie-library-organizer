@@ -309,6 +309,25 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("role: ['actor', 'director', 'writer'].includes(role) ? role : 'actor'", APP)
         self.assertIn("Directed films", APP)
 
+    def test_shared_desktop_search_ui_exposes_writer_and_keyword_actions(self):
+        library_source = (ROOT / "src" / "features" / "library" / "LibraryWorkspace.jsx").read_text(encoding="utf-8")
+        discover_source = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+        person_card_source = (ROOT / "src" / "components" / "PersonSearchCard.jsx").read_text(encoding="utf-8")
+        keyword_card_source = (ROOT / "src" / "components" / "KeywordSearchCard.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("const canBrowseWriting = roles.includes('writer');", person_card_source)
+        self.assertIn("Written films", person_card_source)
+        self.assertIn('<option value="keywords">Keywords</option>', library_source)
+        self.assertIn("/api/library?view=keywords", library_source)
+        self.assertIn("keyword_id: keywordFilter?.tmdb_id || ''", library_source)
+        self.assertIn("<KeywordSearchCard", library_source)
+        self.assertIn('<option value="keywords">Keywords</option>', discover_source)
+        self.assertIn("Search TMDB keywords...", discover_source)
+        self.assertIn("<KeywordSearchResults", discover_source)
+        self.assertIn("onOpenKeyword={openSearchedKeywordMovies}", discover_source)
+        self.assertIn("View owned movies", keyword_card_source)
+        self.assertIn("Discover movies", keyword_card_source)
+
     def test_library_expanded_card_removes_duplicate_metadata_strip(self):
         library_card_start = APP.index("function LibraryMovieCard")
         library_card_source = APP[library_card_start:]

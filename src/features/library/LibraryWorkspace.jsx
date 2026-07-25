@@ -13,6 +13,7 @@ import ListEditorModal from '../../components/ListEditorModal.jsx';
 import MetadataCorrectionModal from '../../components/MetadataCorrectionModal.jsx';
 import PosterEditorModal from '../../components/PosterEditorModal.jsx';
 import PersonSearchCard from '../../components/PersonSearchCard.jsx';
+import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
@@ -48,6 +49,34 @@ function LibraryPeopleSearchResults({ people, query, onOpenFilmography }) {
   );
 }
 
+function LibraryKeywordSearchResults({ keywords, query, loading, error, onOpenKeyword }) {
+  if (loading) {
+    return <div className="discover-grid keyword-search-grid"><div className="keyword-search-card skeleton-card" /></div>;
+  }
+  if (error) {
+    return <div className="empty-state library-empty"><strong>Could not search stored keywords.</strong><span>{error}</span></div>;
+  }
+  if (!query.trim()) {
+    return <div className="empty-state library-empty"><strong>Search keywords in your library.</strong><span>Only normalized keywords already attached to owned SQL movies are used.</span></div>;
+  }
+  if (!keywords.length) {
+    return <div className="empty-state library-empty"><strong>No owned keywords match that search.</strong><span>Try a shorter spelling or search movie titles instead.</span></div>;
+  }
+  return (
+    <div className="discover-grid keyword-search-grid library-keyword-search-grid">
+      {keywords.map((keyword) => (
+        <KeywordSearchCard
+          key={keyword.keyword_key || keyword.tmdb_id || keyword.normalized_name}
+          keyword={keyword}
+          scope="library"
+          meta={`${formatCount(keyword.movie_count)} owned movie${Number(keyword.movie_count) === 1 ? '' : 's'}`}
+          onOpen={onOpenKeyword}
+        />
+      ))}
+    </div>
+  );
+}
+
 function librarySelectionKey(item) {
   return item.path || movieIdentityKey(moviePayload(item));
 }
@@ -72,6 +101,9 @@ function libraryFilterQuery(filters, page, pageSize, forceScan = false) {
     role: filters.role,
     person_id: filters.person_id,
     person_name: filters.person_name,
+    keyword_id: filters.keyword_id,
+    keyword_name: filters.keyword_name,
+    keyword_query: filters.keyword_query,
     collection_id: filters.collection_id,
     collection_paths: JSON.stringify(filters.collection_paths || []),
     list_id: filters.list_id
@@ -112,6 +144,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   const [userLists, setUserLists] = useState([]);
   const [librarySearchKind, setLibrarySearchKind] = useState('movies');
   const [roleFilter, setRoleFilter] = useState(null);
+  const [keywordFilter, setKeywordFilter] = useState(null);
   const [collectionFilter, setCollectionFilter] = useState(null);
   const [listFilter, setListFilter] = useState(null);
   const [metadataStatus, setMetadataStatus] = useState('');
@@ -128,6 +161,9 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [peopleItems, setPeopleItems] = useState([]);
+  const [libraryKeywordResults, setLibraryKeywordResults] = useState([]);
+  const [libraryKeywordLoading, setLibraryKeywordLoading] = useState(false);
+  const [libraryKeywordError, setLibraryKeywordError] = useState('');
   const [listCoverageItems, setListCoverageItems] = useState([]);
   const [libraryResult, setLibraryResult] = useState({
     total: 0, page: 1, total_pages: 1, page_start: 0, page_end: 0,
@@ -135,6 +171,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     stats: { total: 0, low: 0, matched: 0, pending: 0, unmatched: 0 }
   });
   const libraryRequestSeq = useRef(0);
+  const libraryKeywordRequestSeq = useRef(0);
   const peopleLoadPromiseRef = useRef(null);
 
   useEffect(() => {
@@ -178,10 +215,13 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     role: roleFilter?.role || '',
     person_id: roleFilter?.id || '',
     person_name: roleFilter?.name || '',
+    keyword_id: keywordFilter?.tmdb_id || '',
+    keyword_name: keywordFilter?.tmdb_id ? '' : keywordFilter?.name || '',
+    keyword_query: '',
     collection_id: collectionFilter?.id || '',
     collection_paths: collectionFilter?.owned_paths || [],
     list_id: listFilter?.id || ''
-  }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, collectionFilter, listFilter]);
+  }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, collectionFilter, listFilter]);
 
   const loadLibrary = useCallback(async (forceScan = false, options = {}) => {
     const requestSeq = libraryRequestSeq.current + 1;
@@ -282,6 +322,46 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     if (mode !== 'movie' || librarySearchKind !== 'people' || peopleLoaded) return;
     loadPeopleProjection().catch((peopleError) => notify(`People index unavailable: ${peopleError.message}`, 'error'));
   }, [librarySearchKind, loadPeopleProjection, mode, notify, peopleLoaded]);
+
+  const loadKeywordProjection = useCallback(async (keywordQuery) => {
+    const normalizedQuery = String(keywordQuery || '').trim();
+    const requestSeq = libraryKeywordRequestSeq.current + 1;
+    libraryKeywordRequestSeq.current = requestSeq;
+    if (!normalizedQuery) {
+      setLibraryKeywordResults([]);
+      setLibraryKeywordError('');
+      setLibraryKeywordLoading(false);
+      return;
+    }
+    setLibraryKeywordLoading(true);
+    setLibraryKeywordError('');
+    setLibraryKeywordResults([]);
+    try {
+      const data = await fetchJson(`/api/library?view=keywords&q=${encodeURIComponent(normalizedQuery)}&limit=50`);
+      if (requestSeq !== libraryKeywordRequestSeq.current) return;
+      observeCatalogGeneration(data.catalog_generation);
+      setLibraryKeywordResults(data.items || []);
+    } catch (keywordError) {
+      if (requestSeq !== libraryKeywordRequestSeq.current) return;
+      setLibraryKeywordError(keywordError.message);
+    } finally {
+      if (requestSeq === libraryKeywordRequestSeq.current) setLibraryKeywordLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    libraryKeywordRequestSeq.current += 1;
+    if (mode !== 'movie' || librarySearchKind !== 'keywords') {
+      setLibraryKeywordLoading(false);
+      return undefined;
+    }
+    setLibraryKeywordResults([]);
+    setLibraryKeywordError('');
+    setLibraryKeywordLoading(Boolean(query.trim()));
+    if (!query.trim()) return undefined;
+    const timer = window.setTimeout(() => loadKeywordProjection(query), 150);
+    return () => window.clearTimeout(timer);
+  }, [librarySearchKind, loadKeywordProjection, mode, query]);
 
   useEffect(() => {
     function handleLibraryChanged(event) {
@@ -555,6 +635,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     setSizeFilter('all');
     setViewingStateFilter('all');
     setRoleFilter(null);
+    setKeywordFilter(null);
     setCollectionFilter(null);
     setListFilter(null);
     setMetadataStatus('');
@@ -608,6 +689,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       name: person.name || '',
       localOnly: Boolean(options.localOnly)
     });
+    setKeywordFilter(null);
     setQuery('');
     setCollectionFilter(null);
     resetLibraryPage();
@@ -619,9 +701,22 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     applyRoleFilter(role, person, { localOnly: true });
   }
 
+  function applyLibraryKeywordFilter(keyword) {
+    if (!keyword?.name) return;
+    setLibrarySearchKind('movies');
+    setKeywordFilter(keyword);
+    setRoleFilter(null);
+    setCollectionFilter(null);
+    setListFilter(null);
+    setQuery('');
+    setMetadataStatus('');
+    resetLibraryPage();
+  }
+
   async function applyCollectionFilter(collection) {
     if (!collection?.id) return;
     setRoleFilter(null);
+    setKeywordFilter(null);
     setListFilter(null);
     setQuery('');
     resetLibraryPage();
@@ -650,6 +745,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
 
   function clearMetadataFilters() {
     setRoleFilter(null);
+    setKeywordFilter(null);
     setCollectionFilter(null);
     setListFilter(null);
     setMetadataStatus('');
@@ -658,6 +754,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
 
   function applyListFilter(list) {
     setRoleFilter(null);
+    setKeywordFilter(null);
     setCollectionFilter(null);
     setListFilter(list);
     setQuery('');
@@ -870,19 +967,43 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       <form className="library-search-panel" data-people-search={mode === 'movie' || undefined} onSubmit={(event) => { event.preventDefault(); resetLibraryPage(); }}>
         <label className="library-search library-main-search">
           <Search size={17} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={mode === 'movie' && librarySearchKind === 'people' ? 'Search people in your library...' : 'Search your offline library...'} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={mode !== 'movie'
+              ? 'Search your offline library...'
+              : librarySearchKind === 'people'
+                ? 'Search people in your library...'
+                : librarySearchKind === 'keywords'
+                  ? 'Search keywords in your library...'
+                  : 'Search your offline library...'}
+            aria-label={mode !== 'movie'
+              ? 'Search your offline library'
+              : librarySearchKind === 'people'
+                ? 'Search people in your library'
+                : librarySearchKind === 'keywords'
+                  ? 'Search keywords in your library'
+                  : 'Search your offline library'}
+          />
         </label>
         {mode === 'movie' && (
           <select
             value={librarySearchKind}
             onChange={(event) => {
-              setLibrarySearchKind(event.target.value);
+              const nextSearchKind = event.target.value;
+              if (nextSearchKind !== 'movies') {
+                libraryRequestSeq.current += 1;
+                setLoading(false);
+              }
+              setError('');
+              setLibrarySearchKind(nextSearchKind);
               resetLibraryPage();
             }}
             aria-label="Library search type"
           >
             <option value="movies">Movies</option>
             <option value="people">People</option>
+            <option value="keywords">Keywords</option>
           </select>
         )}
         <button type="submit" className="btn btn-primary library-search-submit">
@@ -890,7 +1011,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         </button>
       </form>
 
-      {librarySearchKind !== 'people' && <div className={cx('library-toolbar library-filter-toolbar', !filtersOpen && 'library-filter-toolbar-collapsed')}>
+      {librarySearchKind === 'movies' && <div className={cx('library-toolbar library-filter-toolbar', !filtersOpen && 'library-filter-toolbar-collapsed')}>
         {!filtersOpen ? (
           <>
             <span>Filters collapsed: quality, resolution, source, genre, viewing state, language, country, year, rating, sort</span>
@@ -998,7 +1119,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         </div>
       )}
 
-      {(roleFilter || collectionFilter || listFilter || metadataStatus) && (
+      {(roleFilter || keywordFilter || collectionFilter || listFilter || metadataStatus) && (
         <div className="metadata-filter-bar">
           {metadataStatus && (
             <span className="metadata-filter-status">
@@ -1008,7 +1129,13 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
           )}
           {roleFilter && (
             <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
-              {roleFilter.role === 'director' ? 'Director' : 'Actor'}: {roleFilter.name}
+              {roleFilter.role === 'writer' ? 'Writer' : roleFilter.role === 'director' ? 'Director' : 'Actor'}: {roleFilter.name}
+              <X size={14} />
+            </button>
+          )}
+          {keywordFilter && (
+            <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
+              Keyword: {keywordFilter.name}
               <X size={14} />
             </button>
           )}
@@ -1043,6 +1170,14 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
             people={libraryPeopleResults}
             query={query}
             onOpenFilmography={applyLibraryPersonFilter}
+          />
+        ) : librarySearchKind === 'keywords' && mode === 'movie' ? (
+          <LibraryKeywordSearchResults
+            keywords={libraryKeywordResults}
+            query={query}
+            loading={libraryKeywordLoading}
+            error={libraryKeywordError}
+            onOpenKeyword={applyLibraryKeywordFilter}
           />
         ) : (
         <>
