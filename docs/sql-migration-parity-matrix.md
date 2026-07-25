@@ -86,7 +86,7 @@ The schema-7 acceptance measurements are recorded in `docs/sql-investigation/cat
 
 ## Writer and keyword search acceptance addendum
 
-The schema-8 writer and keyword implementation was exercised on 2026-07-25 against a SQLite-backup clone of the Gate 0 rehearsal catalogue. The live schema-7 catalogue was not migrated.
+The schema-8 writer and keyword implementation was exercised on 2026-07-25 against a SQLite-backup clone of the Gate 0 rehearsal catalogue. Dante then separately approved the controlled live rollout, which completed against the production catalogue with a fresh verified backup and two-start verification.
 
 | Acceptance area | Final evidence | Result |
 | --- | --- | --- |
@@ -100,6 +100,6 @@ The schema-8 writer and keyword implementation was exercised on 2026-07-25 again
 | Expanded owned details | The desktop clone rendered stored writers and keywords through `/api/library/details` with a 200 response and no provider call. | Passed |
 | Assets and overrides | SQL-generated rollback documents now include metadata and poster overrides. A relocated browser clone served all 21 observed `/api/assets` requests with 200 responses, with no 409 or 500 response. | Passed |
 | SQLite and restart | Schema version 8, integrity `ok`, 0 foreign-key violations, no partial migration objects, and a second open performed no migration rewrite. | Passed |
-| Live rollout | The production catalogue remains schema 7. Migration requires Dante's separate controlled-live-rollout approval. | Pending approval |
+| Live rollout | Fresh archive `cp-catalog-migration-20260725T172051Z.zip` was checksum verified and rehearsal restored. Production migrated atomically to schema 8 with preserved cast/director and provider-JSON digests, zero migration provider calls, zero parity violations, integrity `ok`, 0 foreign-key violations, and successful first- and second-start desktop/API verification. | Passed |
 
 The final ownership map is `docs/plans/writer-keyword-search-authoritative-paths.md`. The complete command, path, count, digest, parity, runtime, and test record is `docs/plans/writer-keyword-search-stage-e-evidence-2026-07-25.md`.
