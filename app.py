@@ -9889,8 +9889,14 @@ def tmdb_details():
     transient = language != 'en-US'
     try:
         cached = None if transient else _tmdb_library_cache.get(str(tmdb_id))
-        if cached and not refresh and cached.get('data', {}).get('release_date'):
-            data = dict(cached.get('data', {}))
+        cached_data = dict(cached.get('data', {})) if cached else {}
+        if (
+            cached
+            and not refresh
+            and cached_data.get('release_date')
+            and _tmdb_card_projection_is_complete(cached_data)
+        ):
+            data = cached_data
             data['cached'] = True
             data['fetched_at'] = cached.get('fetched_at', 0)
             return jsonify(data)
@@ -9906,7 +9912,7 @@ def tmdb_details():
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = _json.loads(resp.read().decode())
 
-        details = _normalize_tmdb_metadata(raw) if transient else {}
+        details = _normalize_tmdb_metadata(raw)
         details.update(_normalize_tmdb_details_payload(raw))
         details['tmdb_id'] = str(tmdb_id)
         fetched_at = time.time()

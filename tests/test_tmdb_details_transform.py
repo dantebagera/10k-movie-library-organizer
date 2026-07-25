@@ -368,14 +368,18 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(projection["genres"], ["Short"])
         self.assertEqual(projection["director"]["name"], "Irene M. Borrego")
 
-    def test_tmdb_details_endpoint_refetches_cached_payload_without_release_date(self):
+    def test_tmdb_details_endpoint_refetches_cached_payload_without_movie_projection(self):
         original_key = app._tmdb_key
         original_cache = app._tmdb_library_cache
         app._tmdb_key = "tmdb-key"
         app._tmdb_library_cache = {
             "1368337": {
                 "fetched_at": 1,
-                "data": {"tmdb_id": "1368337", "runtime": 100},
+                "data": {
+                    "tmdb_id": "1368337",
+                    "runtime": 100,
+                    "release_date": "2026-07-15",
+                },
             }
         }
 
@@ -390,8 +394,11 @@ class TmdbDetailsTransformTest(unittest.TestCase):
                 return app._json.dumps({
                     "id": 1368337,
                     "title": "The Odyssey",
+                    "overview": "Odysseus begins his long voyage home.",
                     "release_date": "2026-07-15",
                     "runtime": 100,
+                    "genres": [{"id": 12, "name": "Adventure"}],
+                    "vote_average": 8.1,
                     "credits": {"crew": [], "cast": []},
                     "videos": {"results": []},
                 }).encode()
@@ -408,6 +415,9 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         payload = response.get_json()
         self.assertTrue(urlopen.called)
         self.assertFalse(payload["cached"])
+        self.assertEqual(payload["title"], "The Odyssey")
+        self.assertEqual(payload["plot"], "Odysseus begins his long voyage home.")
+        self.assertEqual(payload["genres"], ["Adventure"])
         self.assertEqual(payload["release_date"], "2026-07-15")
 
     def test_arabic_tmdb_details_are_transient_and_do_not_touch_persistent_cache(self):
