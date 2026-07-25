@@ -2,6 +2,8 @@ import tempfile
 import unittest
 import gzip
 import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -9,6 +11,40 @@ import app
 
 
 class MetadataPerformanceTest(unittest.TestCase):
+    def test_unittest_runner_refuses_to_import_app_without_test_mode(self):
+        environment = os.environ.copy()
+        environment.pop("CP_TEST_MODE", None)
+        environment.pop("CP_TEST_ROOT", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "tests.test_metadata_performance.MetadataPerformanceTest.test_api_response_exposes_route_timing_headers",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python tests require CP_TEST_MODE=1", result.stderr)
+
+    def test_production_audit_import_is_not_mistaken_for_a_test_runner(self):
+        environment = os.environ.copy()
+        environment.pop("CP_TEST_MODE", None)
+        environment.pop("CP_TEST_ROOT", None)
+        result = subprocess.run(
+            [sys.executable, "-c", "import tools.catalog_parity_audit"],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_test_runtime_paths_are_all_isolated_under_declared_temporary_root(self):
         self.assertTrue(app._TEST_MODE, "Python tests must run with CP_TEST_MODE=1")
         declared_root = Path(os.environ["CP_TEST_ROOT"]).resolve()

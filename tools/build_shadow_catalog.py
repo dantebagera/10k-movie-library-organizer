@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -13,16 +13,23 @@ from services.catalog_store import CatalogStore
 from tools.catalog_migration_backup import BackupError, verify_backup
 
 
-CATALOG_SOURCE_DOCUMENTS = frozenset({
-    "app_metadata/files.json",
-    "app_metadata/tmdb_metadata.json",
-    "app_metadata/plex_metadata.json",
-    "app_metadata/manual_matches.json",
-    "app_metadata/identity_audit_fingerprints.json",
+CATALOG_TOP_LEVEL_DOCUMENTS = frozenset({
     "user_lists.json",
     "user_collections.json",
     "followed_releases.json",
 })
+
+
+def _is_catalog_source_document(name):
+    name = str(name or "")
+    if name in CATALOG_TOP_LEVEL_DOCUMENTS:
+        return True
+    parts = PurePosixPath(name).parts
+    return (
+        len(parts) == 2
+        and parts[0] == "app_metadata"
+        and parts[1].lower().endswith(".json")
+    )
 
 
 def _load_documents(archive_path, manifest):
@@ -33,7 +40,7 @@ def _load_documents(archive_path, manifest):
             if not archive_name.startswith("user-data/") or not archive_name.endswith(".json"):
                 continue
             relative_name = archive_name.removeprefix("user-data/")
-            if relative_name not in CATALOG_SOURCE_DOCUMENTS:
+            if not _is_catalog_source_document(relative_name):
                 continue
             try:
                 document = json.loads(archive.read(archive_name).decode("utf-8"))

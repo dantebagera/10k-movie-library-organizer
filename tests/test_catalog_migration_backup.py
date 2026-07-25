@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 import zipfile
@@ -128,6 +129,49 @@ class CatalogMigrationBackupTest(unittest.TestCase):
             self.assertIn("three", rollback_files["files"])
             self.assertTrue(shadow_path.is_file())
             self.assertTrue(report["passed"])
+
+    def test_shadow_imports_all_direct_metadata_documents_and_movie_overrides(self):
+        with tempfile.TemporaryDirectory() as root:
+            project, user_data = self._project(root)
+            metadata = user_data / "app_metadata"
+            (metadata / "metadata_authority.json").write_text(
+                json.dumps({"authority": "fixture"}),
+                encoding="utf-8",
+            )
+            (metadata / "poster_overrides.json").write_text(json.dumps({
+                "overrides": [{
+                    "id": "poster-1",
+                    "identity": {"tmdb_id": "1", "title": "Fixture", "year": "2026"},
+                    "identity_keys": ["tmdb:1"],
+                    "poster_url": "/api/library/posters/image/fixture.jpg",
+                    "source": "upload",
+                    "locked": True,
+                    "updated_at": 10,
+                }],
+            }), encoding="utf-8")
+
+            archive, _ = create_backup(project, Path(root) / "backups")
+            shadow_path, report = build_shadow_catalog(archive, Path(root) / "shadow.sqlite")
+            connection = sqlite3.connect(shadow_path)
+            try:
+                source_names = {
+                    row[0]
+                    for row in connection.execute("SELECT name FROM source_documents")
+                }
+                override_count = connection.execute(
+                    "SELECT COUNT(*) FROM movie_overrides"
+                ).fetchone()[0]
+                identity_key_count = connection.execute(
+                    "SELECT COUNT(*) FROM movie_override_identity_keys"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertTrue(report["passed"])
+        self.assertIn("app_metadata/metadata_authority.json", source_names)
+        self.assertIn("app_metadata/poster_overrides.json", source_names)
+        self.assertEqual(override_count, 1)
+        self.assertEqual(identity_key_count, 1)
 
     def test_backup_requires_a_passing_temporary_shadow_catalog(self):
         with tempfile.TemporaryDirectory() as root:

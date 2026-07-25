@@ -10,6 +10,7 @@ import subprocess
 import socket
 import sys
 import tempfile
+import traceback
 import concurrent.futures
 import urllib.request
 import urllib.parse
@@ -97,7 +98,19 @@ _startup_metrics = {
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _SLOW_ROUTE_MS = int(os.environ.get('CP_SLOW_ROUTE_MS', '250') or '250')
 _TEST_MODE = str(os.environ.get('CP_TEST_MODE', '') or '').strip() == '1'
-_UNIT_TEST_PROCESS = 'unittest' in sys.modules or 'pytest' in sys.modules
+_TEST_RUNNER_PATH = Path(sys.argv[0] if sys.argv else '').as_posix().lower()
+_TEST_RUNNER_NAME = Path(sys.argv[0] if sys.argv else '').name.lower()
+_UNITTEST_LOADER_ACTIVE = any(
+    '/unittest/' in Path(frame.filename).as_posix().lower()
+    and Path(frame.filename).name.lower() in {'loader.py', 'main.py', '__main__.py'}
+    for frame in traceback.extract_stack()
+)
+_UNIT_TEST_PROCESS = (
+    _UNITTEST_LOADER_ACTIVE
+    or '/unittest/' in _TEST_RUNNER_PATH
+    or _TEST_RUNNER_NAME in {'pytest', 'pytest.exe', 'py.test', 'py.test.exe'}
+    or _TEST_RUNNER_NAME.startswith('test_')
+)
 if _UNIT_TEST_PROCESS and not _TEST_MODE:
     raise RuntimeError('Python tests require CP_TEST_MODE=1 and an isolated CP_TEST_ROOT')
 _TEST_ROOT = None
