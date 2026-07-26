@@ -5,7 +5,7 @@ import zipfile
 from pathlib import Path
 
 
-CP_VERSION = "2.8.0"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 QBT_VERSION = "5.2.2"
 FFMPEG_VERSION = "8.1.1"
 EXCLUDED_QBT_NAMES = {
@@ -15,6 +15,15 @@ EXCLUDED_QBT_NAMES = {
     "incomplete",
     "downloads",
 }
+
+
+def read_project_version(project_root=PROJECT_ROOT):
+    package_path = Path(project_root) / "package.json"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    version = str(package.get("version") or "").strip()
+    if not version:
+        raise ValueError(f"Package version is missing: {package_path}")
+    return version
 
 
 def should_include_qbt_file(path):
@@ -27,18 +36,19 @@ def should_include_qbt_file(path):
     return True
 
 
-def build_qbt_manifest(version=QBT_VERSION):
+def build_qbt_manifest(version=QBT_VERSION, app_version=None):
+    app_version = app_version or read_project_version()
     return {
         "name": "qBittorrent",
         "version": version,
         "source": "official qBittorrent Windows x64 release",
         "website": "https://www.qbittorrent.org/",
         "license": "GPL",
-        "bundled_for": f"Cinema Paradiso {CP_VERSION}",
+        "bundled_for": f"Cinema Paradiso {app_version}",
     }
 
 
-def copy_qbt_runtime(source, destination, version=QBT_VERSION):
+def copy_qbt_runtime(source, destination, version=QBT_VERSION, app_version=None):
     source = Path(source)
     destination = Path(destination)
     executable = source / "qbittorrent.exe"
@@ -57,12 +67,13 @@ def copy_qbt_runtime(source, destination, version=QBT_VERSION):
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
-    manifest = build_qbt_manifest(version)
+    manifest = build_qbt_manifest(version, app_version=app_version)
     (destination / "cinema-paradiso-qbittorrent.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
 
-def build_ffmpeg_manifest(version=FFMPEG_VERSION):
+def build_ffmpeg_manifest(version=FFMPEG_VERSION, app_version=None):
+    app_version = app_version or read_project_version()
     return {
         "name": "FFmpeg",
         "version": version,
@@ -70,11 +81,11 @@ def build_ffmpeg_manifest(version=FFMPEG_VERSION):
         "website": "https://www.gyan.dev/ffmpeg/builds/",
         "license": "GPLv3",
         "purpose": "Local IPTV remuxing to browser-compatible HLS",
-        "bundled_for": f"Cinema Paradiso {CP_VERSION}",
+        "bundled_for": f"Cinema Paradiso {app_version}",
     }
 
 
-def copy_ffmpeg_runtime(source, destination, version=FFMPEG_VERSION):
+def copy_ffmpeg_runtime(source, destination, version=FFMPEG_VERSION, app_version=None):
     source = Path(source)
     destination = Path(destination)
     candidates = [source, source / "bin" / "ffmpeg.exe", source / "ffmpeg.exe"]
@@ -89,18 +100,19 @@ def copy_ffmpeg_runtime(source, destination, version=FFMPEG_VERSION):
     ffprobe = executable.with_name("ffprobe.exe")
     if ffprobe.is_file():
         shutil.copy2(ffprobe, bin_dir / "ffprobe.exe")
-    manifest = build_ffmpeg_manifest(version)
+    manifest = build_ffmpeg_manifest(version, app_version=app_version)
     (destination / "cinema-paradiso-ffmpeg.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
 
 
 def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_dir=None):
     project_root = Path(project_root).resolve()
+    app_version = read_project_version(project_root)
     qbt_source = Path(qbt_source or (project_root / "data" / "qbittorrent" / "versions" / QBT_VERSION)).resolve()
     default_ffmpeg_source = project_root / "runtime" / "ffmpeg"
     ffmpeg_source = Path(ffmpeg_source).resolve() if ffmpeg_source else (default_ffmpeg_source.resolve() if default_ffmpeg_source.exists() else None)
     output_dir = Path(output_dir or (project_root / "release")).resolve()
-    staging = output_dir / f"Cinema-Paradiso-{CP_VERSION}-Portable"
+    staging = output_dir / f"Cinema-Paradiso-{app_version}-Portable"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
@@ -127,10 +139,20 @@ def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_
             shutil.copytree(item, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         else:
             shutil.copy2(item, target)
-    copy_qbt_runtime(qbt_source, staging / "runtime" / "qbittorrent" / "versions" / QBT_VERSION, QBT_VERSION)
+    copy_qbt_runtime(
+        qbt_source,
+        staging / "runtime" / "qbittorrent" / "versions" / QBT_VERSION,
+        QBT_VERSION,
+        app_version=app_version,
+    )
     if ffmpeg_source:
-        copy_ffmpeg_runtime(ffmpeg_source, staging / "runtime" / "ffmpeg", FFMPEG_VERSION)
-    zip_path = output_dir / f"Cinema-Paradiso-{CP_VERSION}-Portable.zip"
+        copy_ffmpeg_runtime(
+            ffmpeg_source,
+            staging / "runtime" / "ffmpeg",
+            FFMPEG_VERSION,
+            app_version=app_version,
+        )
+    zip_path = output_dir / f"Cinema-Paradiso-{app_version}-Portable.zip"
     if zip_path.exists():
         zip_path.unlink()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:

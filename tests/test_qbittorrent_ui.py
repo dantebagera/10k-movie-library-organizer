@@ -117,17 +117,17 @@ class QBittorrentUiTests(unittest.TestCase):
         self.assertIn("Preparing stream", modal_source)
         self.assertIn("This stream is taking longer than usual", modal_source)
 
-    def test_readme_and_package_document_265_bundled_qbt_and_help(self):
+    def test_readme_and_changelog_match_package_release_version(self):
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
         package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        release_version = package["version"]
 
-        self.assertEqual(package["version"], "2.8.0")
-        self.assertIn("v2.8.0", readme)
+        self.assertIn(f"**Current release: v{release_version}**", readme)
         self.assertIn("Help", readme)
         self.assertIn("bundled qbittorrent", readme.lower())
-        self.assertIn("v2.8.0", changelog)
+        self.assertIn(f"## v{release_version}", changelog)
         self.assertIn("Help", changelog)
 
 

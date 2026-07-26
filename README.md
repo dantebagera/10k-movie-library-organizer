@@ -169,7 +169,7 @@ AI Control is an experimental review workspace for natural-language commands.
 
 Downloads uses the original qBittorrent WebUI inside Cinema Paradiso. The embedded client is isolated from any qBittorrent installation already registered as the operating system's default torrent client.
 
-- The current public v2.8.0 portable release ZIP includes a tested bundled qBittorrent runtime.
+- The current public v2.8.1 portable release ZIP includes a tested bundled qBittorrent runtime.
 - Cinema Paradiso submissions are tagged `cinema-paradiso` and download to an incomplete staging folder.
 - Removing an unfinished CP submission in qBittorrent is treated as a normal cancellation; CP does not move its data or update the catalog.
 - At 100%, Cinema Paradiso pauses and removes the torrent without deleting its data, then moves the unchanged payload into the selected movie destination.
@@ -233,7 +233,7 @@ User lists, Watched and Watchlist states, edited collections, followed releases,
 
 ### Windows Quick Start
 
-For normal use, download the `Cinema-Paradiso-2.8.0-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent runtime.
+For normal use, download the `Cinema-Paradiso-2.8.1-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent runtime.
 
 The GitHub Source ZIP remains developer-oriented. If you download the source ZIP or clone the repository, double-click `run.bat`.
 
@@ -287,7 +287,7 @@ Example:
 
 Only a movie library folder is required. Integrations are optional.
 
-The public v2.8.0 portable release uses bundled qBittorrent. Cinema Paradiso 2.8 keeps the embedded runtime portable and adds a user-triggered update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
+The public v2.8.1 portable release uses bundled qBittorrent. Cinema Paradiso 2.8 keeps the embedded runtime portable and adds a user-triggered update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
 
 ---
 

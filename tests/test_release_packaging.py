@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import zipfile
@@ -5,6 +6,11 @@ from pathlib import Path
 
 
 class PortableReleasePackagingTests(unittest.TestCase):
+    @staticmethod
+    def current_app_version():
+        package_path = Path(__file__).resolve().parents[1] / "package.json"
+        return json.loads(package_path.read_text(encoding="utf-8"))["version"]
+
     def test_release_plan_excludes_qbittorrent_debug_symbols(self):
         from tools.build_portable_release import should_include_qbt_file
 
@@ -19,7 +25,7 @@ class PortableReleasePackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "qBittorrent")
         self.assertEqual(manifest["version"], "5.2.2")
         self.assertEqual(manifest["source"], "official qBittorrent Windows x64 release")
-        self.assertEqual(manifest["bundled_for"], "Cinema Paradiso 2.8.0")
+        self.assertEqual(manifest["bundled_for"], f"Cinema Paradiso {self.current_app_version()}")
 
     def test_copy_qbt_runtime_excludes_profile_user_data_and_requires_exe(self):
         from tools.build_portable_release import copy_qbt_runtime
@@ -52,6 +58,7 @@ class PortableReleasePackagingTests(unittest.TestCase):
             out = Path(root) / "out"
             project.mkdir()
             qbt.mkdir()
+            (project / "package.json").write_text('{"version":"9.9.9"}', encoding="utf-8")
             (project / "README.md").write_text("Cinema Paradiso", encoding="utf-8")
             (project / "config.json").write_text("secret", encoding="utf-8")
             (project / "res_cache.json").write_text("cache", encoding="utf-8")
@@ -68,6 +75,7 @@ class PortableReleasePackagingTests(unittest.TestCase):
             with zipfile.ZipFile(zip_path) as archive:
                 names = set(archive.namelist())
 
+        self.assertEqual(zip_path.name, "Cinema-Paradiso-9.9.9-Portable.zip")
         self.assertTrue(any(name.endswith("README.md") for name in names))
         self.assertFalse(any(name.endswith("config.json") for name in names))
         self.assertFalse(any(name.endswith("res_cache.json") for name in names))
@@ -90,7 +98,7 @@ class PortableReleasePackagingTests(unittest.TestCase):
             self.assertTrue((destination / "bin" / "ffmpeg.exe").is_file())
             self.assertTrue((destination / "bin" / "ffprobe.exe").is_file())
             self.assertEqual(manifest["license"], "GPLv3")
-            self.assertEqual(manifest["bundled_for"], "Cinema Paradiso 2.8.0")
+        self.assertEqual(manifest["bundled_for"], f"Cinema Paradiso {self.current_app_version()}")
 
 
 if __name__ == "__main__":

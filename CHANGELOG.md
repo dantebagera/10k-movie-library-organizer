@@ -25,6 +25,7 @@ Cinema Paradiso v2.8.1 expands catalog search, completes bounded Discover pagina
 - Discover relationship browsing no longer applies stale responses after navigation changes.
 - Catalog migration audits and JSON shadow checks fail safely when their prerequisites are not satisfied.
 - Search pagination preserves current filters and avoids stale or incomplete result sets.
+- Portable release packaging derives its version from the authoritative package metadata instead of a separate hardcoded value.
 
 ## v2.8.0 - July 2026
 
