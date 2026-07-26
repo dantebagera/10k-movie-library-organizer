@@ -269,7 +269,8 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         result_grid_source = (ROOT / "src" / "components" / "DiscoverResultGrid.jsx").read_text(encoding="utf-8")
 
         self.assertIn("if (!hasAdvancedDiscoverCriteria()) return [...(results || [])];", discover_source)
-        self.assertIn("const collectionData = await fetchCurationJson(`/api/tmdb/collection?collection_id=${encodeURIComponent(collection.id)}`);", discover_source)
+        self.assertIn("`/api/tmdb/collection?collection_id=${encodeURIComponent(collection.id)}`,", discover_source)
+        self.assertIn("{ signal: controller.signal }", discover_source)
         self.assertIn("emptyHint={discoverContext?.type === 'collection'", discover_source)
         self.assertIn("emptyHint || 'Check Settings if this depends on TMDB, Prowlarr, or Ollama.'", result_grid_source)
 

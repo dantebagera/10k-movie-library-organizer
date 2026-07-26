@@ -426,7 +426,7 @@ export default function DiscoverWorkspace({
     }
   }
 
-  async function fetchListMovies(list) {
+  async function fetchListMovies(list, { signal } = {}) {
     const movies = list?.movies || [];
     const enriched = [];
     for (let index = 0; index < movies.length; index += 6) {
@@ -435,14 +435,15 @@ export default function DiscoverWorkspace({
         try {
           const query = `${movie.title || ''} ${movie.year || ''}`.trim();
           if (!query) return movie;
-          const data = await fetchJson(`/api/tmdb/search?q=${encodeURIComponent(query)}&page=1&include_adult=false`);
+          const data = await fetchJson(`/api/tmdb/search?q=${encodeURIComponent(query)}&page=1&include_adult=false`, { signal });
           const match = (data.results || []).find((candidate) => (
             movie.tmdb_id && String(candidate.tmdb_id) === String(movie.tmdb_id)
           )) || (data.results || []).find((candidate) => (
             movie.year && String(candidate.year || '') === String(movie.year)
           )) || (data.results || [])[0];
           return match ? { ...match, path: movie.path || match.path || '' } : movie;
-        } catch {
+        } catch (error) {
+          if (isAbortedRequest(error)) throw error;
           return movie;
         }
       }));
@@ -789,6 +790,8 @@ export default function DiscoverWorkspace({
   async function browseCollection(target, movie, collection) {
     if (!collection?.id) return;
     const isPick = target === 'pick';
+    const snapshot = isPick ? currentPickSnapshot() : currentDiscoverSnapshot();
+    const { controller, requestSeq } = isPick ? beginPickRequest() : beginDiscoverRequest();
     if (isPick) {
       setPickLoading(true);
       setPickError('');
@@ -797,7 +800,11 @@ export default function DiscoverWorkspace({
       setDiscoverError('');
     }
     try {
-      const collectionData = await fetchCurationJson(`/api/tmdb/collection?collection_id=${encodeURIComponent(collection.id)}`);
+      const collectionData = await fetchCurationJson(
+        `/api/tmdb/collection?collection_id=${encodeURIComponent(collection.id)}`,
+        { signal: controller.signal }
+      );
+      if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
       setCollectionCache((state) => ({ ...state, [collection.id]: collectionData }));
       const results = collectionData.parts || [];
       const context = {
@@ -806,7 +813,6 @@ export default function DiscoverWorkspace({
         emptyText: `No TMDB collection movies found for ${collectionData.name || collection.name}.`,
         criteriaKey: discoverCriteriaKey()
       };
-      const snapshot = isPick ? currentPickSnapshot() : currentDiscoverSnapshot();
       if (isPick) {
         setPickHistory((history) => [...history, snapshot]);
         setPickResults(results);
@@ -825,11 +831,15 @@ export default function DiscoverWorkspace({
       setExpandedMovieKey('');
       checkOwnership(results);
     } catch (error) {
+      if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
+      if (isAbortedRequest(error)) return;
       if (isPick) setPickError(error.message);
       else setDiscoverError(error.message);
     } finally {
-      if (isPick) setPickLoading(false);
-      else setDiscoverLoading(false);
+      if (isPick ? requestSeq === pickRequestSeq.current : requestSeq === discoverRequestSeq.current) {
+        if (isPick) setPickLoading(false);
+        else setDiscoverLoading(false);
+      }
     }
   }
 
@@ -837,6 +847,8 @@ export default function DiscoverWorkspace({
     const fullList = userLists.find((item) => item.id === list?.id) || list;
     if (!fullList?.id) return;
     const isPick = target === 'pick';
+    const snapshot = isPick ? currentPickSnapshot() : currentDiscoverSnapshot();
+    const { controller, requestSeq } = isPick ? beginPickRequest() : beginDiscoverRequest();
     if (isPick) {
       setPickLoading(true);
       setPickError('');
@@ -845,14 +857,14 @@ export default function DiscoverWorkspace({
       setDiscoverError('');
     }
     try {
-      const results = await fetchListMovies(fullList);
+      const results = await fetchListMovies(fullList, { signal: controller.signal });
+      if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
       const context = {
         type: 'list',
         label: `${movie.title || 'Movie'} > List: ${fullList.name}`,
         emptyText: `No movies found in ${fullList.name}.`,
         criteriaKey: discoverCriteriaKey()
       };
-      const snapshot = isPick ? currentPickSnapshot() : currentDiscoverSnapshot();
       if (isPick) {
         setPickHistory((history) => [...history, snapshot]);
         setPickResults(results);
@@ -871,11 +883,15 @@ export default function DiscoverWorkspace({
       setExpandedMovieKey('');
       checkOwnership(results);
     } catch (error) {
+      if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
+      if (isAbortedRequest(error)) return;
       if (isPick) setPickError(error.message);
       else setDiscoverError(error.message);
     } finally {
-      if (isPick) setPickLoading(false);
-      else setDiscoverLoading(false);
+      if (isPick ? requestSeq === pickRequestSeq.current : requestSeq === discoverRequestSeq.current) {
+        if (isPick) setPickLoading(false);
+        else setDiscoverLoading(false);
+      }
     }
   }
 

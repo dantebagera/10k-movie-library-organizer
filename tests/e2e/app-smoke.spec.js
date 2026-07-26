@@ -730,6 +730,110 @@ test('Discover relationship paging rejects stale pages and follows shrinking pro
   ]);
 });
 
+test('Discover collection navigation wins over an older in-flight list request', async ({ page }) => {
+  let releaseSlowList;
+  let slowListStarted = false;
+  const slowListGate = new Promise((resolve) => {
+    releaseSlowList = resolve;
+  });
+  const rootMovie = {
+    tmdb_id: '8100',
+    title: 'Relationship Race Root',
+    year: '2024',
+    poster_url: '',
+    genres: ['Adventure'],
+    tmdb_rating: '8.0',
+    tmdb_vote_count: 500,
+    plot: 'The movie used to start relationship navigation.'
+  };
+  const collectionMovie = {
+    tmdb_id: '8101',
+    title: 'Collection Navigation Winner',
+    year: '2025',
+    poster_url: '',
+    genres: ['Adventure'],
+    tmdb_rating: '7.5',
+    tmdb_vote_count: 100,
+    plot: 'The collection result must remain current.'
+  };
+  const slowListMovie = {
+    tmdb_id: '8102',
+    title: 'Stale List Navigation',
+    year: '2020',
+    poster_url: '',
+    genres: ['Drama'],
+    tmdb_rating: '6.5',
+    tmdb_vote_count: 50,
+    plot: 'This obsolete result must never replace the collection.'
+  };
+
+  await page.route('**/api/tmdb/discover**', (route) => route.fulfill({ json: {
+    results: [rootMovie],
+    page: 1,
+    total_pages: 1,
+    total_results: 1
+  } }));
+  await page.route('**/api/library/check', (route) => route.fulfill({
+    json: { results: [], catalog_generation: 1 }
+  }));
+  await page.route('**/api/user/lists', (route) => route.fulfill({ json: {
+    lists: [{
+      id: 'slow-list',
+      name: 'Slow List',
+      movies: [
+        rootMovie,
+        { tmdb_id: slowListMovie.tmdb_id, title: slowListMovie.title, year: slowListMovie.year }
+      ]
+    }],
+    curation_generation: 1
+  } }));
+  await page.route('**/api/tmdb/details**', (route) => route.fulfill({ json: {
+    ...rootMovie,
+    summary: rootMovie.plot,
+    cast: [],
+    directors: [],
+    writers: [],
+    keywords: [],
+    collection: { id: 'race-collection', name: 'Race Collection' }
+  } }));
+  await page.route('**/api/tmdb/collection**', (route) => route.fulfill({ json: {
+    id: 'race-collection',
+    name: 'Race Collection',
+    source: 'TMDB',
+    parts: [collectionMovie],
+    curation_generation: 1
+  } }));
+  await page.route('**/api/tmdb/search**', async (route) => {
+    slowListStarted = true;
+    await slowListGate;
+    await route.fulfill({ json: {
+      results: [slowListMovie],
+      page: 1,
+      total_pages: 1,
+      total_results: 1
+    } }).catch(() => {});
+  });
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  const rootCard = page.locator('.discover-movie-card').filter({ hasText: rootMovie.title });
+  await expect(rootCard).toBeVisible();
+  await rootCard.getByRole('heading', { name: rootMovie.title }).click();
+  await expect(rootCard.getByRole('button', { name: /Race Collection/ })).toBeVisible();
+  await expect(rootCard.getByRole('button', { name: 'Slow List', exact: true })).toBeVisible();
+
+  await rootCard.getByRole('button', { name: 'Slow List', exact: true }).click();
+  await expect.poll(() => slowListStarted).toBe(true);
+  await rootCard.getByRole('button', { name: /Race Collection/ }).click();
+
+  await expect(page.getByText(collectionMovie.title, { exact: true })).toBeVisible();
+  releaseSlowList();
+  await expect(page.getByText(slowListMovie.title, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(collectionMovie.title, { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByText(rootMovie.title, { exact: true })).toBeVisible();
+});
+
 test('Keyword modes surface their authoritative SQL and TMDB errors', async ({ page }) => {
   await page.route('**/api/library?view=keywords*', (route) => route.fulfill({
     status: 500,
