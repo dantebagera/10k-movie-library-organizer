@@ -1,5 +1,31 @@
 # Changelog
 
+## v2.8.1 - July 2026
+
+Cinema Paradiso v2.8.1 expands catalog search, completes bounded Discover pagination, and tightens shared movie-card and AI Control behavior.
+
+### Added
+
+- Catalog schema v8 writer and keyword projections with staged backup, parity, shadow, and rollback evidence.
+- Writer and keyword search across Library and Discover through their authoritative SQL and TMDB paths.
+- Bounded pagination that keeps valid Library and Discover search results reachable without unbounded reads.
+- Transient Arabic display for shared expanded movie cards without changing persisted catalog metadata.
+- Bulk source upgrades for owned movies and explicit Ollama model recommendations in Settings.
+
+### Changed
+
+- Shared expanded movie cards use one redesigned layout with consistent proportions and workspace margins.
+- AI Control actions are card-first and complete their approved library mutations through the existing authoritative services.
+- Source review requires exact quality matching before an upgrade is accepted.
+- The sidebar version is rebuilt from the package version and now identifies v2.8.1.
+
+### Fixed
+
+- Home inspectors retain followed-movie plots.
+- Discover relationship browsing no longer applies stale responses after navigation changes.
+- Catalog migration audits and JSON shadow checks fail safely when their prerequisites are not satisfied.
+- Search pagination preserves current filters and avoids stale or incomplete result sets.
+
 ## v2.8.0 - July 2026
 
 Cinema Paradiso v2.8.0 begins with the SQL catalog migration and adds a separated, provider-agnostic IPTV workspace.

@@ -6,7 +6,7 @@ Cinema Paradiso is a self-hosted movie library manager for people with hundreds 
 
 Your library catalog, settings, and operational state stay on your machine. Optional services such as Plex, TMDB, Prowlarr, streaming providers, and Ollama cloud models are contacted only when configured for their corresponding features.
 
-**Current release: v2.8.0** - July 2026
+**Current release: v2.8.1** - July 2026
 
 ---
 
@@ -67,6 +67,21 @@ Your library catalog, settings, and operational state stay on your machine. Opti
 ### Styleguide
 
 ![Cinema Paradiso Styleguide](screenshots/styleguide-page-wide.png)
+
+---
+
+## What Changed in v2.8.1
+
+Cinema Paradiso v2.8.1 expands catalog search, completes bounded Discover pagination, and tightens shared movie-card and AI Control behavior.
+
+- **Writer and keyword search:** Library uses catalog schema v8 projections while Discover keeps TMDB-owned search behavior.
+- **Reachable bounded results:** Library and Discover searches retain bounded requests while exposing additional valid results through pagination.
+- **Shared expanded cards:** the authoritative shared card layout now has consistent proportions, workspace margins, and a transient Arabic display option.
+- **Safer catalog rollout:** backup, parity, shadow-comparison, and rollback evidence protect the schema-v8 writer and keyword projections.
+- **Complete AI actions:** approved AI Control actions execute through the existing library services with card-first review.
+- **Exact source upgrades:** source review requires the requested quality and supports bulk upgrades for owned movies.
+- **Stale-result protection:** Discover relationship browsing ignores responses that belong to an earlier navigation state.
+- **Version display:** the sidebar footer is rebuilt from the `2.8.1` package version so the app UI matches the release checkpoint.
 
 ---
 
