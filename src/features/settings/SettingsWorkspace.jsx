@@ -78,8 +78,6 @@ const emptySettingsState = {
     enabled: true,
     trusted_indexers: [],
     trusted_indexers_configured: false,
-    max_matched_movies: 25,
-    max_download_searches: 10,
     ollama_curated_lists: false,
     indexers: []
   }
@@ -174,8 +172,6 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           enabled: aiControl.value.enabled !== false,
           trusted_indexers: aiControl.value.trusted_indexers || [],
           trusted_indexers_configured: Boolean(aiControl.value.trusted_indexers_configured),
-          max_matched_movies: aiControl.value.max_matched_movies || 25,
-          max_download_searches: aiControl.value.max_download_searches || 10,
           ollama_curated_lists: Boolean(aiControl.value.ollama_curated_lists),
           indexers: aiControl.value.indexers || []
         } : emptySettingsState.aiControl
@@ -579,8 +575,6 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     try {
       const payload = {
         enabled: Boolean(forms.aiControl.enabled),
-        max_matched_movies: Number(forms.aiControl.max_matched_movies || 25),
-        max_download_searches: Number(forms.aiControl.max_download_searches || 10),
         ollama_curated_lists: Boolean(forms.aiControl.ollama_curated_lists)
       };
       if (includeTrusted) {
@@ -597,8 +591,6 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           enabled: data.enabled !== false,
           trusted_indexers: data.trusted_indexers || [],
           trusted_indexers_configured: Boolean(data.trusted_indexers_configured),
-          max_matched_movies: data.max_matched_movies || 25,
-          max_download_searches: data.max_download_searches || 10,
           ollama_curated_lists: Boolean(data.ollama_curated_lists),
           indexers: data.indexers || state.aiControl.indexers || []
         }
@@ -906,29 +898,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                   <small>Shows the experimental command workspace in the sidebar.</small>
                 </span>
               </label>
-              <div className="settings-two-column">
-                <label className="dialog-field">
-                  <span>Max matched movies</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={forms.aiControl.max_matched_movies || 25}
-                    onChange={(event) => updateField('aiControl', 'max_matched_movies', event.target.value)}
-                  />
-                </label>
-                <label className="dialog-field">
-                  <span>Max download searches</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={forms.aiControl.max_download_searches || 10}
-                    onChange={(event) => updateField('aiControl', 'max_download_searches', event.target.value)}
-                  />
-                </label>
-              </div>
-              <p className="settings-runtime-detail">Download quality is fixed to 1080p and delete uses Recycle Bin in v1.</p>
+              <p className="settings-runtime-detail">AI Control preserves every provider-available result through paged cards. Download quality is fixed to 1080p, qBittorrent owns queue limits, and delete uses Recycle Bin.</p>
               <label className="settings-checkbox-field">
                 <input
                   type="checkbox"

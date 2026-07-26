@@ -561,13 +561,6 @@ input:focus-visible {
   padding: 9px 10px;
 }
 
-.ai-control-table {
-  display: grid;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
 .ai-control-card-results {
   display: grid;
   gap: 14px;
@@ -577,61 +570,9 @@ input:focus-visible {
   margin: 0;
 }
 
-.ai-control-table-head,
-.ai-control-table-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 1fr) 110px minmax(220px, 1fr);
-  gap: 12px;
-  align-items: center;
-  min-height: 52px;
-  padding: 0 14px;
-}
-
-.ai-control-table-head {
-  min-height: 42px;
-  background: #0d0e11;
-  color: var(--text-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-.ai-control-table-row {
-  border-top: 1px solid var(--border);
-  background: #121316;
-}
-
-.ai-control-table-row > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-control-table-row strong,
-.ai-control-table-row small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ai-control-table-row small {
-  margin-top: 3px;
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-
-.ai-control-blocked {
-  display: grid;
-  gap: 8px;
-}
-
-.ai-control-blocked h4 {
-  margin: 0;
-  color: var(--archive-amber);
-  font-size: 0.9rem;
+.ai-control-confirm-action {
+  min-height: 30px;
+  padding: 7px 12px;
 }
 
 .help-workspace {

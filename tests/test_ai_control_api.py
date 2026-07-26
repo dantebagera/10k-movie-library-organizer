@@ -19,7 +19,8 @@ class AiControlApiTest(unittest.TestCase):
         self.assertEqual(data["download_quality"], "1080p")
         self.assertEqual(data["delete_mode"], "recycle_bin")
         self.assertFalse(data["ollama_curated_lists"])
-        self.assertEqual(data["max_matched_movies"], 25)
+        self.assertNotIn("max_matched_movies", data)
+        self.assertNotIn("max_download_searches", data)
 
     def test_config_defaults_ai_control_trusted_indexers_to_yts_when_unconfigured(self):
         previous_configured = app._ai_control_trusted_indexers_configured
@@ -113,6 +114,34 @@ class AiControlApiTest(unittest.TestCase):
         self.assertEqual(first.get_json()["total_matches"], 1)
         self.assertEqual(second.status_code, 409)
         create_list.assert_called_once()
+
+    def test_execute_create_list_applies_only_server_validated_selected_keys(self):
+        plan = app._ai_control_plan_store.put({
+            "state": "valid_plan",
+            "action": "create_list",
+            "list_name": "Custom Selection",
+            "items": [
+                {"selection_key": "item-1", "tmdb_id": "1", "title": "One"},
+                {"selection_key": "item-2", "tmdb_id": "2", "title": "Two"},
+                {"selection_key": "item-3", "tmdb_id": "3", "title": "Three"},
+            ],
+        })
+
+        with patch("app._ai_control_create_list", return_value={
+            "id": "custom-selection",
+            "name": "Custom Selection",
+            "count": 2,
+            "movies": [],
+        }) as create_list:
+            response = self.client.post("/api/ai-control/execute", json={
+                "plan_id": plan["plan_id"],
+                "selected_keys": ["item-1", "item-3"],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["total_matches"], 2)
+        selected_movies = create_list.call_args.args[1]
+        self.assertEqual([movie["title"] for movie in selected_movies], ["One", "Three"])
 
     def test_preview_nonsense_prompt_returns_clarification(self):
         response = self.client.post("/api/ai-control/preview", json={"prompt": "clean my movies"})
@@ -272,6 +301,84 @@ class AiControlApiTest(unittest.TestCase):
         self.assertIn("primary_release_date.lte=1989-12-31", captured_urls[0])
         self.assertIn("sort_by=vote_average.desc", captured_urls[0])
         self.assertIn("vote_count.gte=500", captured_urls[0])
+
+    def test_tmdb_search_reaches_every_provider_page_and_deduplicates_identity(self):
+        previous_key = app._tmdb_key
+        captured_pages = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode()
+
+        def fake_urlopen(req, timeout=10):
+            page = int(req.full_url.split("page=", 1)[1].split("&", 1)[0])
+            captured_pages.append(page)
+            rows = {
+                1: [
+                    {"id": 1, "title": "One", "release_date": "2001-01-01"},
+                    {"id": 2, "title": "Two", "release_date": "2002-01-01"},
+                ],
+                2: [
+                    {"id": 2, "title": "Two", "release_date": "2002-01-01"},
+                    {"id": 3, "title": "Three", "release_date": "2003-01-01"},
+                ],
+            }
+            return FakeResponse({"page": page, "total_pages": 2, "results": rows[page]})
+
+        app._tmdb_key = "test-key"
+        try:
+            with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = app._ai_control_tmdb_search("complete", app.ai_control.default_config())
+        finally:
+            app._tmdb_key = previous_key
+
+        self.assertEqual(captured_pages, [1, 2])
+        self.assertEqual([movie["tmdb_id"] for movie in result], ["1", "2", "3"])
+
+    def test_ai_control_source_review_prepares_every_requested_movie_without_total_cap(self):
+        movies = [
+            {"selection_key": f"item-{index}", "tmdb_id": str(index), "title": f"Movie {index}"}
+            for index in range(1, 13)
+        ]
+
+        def prepared_row(movie, quality, trusted_ids):
+            return {
+                **movie,
+                "quality": quality,
+                "status": "ready",
+                "selected": True,
+                "variant": {"title": f"{movie['title']} 1080p"},
+                "variants_by_quality": {},
+                "upgrade": False,
+                "reason": "",
+            }
+
+        with patch("app._effective_ai_control_config", return_value={
+            **app.ai_control.default_config(),
+            "trusted_indexers": ["1"],
+        }), patch("app._source_review_movie_row", side_effect=prepared_row) as prepare:
+            response = self.client.post("/api/sources/review/preview", json={
+                "movies": movies,
+                "policy": "ai_control",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data["rows"]), 12)
+        self.assertEqual([row["selection_key"] for row in data["rows"]], [
+            f"item-{index}" for index in range(1, 13)
+        ])
+        self.assertEqual(prepare.call_count, 12)
+        self.assertEqual(data["defaults"]["policy"], "ai_control")
 
 
 if __name__ == "__main__":

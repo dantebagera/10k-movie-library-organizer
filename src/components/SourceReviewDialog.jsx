@@ -20,7 +20,7 @@ function rowWithQuality(row, quality) {
   };
 }
 
-export default function SourceReviewDialog({ state, setState, onClose, notify }) {
+export default function SourceReviewDialog({ state, setState, onClose, notify, onReviewComplete = null }) {
   const readyRows = (state.rows || []).filter((row) => row.status === 'ready');
   const selectedCount = readyRows.filter((row) => row.selected !== false).length;
   const unavailableCount = (state.rows || []).filter((row) => row.status === 'blocked').length;
@@ -43,6 +43,12 @@ export default function SourceReviewDialog({ state, setState, onClose, notify })
   async function submitSelected() {
     setState((current) => ({ ...current, submitting: true, error: '' }));
     try {
+      if (onReviewComplete) {
+        await onReviewComplete(state.rows || []);
+        notify?.(`Reviewed ${formatCount(selectedCount)} selected source${selectedCount === 1 ? '' : 's'}`);
+        onClose();
+        return;
+      }
       const data = await submitSourceReview(state.rows || []);
       notify?.(`Submitted ${formatCount(data.submitted_count || 0)} movie${Number(data.submitted_count || 0) === 1 ? '' : 's'} to qBittorrent`);
       onClose();
@@ -122,7 +128,7 @@ export default function SourceReviewDialog({ state, setState, onClose, notify })
         <div className="dialog-actions">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button type="button" className="btn btn-primary" onClick={submitSelected} disabled={state.loading || state.submitting || !selectedCount}>
-            {state.submitting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} Submit selected to qBittorrent
+            {state.submitting ? <Loader2 size={15} className="spin" /> : <Download size={15} />} {onReviewComplete ? 'Apply selected sources' : 'Submit selected to qBittorrent'}
           </button>
         </div>
       </section>

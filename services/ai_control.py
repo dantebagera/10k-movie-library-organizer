@@ -4,14 +4,16 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from pathlib import Path
 
 
 CAPABILITIES_PATH = Path(__file__).with_name("ai_control_capabilities.json")
 GB = 1024 ** 3
-PREVIEW_PAGE_SIZE = 50
+PREVIEW_PAGE_SIZE = 20
 LARGE_DELETE_CONFIRMATION_THRESHOLD = 50
+DOWNLOAD_PREPARE_WORKERS = 4
 
 
 def load_capabilities():
@@ -23,8 +25,6 @@ def default_config():
     return {
         "enabled": True,
         "trusted_indexers": [],
-        "max_matched_movies": 25,
-        "max_download_searches": 10,
         "download_quality": "1080p",
         "ollama_curated_lists": False,
         "delete_mode": "recycle_bin",
@@ -40,18 +40,6 @@ def coerce_config(raw=None):
         for value in raw.get("trusted_indexers", config["trusted_indexers"]) or []
         if str(value).strip()
     ]
-    config["max_matched_movies"] = _bounded_int(
-        raw.get("max_matched_movies"),
-        default_config()["max_matched_movies"],
-        1,
-        100,
-    )
-    config["max_download_searches"] = _bounded_int(
-        raw.get("max_download_searches"),
-        default_config()["max_download_searches"],
-        1,
-        50,
-    )
     config["download_quality"] = "1080p"
     config["ollama_curated_lists"] = _coerce_bool(
         raw.get("ollama_curated_lists"),
@@ -72,7 +60,6 @@ def preview_command(
     tmdb_discover=None,
     tmdb_search=None,
     person_movies=None,
-    source_search=None,
     owned_movie_lookup=None,
 ):
     prompt = str(prompt or "").strip()
@@ -106,11 +93,11 @@ def preview_command(
     if action == "delete":
         return _preview_delete(prompt, intent, library_items or [], library_roots or [], plan_store)
     if action == "find":
-        return _preview_find(prompt, intent, library_items or [], config, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
+        return _preview_find(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
     if action == "create_list":
         return _preview_create_list(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
     if action == "download":
-        return _preview_download(prompt, intent, library_items or [], config, plan_store, person_movies, source_search, owned_movie_lookup)
+        return _preview_download(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
     return _state("unsupported", f"{action} is not supported in AI Control v1.")
 
 
@@ -119,23 +106,41 @@ def execute_plan(
     *,
     plan_store,
     confirmation_phrase="",
+    selected_keys=None,
+    reviewed_downloads=None,
     library_roots=None,
     delete_file=None,
     create_list=None,
+    prepare_download=None,
     submit_download=None,
 ):
-    plan, claim_error = plan_store.claim(plan_id, confirmation_phrase=confirmation_phrase)
+    plan, claim_error = plan_store.claim(
+        plan_id,
+        confirmation_phrase=confirmation_phrase,
+        selected_keys=selected_keys,
+    )
     if not plan:
         if claim_error == "confirmation_required":
             return _state("unsafe", "The confirmation phrase does not match the reviewed plan.")
+        if claim_error == "empty_selection":
+            return _state("unsafe", "Select at least one reviewed result before confirming.")
+        if claim_error == "invalid_selection":
+            return _state("unsafe", "The selected results do not belong to the reviewed plan.")
         return _state("unsafe", "The reviewed plan is missing or expired. Preview the command again.")
     action = plan.get("action")
+    if action == "find":
+        return _execute_find(plan)
     if action == "delete":
         return _execute_delete(plan, library_roots or [], delete_file)
     if action == "create_list":
         return _execute_create_list(plan, create_list)
     if action == "download":
-        return _execute_download(plan, submit_download)
+        return _execute_download(
+            plan,
+            prepare_download,
+            submit_download,
+            reviewed_downloads=reviewed_downloads,
+        )
     return _state("unsupported", f"{action or 'This action'} cannot be executed.")
 
 
@@ -159,17 +164,25 @@ class PlanStore:
             stored = self._active_plan(str(plan_id or ""))
             return deepcopy(stored) if stored else None
 
-    def claim(self, plan_id, *, confirmation_phrase=""):
+    def claim(self, plan_id, *, confirmation_phrase="", selected_keys=None):
         plan_id = str(plan_id or "")
         with self._lock:
             stored = self._active_plan(plan_id)
             if not stored:
                 return None, "missing"
-            expected_phrase = str(stored.get("confirmation_phrase") or "").strip()
-            if stored.get("requires_extra_confirmation") and str(confirmation_phrase or "").strip() != expected_phrase:
+            selected, selection_error = _selected_plan(stored, selected_keys)
+            if not selected:
+                return None, selection_error
+            selected_count = len(selected.get("items") or [])
+            needs_confirmation = selected.get("action") == "delete" and selected_count > LARGE_DELETE_CONFIRMATION_THRESHOLD
+            expected_phrase = f"DELETE {selected_count} FILES" if needs_confirmation else ""
+            if needs_confirmation and str(confirmation_phrase or "").strip() != expected_phrase:
                 return None, "confirmation_required"
             self._plans.pop(plan_id, None)
-            return deepcopy(stored), ""
+            selected["requires_extra_confirmation"] = needs_confirmation
+            selected["confirmation_phrase"] = expected_phrase
+            selected["total_matches"] = selected_count
+            return deepcopy(selected), ""
 
     def _active_plan(self, plan_id):
         stored = self._plans.get(plan_id)
@@ -553,11 +566,12 @@ def _preview_delete(prompt, intent, library_items, library_roots, plan_store):
             continue
         size = int(item.get("size") or observed_size)
         candidates.append({
+            **_movie_preview_item(item),
             "title": item.get("title") or item.get("plex_title") or os.path.basename(path),
-            "year": str(item.get("year") or item.get("plex_year") or ""),
             "path": path,
             "size": size,
             "size_gb": round(size / GB, 2),
+            "size_human": f"{size / GB:.1f} GB",
             "observed_size": observed_size,
             "status": "ready",
         })
@@ -570,7 +584,7 @@ def _preview_delete(prompt, intent, library_items, library_roots, plan_store):
         "message": f"Review {len(candidates)} file{'s' if len(candidates) != 1 else ''} before moving to Recycle Bin.",
         "summary": f"Move {len(candidates)} file{'s' if len(candidates) != 1 else ''} to Recycle Bin",
         "prompt": prompt,
-        "items": candidates,
+        "items": _plan_items(candidates),
         "blocked": [],
         "warnings": [],
         "total_matches": len(candidates),
@@ -581,7 +595,7 @@ def _preview_delete(prompt, intent, library_items, library_roots, plan_store):
     return _store_or_return(plan, plan_store)
 
 
-def _preview_find(prompt, intent, library_items, config, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup=None):
+def _preview_find(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup=None):
     source = str(intent.get("source") or "").lower()
     if _online_intent(intent, prompt):
         movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
@@ -592,19 +606,19 @@ def _preview_find(prompt, intent, library_items, config, tmdb_discover, tmdb_sea
     if not items:
         return _state("no_matches", "No movies matched this find command.")
     total = len(items)
-    return {
+    plan = {
         "state": "valid_plan",
-        "plan_id": "",
         "action": "find",
         "message": f"Found {total} movie{'s' if total != 1 else ''}.",
         "summary": "Find results",
         "source": source or "library",
-        "items": items,
+        "items": _plan_items(items),
         "blocked": [],
         "warnings": [],
         "total_matches": total,
         "page_size": PREVIEW_PAGE_SIZE,
     }
+    return _store_or_return(plan, plan_store)
 
 
 def _preview_create_list(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup=None):
@@ -629,7 +643,7 @@ def _preview_create_list(prompt, intent, library_items, config, plan_store, tmdb
         "summary": f"Create list: {intent.get('name') or _list_name(prompt)}",
         "list_name": intent.get("name") or _list_name(prompt),
         "prompt": prompt,
-        "items": items,
+        "items": _plan_items(items),
         "blocked": [],
         "warnings": [],
         "total_matches": total,
@@ -638,58 +652,37 @@ def _preview_create_list(prompt, intent, library_items, config, plan_store, tmdb
     return _store_or_return(plan, plan_store)
 
 
-def _preview_download(prompt, intent, library_items, config, plan_store, person_movies, source_search, owned_movie_lookup=None):
+def _preview_download(
+    prompt,
+    intent,
+    library_items,
+    config,
+    plan_store,
+    tmdb_discover,
+    tmdb_search,
+    person_movies,
+    owned_movie_lookup=None,
+):
     if not config.get("trusted_indexers"):
         return _state("integration_missing", "Choose AI Control trusted indexers in Settings before planning downloads.")
-    movies = _resolve_online_movies(intent, config, None, None, person_movies)
+    movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
+    movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lookup)
     if not movies:
         return _state("no_matches", "No online movies matched this download command.")
-    total_matches = len(movies)
-    owned_keys = set()
-    for item in library_items:
-        owned_keys.update(_movie_keys(item))
-    items = []
-    blocked = []
-    searches = 0
-    for movie in movies:
-        if _is_download_movie_owned(movie, owned_keys, owned_movie_lookup):
-            blocked.append({**_movie_preview_item(movie), "status": "already_owned", "reason": "Already in library"})
-            continue
-        if searches >= int(config["max_download_searches"]):
-            blocked.append({**_movie_preview_item(movie), "status": "blocked", "reason": "Download search cap reached"})
-            continue
-        searches += 1
-        variants = source_search(movie, config) if source_search else []
-        variant = _best_1080p_variant(variants, config)
-        if not variant:
-            blocked.append({**_movie_preview_item(movie), "status": "blocked", "reason": "No trusted 1080p source found"})
-            continue
-        items.append({
-            **_movie_preview_item(movie),
-            "status": "ready",
-            "variant": variant,
-        })
-    if not items:
-        return {
-            **_state("no_matches", "No downloadable 1080p trusted sources were found."),
-            "blocked": blocked,
-            "total_matches": total_matches,
-            "page_size": PREVIEW_PAGE_SIZE,
-        }
-    download_cap = int(config["max_download_searches"])
+    items = _plan_items([_movie_preview_item(movie) for movie in movies])
+    total_matches = len(items)
     plan = {
         "state": "valid_plan",
         "action": "download",
         "message": (
             f"{total_matches} movie{'s' if total_matches != 1 else ''} matched. "
-            f"{min(download_cap, total_matches)} download searches planned in this batch. "
-            f"Review {len(items)} ready download{'s' if len(items) != 1 else ''} before submitting to qBittorrent."
+            "Every result is selected. Confirm to find trusted sources and submit every available download to qBittorrent."
         ),
-        "summary": f"Submit {len(items)} 1080p download{'s' if len(items) != 1 else ''}",
+        "summary": f"Download {total_matches} movie{'s' if total_matches != 1 else ''} in 1080p",
         "prompt": prompt,
         "items": items,
-        "blocked": blocked,
-        "warnings": [f"Download search cap limited this batch to {download_cap} movies."] if total_matches > download_cap else [],
+        "blocked": [],
+        "warnings": [],
         "total_matches": total_matches,
         "page_size": PREVIEW_PAGE_SIZE,
     }
@@ -723,6 +716,18 @@ def _execute_delete(plan, library_roots, delete_file):
     }
 
 
+def _execute_find(plan):
+    count = len(plan.get("items") or [])
+    return {
+        "state": "executed",
+        "action": "find",
+        "summary": "Find selection confirmed",
+        "message": f"Confirmed {count} selected movie{'s' if count != 1 else ''}.",
+        "total_matches": count,
+        "items": list(plan.get("items") or []),
+    }
+
+
 def _execute_create_list(plan, create_list):
     if not create_list:
         return _state("unsafe", "List creation is unavailable.")
@@ -741,17 +746,88 @@ def _execute_create_list(plan, create_list):
     }
 
 
-def _execute_download(plan, submit_download):
-    if not submit_download:
+def _execute_download(plan, prepare_download, submit_download, *, reviewed_downloads=None):
+    if not prepare_download or not submit_download:
         return _state("unsafe", "Download submission is unavailable.")
-    submitted = [submit_download(item) for item in plan.get("items") or []]
+    items = list(plan.get("items") or [])
+    reviewed_by_key = {
+        str(row.get("selection_key") or ""): row
+        for row in reviewed_downloads or []
+        if isinstance(row, dict) and str(row.get("selection_key") or "")
+    }
+    prepared = [None] * len(items)
+    pending = []
+    for index, item in enumerate(items):
+        selection_key = str(item.get("selection_key") or "")
+        if selection_key in reviewed_by_key:
+            prepared[index] = deepcopy(reviewed_by_key[selection_key])
+        else:
+            pending.append((index, item))
+
+    if pending:
+        worker_count = max(1, min(DOWNLOAD_PREPARE_WORKERS, len(pending)))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(prepare_download, deepcopy(item)): index
+                for index, item in pending
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    prepared[index] = future.result()
+                except Exception as error:
+                    prepared[index] = {
+                        **items[index],
+                        "status": "blocked",
+                        "selected": False,
+                        "variant": None,
+                        "reason": str(error),
+                    }
+
+    submitted = []
+    unavailable = []
+    failed = []
+    for item, row in zip(items, prepared):
+        row = row if isinstance(row, dict) else {}
+        row = {**item, **row}
+        for field in ("selection_key", "tmdb_id", "imdb_id", "title", "year", "path"):
+            if field in item:
+                row[field] = item.get(field)
+        if row.get("selected", True) is False or row.get("status") != "ready" or not row.get("variant"):
+            unavailable.append({
+                "movie": item.get("title", ""),
+                "selection_key": item.get("selection_key", ""),
+                "reason": row.get("reason") or "No selected trusted source",
+            })
+            continue
+        try:
+            submitted.append({
+                "movie": item.get("title", ""),
+                "selection_key": item.get("selection_key", ""),
+                "result": submit_download(row),
+            })
+        except Exception as error:
+            failed.append({
+                "movie": item.get("title", ""),
+                "selection_key": item.get("selection_key", ""),
+                "error": str(error),
+            })
+    submitted_count = len(submitted)
     return {
         "state": "executed",
         "action": "download",
         "summary": "Downloads submitted",
-        "message": f"Submitted {len(submitted)} download{'s' if len(submitted) != 1 else ''}.",
-        "total_matches": len(submitted),
+        "message": (
+            f"Submitted {submitted_count} download{'s' if submitted_count != 1 else ''} to qBittorrent. "
+            f"{len(unavailable)} unavailable and {len(failed)} failed."
+        ),
+        "total_matches": len(items),
+        "submitted_count": submitted_count,
+        "unavailable_count": len(unavailable),
+        "failed_count": len(failed),
         "submitted": submitted,
+        "unavailable": unavailable,
+        "failed": failed,
     }
 
 
@@ -879,18 +955,40 @@ def _create_list_has_grounded_source(prompt, intent):
     return any(word in text for word in ("trending", "popular", "top rated", "best all time", "now playing", "upcoming"))
 
 
-def _best_1080p_variant(variants, config):
-    trusted = {str(value) for value in config.get("trusted_indexers") or []}
-    candidates = []
-    for variant in variants or []:
-        indexer_id = str(variant.get("indexer_id") or variant.get("indexer") or "")
-        if trusted and indexer_id not in trusted:
-            continue
-        if str(variant.get("resolution") or "").lower() != "1080p":
-            continue
-        candidates.append(variant)
-    candidates.sort(key=lambda item: (int(item.get("seeders") or 0), int(item.get("size") or item.get("size_bytes") or 0)), reverse=True)
-    return candidates[0] if candidates else None
+def _plan_items(items):
+    return [
+        {
+            **deepcopy(item),
+            "selection_key": f"item-{index + 1}",
+        }
+        for index, item in enumerate(items or [])
+    ]
+
+
+def _selected_plan(plan, selected_keys):
+    items = list(plan.get("items") or [])
+    if selected_keys is None:
+        selected_items = items
+    else:
+        if not isinstance(selected_keys, (list, tuple, set)):
+            return None, "invalid_selection"
+        requested = [str(value or "").strip() for value in selected_keys]
+        if not requested or any(not value for value in requested):
+            return None, "empty_selection"
+        requested_set = set(requested)
+        available = {str(item.get("selection_key") or "") for item in items}
+        if not requested_set.issubset(available):
+            return None, "invalid_selection"
+        selected_items = [
+            item for item in items
+            if str(item.get("selection_key") or "") in requested_set
+        ]
+    if not selected_items:
+        return None, "empty_selection"
+    selected = deepcopy(plan)
+    selected["items"] = deepcopy(selected_items)
+    selected["total_matches"] = len(selected_items)
+    return selected, ""
 
 
 def _store_or_return(plan, plan_store):
@@ -1031,17 +1129,6 @@ def _movie_keys(movie):
     return keys
 
 
-def _is_download_movie_owned(movie, owned_keys, owned_movie_lookup=None):
-    if any(key in owned_keys for key in _movie_keys(movie)):
-        return True
-    if owned_movie_lookup:
-        try:
-            return bool(owned_movie_lookup(movie))
-        except Exception:
-            return False
-    return False
-
-
 def _first_year(item):
     value = str(item.get("year") or item.get("plex_year") or item.get("title") or item.get("filename") or "")
     match = re.search(r"(?:19|20)\d{2}", value)
@@ -1104,14 +1191,6 @@ def _list_name(prompt):
         return named.group(1).strip()[:80] or "AI Control List"
     text = re.sub(r"^\s*create\s+(?:a\s+)?list\s+(?:of|for)?\s*", "", str(prompt), flags=re.I).strip()
     return text[:80] or "AI Control List"
-
-
-def _bounded_int(value, default, minimum, maximum):
-    try:
-        current = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(minimum, min(maximum, current))
 
 
 def _coerce_bool(value, default=False):

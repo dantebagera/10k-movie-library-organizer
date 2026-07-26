@@ -28,7 +28,7 @@ class AiControlUiTest(unittest.TestCase):
 
     def test_execute_button_depends_on_reviewed_plan_id(self):
         self.assertIn("executeAiControlPlan", APP_SOURCE)
-        self.assertIn("disabled={!aiControlPlan?.plan_id", APP_SOURCE)
+        self.assertIn("confirmDisabled={!aiControlPlan?.plan_id", APP_SOURCE)
         self.assertIn("/api/ai-control/preview", APP_SOURCE)
         self.assertIn("/api/ai-control/execute", APP_SOURCE)
 
@@ -48,9 +48,9 @@ class AiControlUiTest(unittest.TestCase):
         self.assertIn(".experimental-badge", STYLES_SOURCE)
         self.assertIn(".ai-control-guide", STYLES_SOURCE)
 
-    def test_ai_control_blocked_rows_show_reason_column(self):
-        self.assertIn("Reason", APP_SOURCE)
-        self.assertIn("row.reason", APP_SOURCE)
+    def test_ai_control_blocked_results_are_reported_without_a_second_results_owner(self):
+        self.assertIn("could not be included in the selectable plan", APP_SOURCE)
+        self.assertNotIn("function AIControlTable", APP_SOURCE)
 
     def test_ai_control_preview_loading_shows_staged_messages(self):
         for text in [
@@ -62,30 +62,40 @@ class AiControlUiTest(unittest.TestCase):
         ]:
             self.assertIn(text, APP_SOURCE)
 
-    def test_ai_control_find_results_can_replace_table_with_card_view(self):
+    def test_every_valid_ai_control_action_uses_card_results(self):
         for text in [
-            "Display as cards",
-            "Back to table",
             "ai-control-card-results",
-            "setAiControlCardView(true)",
-            "plan.action === 'find'",
+            "AIControlCardResults",
+            "DiscoverMovieCard",
+            "const ready = plan.state === 'valid_plan'",
         ]:
             self.assertIn(text, APP_SOURCE)
+        self.assertNotIn("Display as cards", APP_SOURCE)
+        self.assertNotIn("Back to table", APP_SOURCE)
 
-    def test_ai_control_card_view_reuses_discover_cards_and_bulk_lists(self):
+    def test_ai_control_cards_reuse_discover_cards_and_shared_bulk_list_owner(self):
         result_source = APP_SOURCE[
             APP_SOURCE.index("function AIControlResult"):
-            APP_SOURCE.index("function AIControlTable")
+            APP_SOURCE.index("function AIControlCardResults")
         ]
         for text in [
             "AIControlCardResults",
-            "DiscoverMovieCard",
-            "selectedAiControlMovies",
-            "Add selected to list",
-            "onAddBulk={addAiControlMoviesToList}",
+            "selectedAiControlKeys",
+            "reviewedDownloads",
+            "onConfirm={confirmAction}",
+            "onFindSources={openSourceReview}",
         ]:
             self.assertIn(text, APP_SOURCE)
-        self.assertIn("!aiControlCardView && visibleRows.length > 0 && <AIControlTable", result_source)
+        card_source = APP_SOURCE[APP_SOURCE.index("function AIControlCardResults"):]
+        for text in [
+            "DiscoverMovieCard",
+            "Add to list",
+            "onAddBulk={addAiControlMoviesToList}",
+            "Select all results",
+            "Find sources",
+            "Confirm action",
+        ]:
+            self.assertIn(text, card_source)
 
     def test_ai_control_card_view_can_surface_preserved_cast_and_directors(self):
         discover_card_source = SHARED_CARDS_SOURCE[
@@ -105,10 +115,29 @@ class AiControlUiTest(unittest.TestCase):
         ]:
             self.assertIn(text, APP_SOURCE)
 
+    def test_ai_control_selection_starts_complete_persists_across_pages_and_executes_server_keys(self):
+        for text in [
+            "new Set((plan?.items || []).map((item) => item.selection_key).filter(Boolean))",
+            "selectedAiControlKeys.has(row.selection_key)",
+            "selected_keys: selectedKeys",
+            "reviewed_downloads: reviewedDownloads",
+            "Exact command selection: all",
+            "Customized selection:",
+        ]:
+            self.assertIn(text, APP_SOURCE)
+
+    def test_ai_control_find_sources_is_review_only_until_confirm(self):
+        for text in [
+            "previewSourceReview(selectedRows, { policy: 'ai_control' })",
+            "onReviewComplete",
+            "setReviewedDownloads",
+        ]:
+            self.assertIn(text, APP_SOURCE)
+
     def test_ai_control_large_delete_requires_confirmation_phrase(self):
         for text in [
-            "requires_extra_confirmation",
-            "confirmation_phrase",
+            "selectedCount > 50",
+            "expectedDeletePhrase",
             "confirmation_phrase: confirmationPhrase",
             "Type the confirmation phrase",
             "setAiControlDangerPhrase",

@@ -1639,13 +1639,13 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
       summary: 'SQL parity plan',
       message: 'One owned result',
       total_matches: 1,
-      items: [parityMovie]
+      page_size: 20,
+      items: [{ ...parityMovie, selection_key: 'item-1' }]
     } });
   });
   await page.goto('/ai-control', { waitUntil: 'domcontentloaded' });
   await page.getByPlaceholder('Tell CP what to find, list, download, or delete...').fill('Find my parity movie');
   await page.getByRole('button', { name: 'Preview command' }).click();
-  await page.getByRole('button', { name: 'Display as cards' }).click();
   const aiCard = page.locator('.discover-movie-card').filter({ hasText: parityMovie.title });
   await aiCard.click();
   await expect(aiCard).toContainText('SQL Director');
@@ -1654,6 +1654,73 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
 
   expect(libraryDetailsRequests).toBeGreaterThanOrEqual(5);
   expect(tmdbDetailsRequests).toBe(0);
+});
+
+test('AI Control cards start fully selected, preserve custom selection across pages, and confirm exact server keys', async ({ page }) => {
+  await mockCardParityApis(page);
+  const movies = [
+    { ...parityMovie, selection_key: 'item-1' },
+    ...Array.from({ length: 20 }, (_, index) => ({
+      tmdb_id: String(1000 + index),
+      title: `AI Result ${index + 2}`,
+      year: String(2000 + index),
+      poster_url: '',
+      genres: ['Drama'],
+      selection_key: `item-${index + 2}`
+    }))
+  ];
+  let executePayload = null;
+
+  await page.route('**/api/ai-control/preview', (route) => route.fulfill({ json: {
+    state: 'valid_plan',
+    plan_id: 'complete-card-plan',
+    action: 'download',
+    summary: 'Download 21 movies in 1080p',
+    message: 'Every result is selected.',
+    total_matches: 21,
+    page_size: 20,
+    items: movies,
+    blocked: [],
+    warnings: []
+  } }));
+  await page.route('**/api/ai-control/execute', async (route) => {
+    executePayload = await route.request().postDataJSON();
+    await route.fulfill({ json: {
+      state: 'executed',
+      action: 'download',
+      summary: 'Downloads submitted',
+      message: 'Submitted 20 downloads to qBittorrent.',
+      total_matches: 20,
+      submitted_count: 20
+    } });
+  });
+
+  await page.goto('/ai-control', { waitUntil: 'domcontentloaded' });
+  await page.getByPlaceholder('Tell CP what to find, list, download, or delete...').fill('Download every matching movie in 1080p');
+  await page.getByRole('button', { name: 'Preview command' }).click();
+
+  await expect(page.getByText('Exact command selection: all 21 results.')).toBeVisible();
+  await expect(page.locator('.discover-movie-card')).toHaveCount(20);
+  await expect(page.getByText('21 selected', { exact: true })).toBeVisible();
+  await expect(page.locator('.discover-movie-card').filter({ hasText: parityMovie.title }).getByText('Owned', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Next page' }).click();
+  await expect(page.locator('.discover-movie-card')).toHaveCount(1);
+  await page.getByLabel('Select AI Result 21').click({ force: true });
+  await expect(page.getByText('Customized selection: 20 of 21 results.')).toBeVisible();
+  await expect(page.getByText('20 selected', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Previous page' }).click();
+  await expect(page.getByLabel(`Select ${parityMovie.title}`)).toBeChecked();
+  await page.getByRole('button', { name: 'Confirm action' }).click();
+
+  await expect.poll(() => executePayload).not.toBeNull();
+  expect(executePayload.plan_id).toBe('complete-card-plan');
+  expect(executePayload.selected_keys).toHaveLength(20);
+  expect(executePayload.selected_keys).toContain('item-1');
+  expect(executePayload.selected_keys).not.toContain('item-21');
+  expect(executePayload.reviewed_downloads).toEqual([]);
+  await expect(page.getByRole('heading', { name: 'Downloads submitted' })).toBeVisible();
 });
 
 test('curation generation refresh keeps an expanded Discover card open', async ({ page }) => {

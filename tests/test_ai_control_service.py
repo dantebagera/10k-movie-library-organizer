@@ -95,14 +95,12 @@ class AiControlServiceTest(unittest.TestCase):
             library_items=[],
             ollama_chat=lambda messages: json.dumps({"action": "download", "filters": ["nolan"]}),
             person_movies=lambda name, role, settings: captured.append((name, role)) or [],
-            source_search=lambda movie, settings: [],
         )
 
         self.assertEqual(result["state"], "no_matches")
         self.assertEqual(captured, [("Christopher Nolan", "director")])
 
-    def test_download_skips_tmdb_movie_already_owned_by_title_and_year(self):
-        searched = []
+    def test_download_unowned_filter_excludes_movie_already_owned_by_title_and_year(self):
         config = {**ai_control.default_config(), "trusted_indexers": ["1"]}
 
         result = ai_control.preview_command(
@@ -118,15 +116,11 @@ class AiControlServiceTest(unittest.TestCase):
             person_movies=lambda name, role, settings: [
                 {"tmdb_id": "454626", "title": "Sonic the Hedgehog", "year": "2020", "source": "TMDB"},
             ],
-            source_search=lambda movie, settings: searched.append(movie) or [
-                {"title": "Sonic the Hedgehog 1080p", "indexer": "YTS", "indexer_id": "1", "resolution": "1080p"}
-            ],
         )
 
         self.assertEqual(result["state"], "no_matches")
-        self.assertEqual(searched, [])
-        self.assertEqual(result["blocked"][0]["status"], "already_owned")
-        self.assertEqual(result["blocked"][0]["reason"], "Already in library")
+        self.assertEqual(result["items"], [])
+        self.assertEqual(result["blocked"], [])
 
     def test_semantic_ollama_intent_creates_person_grounded_list(self):
         captured = []
@@ -332,7 +326,7 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual([item["title"] for item in result["items"]], ["Top Gun"])
 
-    def test_find_does_not_silently_crop_person_results_to_max_matched_movies(self):
+    def test_find_keeps_complete_person_results_in_paged_cards(self):
         movies = [
             {"tmdb_id": str(index), "title": f"Tom Cruise Movie {index}", "year": "1996", "source": "TMDB"}
             for index in range(60)
@@ -340,7 +334,7 @@ class AiControlServiceTest(unittest.TestCase):
 
         result = ai_control.preview_command(
             "Find all Tom Cruise movies",
-            config={**ai_control.default_config(), "max_matched_movies": 25},
+            config=ai_control.default_config(),
             library_items=[],
             ollama_chat=lambda messages: json.dumps({
                 "action": "find",
@@ -354,7 +348,11 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(result["state"], "valid_plan")
         self.assertEqual(result["total_matches"], 60)
         self.assertEqual(len(result["items"]), 60)
-        self.assertEqual(result["page_size"], 50)
+        self.assertEqual(result["page_size"], 20)
+        self.assertEqual(
+            [item["selection_key"] for item in result["items"]],
+            [f"item-{index}" for index in range(1, 61)],
+        )
         self.assertIn("60 movies", result["message"])
 
     def test_create_list_plan_keeps_all_matched_items_and_reports_total(self):
@@ -366,7 +364,7 @@ class AiControlServiceTest(unittest.TestCase):
 
         result = ai_control.preview_command(
             'create a list named "Alan Rickman movies" and include all alan rickman movies',
-            config={**ai_control.default_config(), "max_matched_movies": 25},
+            config=ai_control.default_config(),
             library_items=[],
             plan_store=store,
             ollama_chat=lambda messages: json.dumps({
@@ -384,6 +382,8 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(result["total_matches"], 60)
         self.assertEqual(len(result["items"]), 60)
         self.assertEqual(len(stored["items"]), 60)
+        self.assertEqual(result["page_size"], 20)
+        self.assertEqual(stored["items"][-1]["selection_key"], "item-60")
         self.assertIn("60 movies", result["message"])
 
     def test_create_list_owned_person_results_intersect_online_matches_with_library(self):
@@ -414,8 +414,7 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual([item["title"] for item in result["items"]], ["Top Gun"])
         self.assertEqual(result["items"][0]["source"], "Library")
 
-    def test_download_reports_total_matches_and_search_batch_cap(self):
-        searched = []
+    def test_download_preview_keeps_all_candidates_and_performs_no_source_work(self):
         movies = [
             {"tmdb_id": str(index), "title": f"Missing Movie {index}", "year": "1996", "source": "TMDB"}
             for index in range(12)
@@ -423,7 +422,7 @@ class AiControlServiceTest(unittest.TestCase):
 
         result = ai_control.preview_command(
             "Download unowned Tom Cruise movies in 1080p",
-            config={**ai_control.default_config(), "trusted_indexers": ["1"], "max_download_searches": 3},
+            config={**ai_control.default_config(), "trusted_indexers": ["1"]},
             library_items=[],
             ollama_chat=lambda messages: json.dumps({
                 "action": "download",
@@ -433,17 +432,16 @@ class AiControlServiceTest(unittest.TestCase):
                 "quality": "1080p",
             }),
             person_movies=lambda name, role, settings: movies,
-            source_search=lambda movie, settings: searched.append(movie["title"]) or [
-                {"title": f"{movie['title']} 1080p", "indexer": "YTS", "indexer_id": "1", "resolution": "1080p"}
-            ],
         )
 
         self.assertEqual(result["state"], "valid_plan")
         self.assertEqual(result["total_matches"], 12)
-        self.assertEqual(len(result["items"]), 3)
-        self.assertEqual(len(searched), 3)
-        self.assertIn("12 movies matched", result["message"])
-        self.assertIn("3 download searches planned", result["message"])
+        self.assertEqual(len(result["items"]), 12)
+        self.assertEqual(result["page_size"], 20)
+        self.assertEqual(result["items"][0]["selection_key"], "item-1")
+        self.assertEqual(result["items"][-1]["selection_key"], "item-12")
+        self.assertNotIn("variant", result["items"][0])
+        self.assertIn("Every result is selected", result["message"])
 
     def test_large_delete_plan_requires_extra_confirmation_metadata(self):
         with tempfile.TemporaryDirectory() as root:
@@ -601,34 +599,189 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(second["state"], "unsafe")
         self.assertEqual(len(created_calls), 1)
 
-    def test_confirmation_phrase_is_checked_before_plan_is_consumed(self):
+    def test_custom_selection_executes_only_selected_create_list_items(self):
+        store = ai_control.PlanStore(ttl_seconds=60)
+        plan = store.put({
+            "state": "valid_plan",
+            "action": "create_list",
+            "list_name": "Selected Movies",
+            "items": [
+                {"selection_key": "item-1", "tmdb_id": "1", "title": "One"},
+                {"selection_key": "item-2", "tmdb_id": "2", "title": "Two"},
+                {"selection_key": "item-3", "tmdb_id": "3", "title": "Three"},
+            ],
+        })
+        created_movies = []
+
+        result = ai_control.execute_plan(
+            plan["plan_id"],
+            plan_store=store,
+            selected_keys=["item-1", "item-3"],
+            create_list=lambda name, movies: (
+                created_movies.extend(movies)
+                or {"id": "selected", "name": name, "movies": movies, "count": len(movies)}
+            ),
+        )
+
+        self.assertEqual(result["state"], "executed")
+        self.assertEqual(result["total_matches"], 2)
+        self.assertEqual([item["title"] for item in created_movies], ["One", "Three"])
+
+    def test_invalid_selection_is_rejected_without_consuming_plan(self):
+        store = ai_control.PlanStore(ttl_seconds=60)
+        plan = store.put({
+            "state": "valid_plan",
+            "action": "find",
+            "items": [
+                {"selection_key": "item-1", "tmdb_id": "1", "title": "One"},
+                {"selection_key": "item-2", "tmdb_id": "2", "title": "Two"},
+            ],
+        })
+
+        rejected = ai_control.execute_plan(
+            plan["plan_id"],
+            plan_store=store,
+            selected_keys=["forged-key"],
+        )
+        executed = ai_control.execute_plan(
+            plan["plan_id"],
+            plan_store=store,
+            selected_keys=["item-2"],
+        )
+
+        self.assertEqual(rejected["state"], "unsafe")
+        self.assertIn("do not belong", rejected["message"])
+        self.assertEqual(executed["state"], "executed")
+        self.assertEqual([item["title"] for item in executed["items"]], ["Two"])
+
+    def test_download_execution_prepares_and_submits_every_selected_item_without_a_cap(self):
+        store = ai_control.PlanStore(ttl_seconds=60)
+        items = [
+            {
+                "selection_key": f"item-{index}",
+                "tmdb_id": str(index),
+                "title": f"Movie {index}",
+                "year": "2000",
+            }
+            for index in range(1, 13)
+        ]
+        plan = store.put({
+            "state": "valid_plan",
+            "action": "download",
+            "items": items,
+        })
+        prepared = []
+        submitted = []
+
+        def prepare_download(movie):
+            prepared.append(movie["selection_key"])
+            return {
+                **movie,
+                "status": "ready",
+                "selected": True,
+                "variant": {"title": f"{movie['title']} 1080p"},
+            }
+
+        def submit_download(row):
+            submitted.append(row["selection_key"])
+            return {"submitted": row["variant"]["title"]}
+
+        result = ai_control.execute_plan(
+            plan["plan_id"],
+            plan_store=store,
+            prepare_download=prepare_download,
+            submit_download=submit_download,
+        )
+
+        self.assertEqual(result["state"], "executed")
+        self.assertEqual(result["total_matches"], 12)
+        self.assertEqual(result["submitted_count"], 12)
+        self.assertEqual(result["unavailable_count"], 0)
+        self.assertEqual(result["failed_count"], 0)
+        self.assertEqual(set(prepared), {f"item-{index}" for index in range(1, 13)})
+        self.assertEqual(submitted, [f"item-{index}" for index in range(1, 13)])
+
+    def test_reviewed_download_is_reused_and_unavailable_item_does_not_block_others(self):
+        store = ai_control.PlanStore(ttl_seconds=60)
+        plan = store.put({
+            "state": "valid_plan",
+            "action": "download",
+            "items": [
+                {"selection_key": "item-1", "tmdb_id": "1", "title": "Reviewed"},
+                {"selection_key": "item-2", "tmdb_id": "2", "title": "Unavailable"},
+            ],
+        })
+        prepared = []
+        submitted = []
+        reviewed = {
+            "selection_key": "item-1",
+            "tmdb_id": "forged",
+            "title": "Forged title",
+            "status": "ready",
+            "selected": True,
+            "upgrade": True,
+            "variant": {"title": "Reviewed 1080p"},
+        }
+
+        result = ai_control.execute_plan(
+            plan["plan_id"],
+            plan_store=store,
+            reviewed_downloads=[reviewed],
+            prepare_download=lambda movie: (
+                prepared.append(movie["selection_key"])
+                or {
+                    **movie,
+                    "status": "blocked",
+                    "selected": False,
+                    "variant": None,
+                    "reason": "No trusted source",
+                }
+            ),
+            submit_download=lambda row: submitted.append(row) or {"ok": True},
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(result["unavailable_count"], 1)
+        self.assertEqual(prepared, ["item-2"])
+        self.assertEqual(submitted[0]["selection_key"], "item-1")
+        self.assertEqual(submitted[0]["tmdb_id"], "1")
+        self.assertEqual(submitted[0]["title"], "Reviewed")
+        self.assertTrue(submitted[0]["upgrade"])
+
+    def test_large_delete_confirmation_is_recomputed_for_custom_selection_before_consuming_plan(self):
         with tempfile.TemporaryDirectory() as root:
-            movie = os.path.join(root, "Large Movie.mkv")
-            with open(movie, "wb") as handle:
-                handle.write(b"movie")
+            items = []
+            for index in range(51):
+                movie = os.path.join(root, f"Large Movie {index}.mkv")
+                with open(movie, "wb") as handle:
+                    handle.write(b"movie")
+                items.append({
+                    "selection_key": f"item-{index + 1}",
+                    "path": movie,
+                    "observed_size": os.path.getsize(movie),
+                })
             store = ai_control.PlanStore(ttl_seconds=60)
             plan = store.put({
                 "state": "valid_plan",
                 "action": "delete",
-                "items": [{
-                    "path": movie,
-                    "observed_size": os.path.getsize(movie),
-                }],
+                "items": items,
                 "requires_extra_confirmation": True,
-                "confirmation_phrase": "DELETE 1 FILE",
+                "confirmation_phrase": "DELETE 51 FILES",
             })
 
             rejected = ai_control.execute_plan(
                 plan["plan_id"],
                 plan_store=store,
                 confirmation_phrase="wrong",
+                selected_keys=[item["selection_key"] for item in items],
                 library_roots=[root],
                 delete_file=lambda path: {"deleted": path},
             )
             executed = ai_control.execute_plan(
                 plan["plan_id"],
                 plan_store=store,
-                confirmation_phrase="DELETE 1 FILE",
+                confirmation_phrase="DELETE 51 FILES",
+                selected_keys=[item["selection_key"] for item in items],
                 library_roots=[root],
                 delete_file=lambda path: {"deleted": path},
             )

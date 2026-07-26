@@ -1,13 +1,15 @@
-import { AlertTriangle, Bot, Check, CirclePlus, Film, Loader2, RefreshCcw, Sparkles, X } from 'lucide-react';
+import { AlertTriangle, Bot, Check, CirclePlus, Loader2, Search, Sparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks } from '../../api/library.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, clearUserListsCache, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
+import { previewSourceReview } from '../../api/sourceReview.js';
 import DiscoverResultGrid from '../../components/DiscoverResultGrid.jsx';
 import ExperimentalBadge from '../../components/ExperimentalBadge.jsx';
 import ListEditorModal from '../../components/ListEditorModal.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
+import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { DiscoverMovieCard } from '../../components/SharedMovieCards.jsx';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
@@ -46,7 +48,6 @@ export default function AIControlWorkspace({
   const [aiControlBusy, setAiControlBusy] = useState(false);
   const [aiControlError, setAiControlError] = useState('');
   const [aiControlLoadingStep, setAiControlLoadingStep] = useState(null);
-  const [aiControlCardView, setAiControlCardView] = useState(false);
   const aiControlStageTimersRef = useRef([]);
 
   function clearAiControlStageTimers() {
@@ -74,7 +75,6 @@ export default function AIControlWorkspace({
     setAiControlBusy(true);
     setAiControlError('');
     setAiControlReceipt(null);
-    setAiControlCardView(false);
     startAiControlPreviewProgress();
     try {
       const data = await fetchJson('/api/ai-control/preview', {
@@ -98,7 +98,7 @@ export default function AIControlWorkspace({
     }
   }
 
-  async function executeAiControlPlan(confirmationPhrase = '') {
+  async function executeAiControlPlan({ confirmationPhrase = '', selectedKeys = [], reviewedDownloads = [] } = {}) {
     if (!aiControlPlan?.plan_id) return;
     setAiControlBusy(true);
     setAiControlError('');
@@ -109,7 +109,9 @@ export default function AIControlWorkspace({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           plan_id: aiControlPlan.plan_id,
-          confirmation_phrase: confirmationPhrase
+          confirmation_phrase: confirmationPhrase,
+          selected_keys: selectedKeys,
+          reviewed_downloads: reviewedDownloads
         })
       });
       setAiControlPlan(null);
@@ -156,7 +158,7 @@ export default function AIControlWorkspace({
           <button type="submit" className="btn btn-primary btn-violet" disabled={aiControlBusy}>
             {aiControlBusy ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />} Preview command
           </button>
-          <button type="button" className="btn btn-secondary" onClick={() => { setPrompt(''); setAiControlPlan(null); setAiControlReceipt(null); setAiControlError(''); setAiControlCardView(false); }} disabled={aiControlBusy}>
+          <button type="button" className="btn btn-secondary" onClick={() => { setPrompt(''); setAiControlPlan(null); setAiControlReceipt(null); setAiControlError(''); }} disabled={aiControlBusy}>
             <X size={15} /> Clear
           </button>
         </div>
@@ -195,8 +197,6 @@ export default function AIControlWorkspace({
         aiControlReceipt={aiControlReceipt}
         busy={aiControlBusy}
         onExecute={executeAiControlPlan}
-        aiControlCardView={aiControlCardView}
-        setAiControlCardView={setAiControlCardView}
         followed={followed}
         notify={notify}
         onPlay={onPlay}
@@ -217,8 +217,6 @@ function AIControlResult({
   aiControlReceipt,
   busy,
   onExecute,
-  aiControlCardView,
-  setAiControlCardView,
   followed,
   notify,
   onPlay,
@@ -233,16 +231,21 @@ function AIControlResult({
   const plan = aiControlPlan;
   const [currentPage, setCurrentPage] = useState(1);
   const [aiControlDangerPhrase, setAiControlDangerPhrase] = useState('');
+  const [selectedAiControlKeys, setSelectedAiControlKeys] = useState(() => new Set());
+  const [reviewedDownloads, setReviewedDownloads] = useState([]);
+  const [sourceReview, setSourceReview] = useState(null);
   const planKey = `${plan?.plan_id || ''}-${plan?.summary || ''}-${plan?.message || ''}-${aiControlReceipt?.summary || ''}`;
 
   useEffect(() => {
     setCurrentPage(1);
     setAiControlDangerPhrase('');
-    setAiControlCardView(false);
-  }, [planKey, setAiControlCardView]);
+    setSelectedAiControlKeys(new Set((plan?.items || []).map((item) => item.selection_key).filter(Boolean)));
+    setReviewedDownloads([]);
+    setSourceReview(null);
+  }, [planKey]);
 
   if (aiControlReceipt) {
-    const executedCount = Number(aiControlReceipt.total_matches || aiControlReceipt.created?.count || 0);
+    const executedCount = Number(aiControlReceipt.submitted_count ?? aiControlReceipt.total_matches ?? aiControlReceipt.created?.count ?? 0);
     return (
       <section className="ai-control-result ai-control-result-ready ai-control-execution-receipt">
         <div className="ai-control-result-header">
@@ -271,7 +274,7 @@ function AIControlResult({
   const ready = plan.state === 'valid_plan';
   const rows = plan.items || [];
   const blocked = plan.blocked || [];
-  const pageSize = Number(plan.page_size || 50);
+  const pageSize = Number(plan.page_size || 20);
   const totalMatches = Number(plan.total_matches || rows.length);
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -280,9 +283,65 @@ function AIControlResult({
   const pageLabel = rows.length > pageSize
     ? `Showing ${formatCount(pageStart + 1)}-${formatCount(Math.min(pageStart + pageSize, rows.length))} of ${formatCount(totalMatches)}`
     : `${formatCount(totalMatches)} total`;
-  const requiresDeletePhrase = ready && plan.action === 'delete' && plan.requires_extra_confirmation;
-  const deletePhraseConfirmed = !requiresDeletePhrase || aiControlDangerPhrase.trim() === String(plan.confirmation_phrase || '').trim();
-  const canDisplayCards = ready && plan.action === 'find' && visibleRows.length > 0;
+  const selectedKeys = rows
+    .map((row) => row.selection_key)
+    .filter((selectionKey) => selectionKey && selectedAiControlKeys.has(selectionKey));
+  const selectedRows = rows.filter((row) => row.selection_key && selectedAiControlKeys.has(row.selection_key));
+  const selectedCount = selectedRows.length;
+  const allResultsSelected = rows.length > 0 && selectedCount === rows.length;
+  const customizedSelection = selectedCount !== rows.length;
+  const requiresDeletePhrase = ready && plan.action === 'delete' && selectedCount > 50;
+  const expectedDeletePhrase = requiresDeletePhrase ? `DELETE ${selectedCount} FILES` : '';
+  const deletePhraseConfirmed = !requiresDeletePhrase || aiControlDangerPhrase.trim() === expectedDeletePhrase;
+  const reviewedForSelection = reviewedDownloads.filter((row) => selectedAiControlKeys.has(row.selection_key));
+
+  function toggleSelection(selectionKey, checked) {
+    setSelectedAiControlKeys((current) => {
+      const next = new Set(current);
+      if (checked) next.add(selectionKey);
+      else next.delete(selectionKey);
+      return next;
+    });
+  }
+
+  function selectAllResults() {
+    setSelectedAiControlKeys(new Set(rows.map((row) => row.selection_key).filter(Boolean)));
+  }
+
+  function clearSelection() {
+    setSelectedAiControlKeys(new Set());
+  }
+
+  async function openSourceReview() {
+    if (!selectedRows.length) {
+      notify?.('Select movies before finding sources.', 'neutral');
+      return;
+    }
+    setSourceReview({ loading: true, rows: [], error: '', title: 'Find sources' });
+    try {
+      const data = await previewSourceReview(selectedRows, { policy: 'ai_control' });
+      setSourceReview({
+        loading: false,
+        submitting: false,
+        rows: data.rows || [],
+        blocked: data.blocked || [],
+        defaults: data.defaults || {},
+        error: '',
+        title: 'Find sources'
+      });
+    } catch (error) {
+      setSourceReview((current) => ({ ...current, loading: false, error: error.message }));
+    }
+  }
+
+  function confirmAction() {
+    onExecute({
+      confirmationPhrase: aiControlDangerPhrase,
+      selectedKeys,
+      reviewedDownloads: reviewedForSelection
+    });
+  }
+
   return (
     <section className={cx('ai-control-result', ready ? 'ai-control-result-ready' : 'ai-control-result-blocked')}>
       <div className="ai-control-result-header">
@@ -290,30 +349,12 @@ function AIControlResult({
           <p className="screen-kicker">{plan.state || 'AI Control'}</p>
           <h3>{plan.summary || plan.message || 'Command result'}</h3>
           {plan.message && <p>{plan.message}</p>}
-        </div>
-        <div className="ai-control-result-actions">
-          {canDisplayCards && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                if (aiControlCardView) setAiControlCardView(false);
-                else setAiControlCardView(true);
-              }}
-            >
-              {aiControlCardView ? <RefreshCcw size={15} /> : <Film size={15} />} {aiControlCardView ? 'Back to table' : 'Display as cards'}
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => onExecute(aiControlDangerPhrase)}
-            disabled={!aiControlPlan?.plan_id || busy || !ready || !deletePhraseConfirmed}
-          >
-            {busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} Confirm action
-          </button>
+          {ready && <p>{customizedSelection ? `Customized selection: ${formatCount(selectedCount)} of ${formatCount(rows.length)} results.` : `Exact command selection: all ${formatCount(rows.length)} results.`}</p>}
         </div>
       </div>
+      {(plan.warnings || []).map((warning) => (
+        <div className="library-status library-status-warning" key={warning}><AlertTriangle size={16} /> {warning}</div>
+      ))}
       {ready && (
         <AIControlPagination
           pageLabel={pageLabel}
@@ -325,8 +366,8 @@ function AIControlResult({
       )}
       {requiresDeletePhrase && (
         <label className="ai-control-danger-confirm">
-          <span>Type the confirmation phrase before deleting this batch.</span>
-          <strong>{plan.confirmation_phrase}</strong>
+          <span>Type the confirmation phrase before deleting this selection.</span>
+          <strong>{expectedDeletePhrase}</strong>
           <input
             value={aiControlDangerPhrase}
             onChange={(event) => setAiControlDangerPhrase(event.target.value)}
@@ -334,10 +375,20 @@ function AIControlResult({
           />
         </label>
       )}
-      {canDisplayCards && aiControlCardView ? (
+      {ready && visibleRows.length > 0 ? (
         <AIControlCardResults
           plan={plan}
+          allRows={rows}
           rows={visibleRows}
+          selectedKeys={selectedAiControlKeys}
+          allResultsSelected={allResultsSelected}
+          onToggleSelection={toggleSelection}
+          onSelectAll={selectAllResults}
+          onClearSelection={clearSelection}
+          onFindSources={openSourceReview}
+          onConfirm={confirmAction}
+          confirmDisabled={!aiControlPlan?.plan_id || busy || !deletePhraseConfirmed || !selectedCount}
+          busy={busy}
           followed={followed}
           notify={notify}
           onPlay={onPlay}
@@ -349,14 +400,16 @@ function AIControlResult({
           onFollow={onFollow}
           onEditPoster={onEditPoster}
         />
-      ) : (
-        !aiControlCardView && visibleRows.length > 0 && <AIControlTable rows={visibleRows} action={plan.action} />
-      )}
-      {blocked.length > 0 && (
-        <div className="ai-control-blocked">
-          <h4>Blocked or skipped</h4>
-          <AIControlTable rows={blocked} action={plan.action} compact />
-        </div>
+      ) : null}
+      {blocked.length > 0 && <p className="settings-empty-note">{formatCount(blocked.length)} result{blocked.length === 1 ? '' : 's'} could not be included in the selectable plan.</p>}
+      {sourceReview && (
+        <SourceReviewDialog
+          state={sourceReview}
+          setState={setSourceReview}
+          onClose={() => setSourceReview(null)}
+          onReviewComplete={(rowsToApply) => setReviewedDownloads(rowsToApply)}
+          notify={notify}
+        />
       )}
     </section>
   );
@@ -383,7 +436,17 @@ function AIControlPagination({ pageLabel, currentPage, totalPages, onPrevious, o
 
 function AIControlCardResults({
   plan,
+  allRows,
   rows,
+  selectedKeys,
+  allResultsSelected,
+  onToggleSelection,
+  onSelectAll,
+  onClearSelection,
+  onFindSources,
+  onConfirm,
+  confirmDisabled,
+  busy,
   followed,
   notify,
   onPlay,
@@ -400,7 +463,6 @@ function AIControlCardResults({
   const [detailsCache, setDetailsCache] = useState({});
   const [collectionCache, setCollectionCache] = useState({});
   const [expandedMovieKey, setExpandedMovieKey] = useState('');
-  const [selectedAiControlKeys, setSelectedAiControlKeys] = useState(() => new Set());
   const [listEditorTarget, setListEditorTarget] = useState(null);
   const ownershipRequestSeq = useRef(0);
   const movies = rows || [];
@@ -444,7 +506,6 @@ function AIControlCardResults({
     const requestSeq = ownershipRequestSeq.current + 1;
     ownershipRequestSeq.current = requestSeq;
     setOwnership(buildAiControlOwnershipMap(movies));
-    setSelectedAiControlKeys(new Set());
     setExpandedMovieKey('');
     checkAiControlOwnership(movies, requestSeq);
     return () => {
@@ -532,7 +593,6 @@ function AIControlCardResults({
     await loadUserLists({ force: true });
     announceCurationChanged();
     notify?.(`${formatCount((moviesToAdd || []).length)} movie${(moviesToAdd || []).length === 1 ? '' : 's'} added to list`);
-    setSelectedAiControlKeys(new Set());
   }
 
   async function removeAiControlMovieFromList(listId, movie) {
@@ -560,54 +620,38 @@ function AIControlCardResults({
     notify?.(`${movie.title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 
-  function toggleAiControlSelection(movie, owned, checked) {
-    const key = movieIdentityKey(discoverMoviePayload(movie, owned));
-    setSelectedAiControlKeys((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }
-
-  function selectAllAiControlMovies() {
-    setSelectedAiControlKeys(new Set(movies.map((movie) => movieIdentityKey(discoverMoviePayload(movie, ownedMovieFor(movie, ownership))))));
-  }
-
-  function clearAiControlSelection() {
-    setSelectedAiControlKeys(new Set());
-  }
-
   const selectedAiControlMovies = useMemo(() => (
-    movies
-      .map((movie) => discoverMoviePayload(movie, ownedMovieFor(movie, ownership)))
-      .filter((movie) => selectedAiControlKeys.has(movieIdentityKey(movie)))
-  ), [movies, ownership, selectedAiControlKeys]);
-  const allAiControlMoviesSelected = movies.length > 0 && movies.every((movie) => (
-    selectedAiControlKeys.has(movieIdentityKey(discoverMoviePayload(movie, ownedMovieFor(movie, ownership))))
-  ));
+    (allRows || [])
+      .filter((movie) => selectedKeys.has(movie.selection_key))
+      .map((movie) => discoverMoviePayload(movie, movie.path ? movie : null))
+  ), [allRows, selectedKeys]);
 
   return (
     <div className="ai-control-card-results">
       <div className="bulk-selection-bar discover-bulk-selection ai-control-card-toolbar">
         <SelectionCheckbox
           className="discover-selection-master"
-          checked={allAiControlMoviesSelected}
-          onChange={(checked) => { if (checked) selectAllAiControlMovies(); else clearAiControlSelection(); }}
+          checked={allResultsSelected}
+          onChange={(checked) => { if (checked) onSelectAll(); else onClearSelection(); }}
           label="Select all AI Control results"
         />
-        <span>{selectedAiControlMovies.length ? `${formatCount(selectedAiControlMovies.length)} selected` : `${formatCount(movies.length)} AI Control result${movies.length === 1 ? '' : 's'}`}</span>
-        <button type="button" className="mini-action" onClick={selectAllAiControlMovies}>Select all results</button>
-        <button type="button" className="mini-action" onClick={clearAiControlSelection} disabled={!selectedAiControlMovies.length}>Clear</button>
+        <span>{formatCount(selectedAiControlMovies.length)} selected</span>
+        <button type="button" className="mini-action" onClick={onSelectAll}>Select all results</button>
+        <button type="button" className="mini-action" onClick={onClearSelection} disabled={!selectedAiControlMovies.length}>Clear</button>
         <button type="button" className="mini-action" onClick={() => setListEditorTarget({ bulkItems: selectedAiControlMovies })} disabled={!selectedAiControlMovies.length}>
-          <CirclePlus size={13} /> Add selected to list
+          <CirclePlus size={13} /> Add to list
+        </button>
+        <button type="button" className="mini-action mini-action-source" onClick={onFindSources} disabled={!selectedAiControlMovies.length || busy}>
+          <Search size={13} /> Find sources
+        </button>
+        <button type="button" className="btn btn-primary ai-control-confirm-action" onClick={onConfirm} disabled={confirmDisabled}>
+          {busy ? <Loader2 size={15} className="spin" /> : <Check size={15} />} Confirm action
         </button>
       </div>
 
       <DiscoverResultGrid emptyText="No AI Control movies are available for card display.">
         {movies.map((movie, index) => {
           const owned = ownedMovieFor(movie, ownership) || (movie.path ? movie : null);
-          const key = movieIdentityKey(discoverMoviePayload(movie, owned));
           const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
           const collection = details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
           const movieWithDetails = details ? { ...movie, plot: movie.plot || details.plot || '', release_date: movie.release_date || details.release_date || '' } : movie;
@@ -625,8 +669,8 @@ function AIControlCardResults({
               watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
               onToggleWatched={owned ? () => toggleAiControlSystemList('watched', movie, owned) : undefined}
               onToggleWatchlist={() => toggleAiControlSystemList('watchlist', movie, owned)}
-              selected={selectedAiControlKeys.has(key)}
-              onSelect={(checked) => toggleAiControlSelection(movie, owned, checked)}
+              selected={selectedKeys.has(movie.selection_key)}
+              onSelect={(checked) => onToggleSelection(movie.selection_key, checked)}
               onPlay={onPlay}
               onStream={onStream}
               streamingAvailable={streamingAvailable}
@@ -663,30 +707,4 @@ function buildAiControlOwnershipMap(movies) {
   return buildOwnershipMap((movies || [])
     .filter((movie) => movie?.path)
     .map((movie) => ({ ...movie, found: true })));
-}
-
-function AIControlTable({ rows, action, compact = false }) {
-  return (
-    <div className={cx('ai-control-table', compact && 'ai-control-table-compact')}>
-      <div className="ai-control-table-head">
-        <span>Movie</span>
-        <span>{action === 'delete' ? 'Path' : action === 'download' ? 'Source' : 'Source'}</span>
-        <span>Status</span>
-        <span>Reason</span>
-      </div>
-      {rows.map((row, index) => (
-        <div className="ai-control-table-row" key={`${row.path || row.tmdb_id || row.title}-${index}`}>
-          <span>
-            <strong>{row.title || row.variant?.title || 'Untitled'}</strong>
-            <small>{row.year || row.size_gb ? [row.year, row.size_gb ? `${row.size_gb} GB` : ''].filter(Boolean).join(' - ') : 'No year'}</small>
-          </span>
-          <span title={row.path || row.variant?.title || row.source || row.reason || ''}>
-            {row.path || row.variant?.indexer || row.source || row.reason || 'Review'}
-          </span>
-          <span>{row.status || 'ready'}</span>
-          <span title={row.reason || ''}>{row.reason || (row.status === 'ready' ? 'Ready for review' : 'Review')}</span>
-        </div>
-      ))}
-    </div>
-  );
 }

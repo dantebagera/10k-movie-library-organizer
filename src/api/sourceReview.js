@@ -1,10 +1,14 @@
 import { fetchJson } from './client.js';
 
-export function previewSourceReview(movies) {
+export function previewSourceReview(movies, options = {}) {
   return fetchJson('/api/sources/review/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ movies })
+    body: JSON.stringify({
+      movies,
+      ...(options.quality ? { quality: options.quality } : {}),
+      ...(options.policy ? { policy: options.policy } : {})
+    })
   });
 }
 

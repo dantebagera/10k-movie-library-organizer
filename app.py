@@ -277,8 +277,6 @@ _ollama_candidate_limit = _coerce_ollama_candidate_limit(_cfg.get('ollama_candid
 _ai_control_config = ai_control.coerce_config({
     'enabled': _cfg.get('ai_control_enabled', True),
     'trusted_indexers': _cfg.get('ai_control_trusted_indexers', []),
-    'max_matched_movies': _cfg.get('ai_control_max_matched_movies', 25),
-    'max_download_searches': _cfg.get('ai_control_max_download_searches', 10),
     'ollama_curated_lists': _cfg.get('ai_control_ollama_curated_lists', False),
 })
 _ai_control_trusted_indexers_configured = 'ai_control_trusted_indexers' in _cfg
@@ -2174,8 +2172,6 @@ def _all_config():
         'ollama_model': _ollama_model,
         'ollama_candidate_limit': _ollama_candidate_limit,
         'ai_control_enabled': _ai_control_config['enabled'],
-        'ai_control_max_matched_movies': _ai_control_config['max_matched_movies'],
-        'ai_control_max_download_searches': _ai_control_config['max_download_searches'],
         'ai_control_ollama_curated_lists': _ai_control_config['ollama_curated_lists'],
         'streaming_enabled': _streaming_enabled,
         'streaming_label': _streaming_label,
@@ -3888,8 +3884,6 @@ def ai_control_config():
         **_ai_control_config,
         'enabled': data.get('enabled', _ai_control_config['enabled']),
         'trusted_indexers': data.get('trusted_indexers', _ai_control_config['trusted_indexers']),
-        'max_matched_movies': data.get('max_matched_movies', _ai_control_config['max_matched_movies']),
-        'max_download_searches': data.get('max_download_searches', _ai_control_config['max_download_searches']),
         'ollama_curated_lists': data.get('ollama_curated_lists', _ai_control_config['ollama_curated_lists']),
     })
     _save_config(_all_config())
@@ -4023,6 +4017,40 @@ def _ai_control_filter_person_credit_rows(rows, role='actor'):
     return filtered
 
 
+def _ai_control_tmdb_all_movie_pages(first_url):
+    parsed = urllib.parse.urlsplit(first_url)
+    base_query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    movies = []
+    seen = set()
+    page = 1
+    total_pages = 1
+    while page <= total_pages:
+        page_query = {**base_query, 'page': str(page)}
+        page_url = urllib.parse.urlunsplit((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urllib.parse.urlencode(page_query),
+            parsed.fragment,
+        ))
+        req = urllib.request.Request(page_url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = _json.loads(response.read().decode())
+        if page == 1:
+            total_pages = min(
+                max(1, int(data.get('total_pages', 1) or 1)),
+                TMDB_PROVIDER_PAGE_LIMIT,
+            )
+        for row in data.get('results', []) or []:
+            tmdb_id = str(row.get('id') or row.get('tmdb_id') or '').strip()
+            if not tmdb_id or tmdb_id in seen:
+                continue
+            seen.add(tmdb_id)
+            movies.append(_ai_control_tmdb_movie_payload(row))
+        page += 1
+    return movies
+
+
 def _ai_control_tmdb_discover(intent, config):
     if not _tmdb_key:
         return []
@@ -4067,10 +4095,7 @@ def _ai_control_tmdb_discover(intent, config):
         }
         endpoint = endpoint_map.get(list_name, 'popular')
         url = f"https://api.themoviedb.org/3/movie/{endpoint}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-    with urllib.request.urlopen(req, timeout=10) as response:
-        data = _json.loads(response.read().decode())
-    return [_ai_control_tmdb_movie_payload(row) for row in data.get('results', [])]
+    return _ai_control_tmdb_all_movie_pages(url)
 
 
 def _ai_control_normalized_genre_name(value):
@@ -4111,10 +4136,7 @@ def _ai_control_tmdb_search(query, config):
         'page': '1',
         'include_adult': _tmdb_include_adult_value(False),
     })
-    req = urllib.request.Request(f"https://api.themoviedb.org/3/search/movie?{params}", headers={'Accept': 'application/json'})
-    with urllib.request.urlopen(req, timeout=10) as response:
-        data = _json.loads(response.read().decode())
-    return [_ai_control_tmdb_movie_payload(row) for row in data.get('results', [])]
+    return _ai_control_tmdb_all_movie_pages(f"https://api.themoviedb.org/3/search/movie?{params}")
 
 
 def _ai_control_person_movies(name, role, config):
@@ -4193,7 +4215,7 @@ def _ai_control_submit_download(item):
         'year': item.get('year', ''),
         'tmdb_id': item.get('tmdb_id', ''),
         'imdb_id': item.get('imdb_id', ''),
-        'upgrade': bool(item.get('upgrade')),
+        'upgrade': bool(item.get('upgrade')) or _curated_movie_is_owned(item),
         'release_title': variant.get('title', ''),
         'indexer': variant.get('indexer', ''),
     })
@@ -4240,7 +4262,6 @@ def ai_control_preview():
             tmdb_discover=_ai_control_tmdb_discover,
             tmdb_search=_ai_control_tmdb_search,
             person_movies=_ai_control_person_movies,
-            source_search=_ai_control_source_search,
             owned_movie_lookup=_find_owned_movie,
         )
         return jsonify(result)
@@ -4255,13 +4276,18 @@ def ai_control_execute():
     if not plan_id:
         return jsonify({'error': 'plan_id is required'}), 400
     try:
+        stored_plan = _ai_control_plan_store.get(plan_id)
+        prepare_download = _ai_control_download_preparer() if (stored_plan or {}).get('action') == 'download' else None
         result = ai_control.execute_plan(
             plan_id,
             plan_store=_ai_control_plan_store,
             confirmation_phrase=str(data.get('confirmation_phrase', '') or ''),
+            selected_keys=data.get('selected_keys'),
+            reviewed_downloads=data.get('reviewed_downloads'),
             library_roots=get_movies_dirs(),
             delete_file=_ai_control_delete_file,
             create_list=_ai_control_create_list,
+            prepare_download=prepare_download,
             submit_download=_ai_control_submit_download,
         )
         status = 409 if result.get('state') in {'unsafe', 'unsupported'} else 200
@@ -10548,60 +10574,98 @@ def _source_review_variants_by_quality(variants, trusted_ids):
     }
 
 
+def _source_review_movie_row(movie, quality, trusted_ids):
+    payload = _normalize_curated_movie(movie)
+    selection_key = str((movie or {}).get('selection_key') or '').strip()
+    if selection_key:
+        payload['selection_key'] = selection_key
+    if not _download_job_has_stable_identity(payload):
+        return {
+            **payload,
+            'quality': quality,
+            'upgrade': False,
+            'selected': False,
+            'status': 'identity_required',
+            'variant': None,
+            'variants_by_quality': {'1080p': None, '4K': None},
+            'reason': 'A TMDB or IMDb identity is required before download',
+        }
+    upgrade = _curated_movie_is_owned(payload)
+    try:
+        variants = _ai_control_source_search(payload, {'trusted_indexers': trusted_ids})
+    except Exception as error:
+        variants = []
+        payload['source_error'] = str(error)
+    variants_by_quality = _source_review_variants_by_quality(variants, trusted_ids)
+    variant = variants_by_quality.get(quality)
+    return {
+        **payload,
+        'quality': quality,
+        'upgrade': upgrade,
+        'selected': bool(variant),
+        'status': 'ready' if variant else 'blocked',
+        'variant': variant,
+        'variants_by_quality': variants_by_quality,
+        'reason': '' if variant else payload.get('source_error') or f'No trusted {quality} source found',
+    }
+
+
+def _ai_control_download_preparer():
+    config = _effective_ai_control_config()
+    quality = _normalize_download_quality(config.get('download_quality') or '1080p')
+    trusted_ids = list(config.get('trusted_indexers') or [])
+
+    def prepare(movie):
+        return _source_review_movie_row(movie, quality, trusted_ids)
+
+    return prepare
+
+
 @app.route('/api/sources/review/preview', methods=['POST'])
 def source_review_preview():
     body = request.get_json(force=True, silent=True) or {}
     movies = body.get('movies') or []
     if not isinstance(movies, list) or not movies:
         return jsonify({'error': 'At least one movie is required'}), 400
-    quality = _normalize_download_quality(body.get('quality') or _download_default_quality)
-    try:
-        enabled_indexers = _fetch_enabled_prowlarr_indexers() if _prowlarr_url and _prowlarr_key else []
-    except Exception:
-        enabled_indexers = []
-    trusted_ids = _effective_download_trusted_indexer_ids(enabled_indexers)
-    config = {'trusted_indexers': trusted_ids}
-    rows = []
-    blocked = []
-    for movie in movies:
-        payload = _normalize_curated_movie(movie)
-        if not _download_job_has_stable_identity(payload):
-            row = {
-                **payload,
-                'quality': quality,
-                'upgrade': False,
-                'selected': False,
-                'status': 'identity_required',
-                'variant': None,
-                'variants_by_quality': {'1080p': None, '4K': None},
-                'reason': 'A TMDB or IMDb identity is required before download',
-            }
-            blocked.append(row)
-            rows.append(row)
-            continue
-        upgrade = _curated_movie_is_owned(payload)
+    policy = str(body.get('policy') or 'shared').strip().lower()
+    if policy == 'ai_control':
+        ai_config = _effective_ai_control_config()
+        quality = _normalize_download_quality(body.get('quality') or ai_config.get('download_quality') or '1080p')
+        trusted_ids = list(ai_config.get('trusted_indexers') or [])
+    else:
+        quality = _normalize_download_quality(body.get('quality') or _download_default_quality)
         try:
-            variants = _ai_control_source_search(payload, config)
-        except Exception as error:
-            variants = []
-            payload['source_error'] = str(error)
-        variants_by_quality = _source_review_variants_by_quality(variants, trusted_ids)
-        variant = variants_by_quality.get(quality)
-        row = {
-            **payload,
-            'quality': quality,
-            'upgrade': upgrade,
-            'selected': bool(variant),
-            'status': 'ready' if variant else 'blocked',
-            'variant': variant,
-            'variants_by_quality': variants_by_quality,
-            'reason': '' if variant else payload.get('source_error') or f'No trusted {quality} source found',
+            enabled_indexers = _fetch_enabled_prowlarr_indexers() if _prowlarr_url and _prowlarr_key else []
+        except Exception:
+            enabled_indexers = []
+        trusted_ids = _effective_download_trusted_indexer_ids(enabled_indexers)
+    rows = [None] * len(movies)
+    worker_count = max(1, min(ai_control.DOWNLOAD_PREPARE_WORKERS, len(movies)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(_source_review_movie_row, movie, quality, trusted_ids): index
+            for index, movie in enumerate(movies)
         }
-        if variant:
-            rows.append(row)
-        else:
-            blocked.append(row)
-            rows.append(row)
+        for future in concurrent.futures.as_completed(futures):
+            index = futures[future]
+            try:
+                rows[index] = future.result()
+            except Exception as error:
+                payload = _normalize_curated_movie(movies[index])
+                selection_key = str((movies[index] or {}).get('selection_key') or '').strip()
+                if selection_key:
+                    payload['selection_key'] = selection_key
+                rows[index] = {
+                    **payload,
+                    'quality': quality,
+                    'upgrade': False,
+                    'selected': False,
+                    'status': 'blocked',
+                    'variant': None,
+                    'variants_by_quality': {'1080p': None, '4K': None},
+                    'reason': str(error),
+                }
+    blocked = [row for row in rows if row.get('status') != 'ready']
     return jsonify({
         'rows': rows,
         'blocked': blocked,
@@ -10609,6 +10673,7 @@ def source_review_preview():
             'quality': quality,
             'download_indexer_mode': _download_indexer_mode,
             'trusted_indexers': trusted_ids,
+            'policy': policy,
         },
     })
 

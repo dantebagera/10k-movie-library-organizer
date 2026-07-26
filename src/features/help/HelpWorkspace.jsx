@@ -470,7 +470,7 @@ const helpSections = [
     steps: [
       'Configure Ollama first if you want AI-assisted interpretation or Ollama-curated lists.',
       'Open CP Settings and enable AI Control Experimental.',
-      'Set max matched movies, max download searches, and whether Ollama-curated lists are allowed.',
+      'Choose whether Ollama-curated lists are allowed. AI Control keeps complete result sets paged and leaves download queue limits to qBittorrent.',
       'Open AI Control trusted indexers to choose which Prowlarr sources may be used for download planning.',
       'Use the AI Control workspace to preview a command, review the plan, then confirm only if it is correct.'
     ],
