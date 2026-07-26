@@ -127,3 +127,12 @@ The final ownership map is
 commands, thresholds, timings, hashes, browser observations, cleanup, and Git
 scope are recorded in
 `docs/plans/search-completeness-discover-pagination-execution-evidence-2026-07-26.md`.
+
+After Gate 5, Dante separately approved normal-runtime verification. Commit
+`bed56a8d3a82665758571709a240af096728e6d2` was started on port 5000 and
+passed live desktop Library, Discover, relationship, ownership, Home,
+Maintenance, list, collection, playback-control, and Downloads availability
+checks. Schema remained version 8, media generation remained 6076, and all
+recorded catalogue row counts remained unchanged. The existing Home
+followed-release refresh advanced curation generation once and is documented
+separately from the search/pagination acceptance.

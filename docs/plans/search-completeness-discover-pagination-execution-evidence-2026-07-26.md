@@ -2,8 +2,8 @@
 
 Date: 2026-07-26
 
-Status: Gate 5 complete after an explicitly approved ownership-query
-remediation; normal-runtime rollout has not started.
+Status: Complete. Gate 5 passed after an explicitly approved ownership-query
+remediation, and the separately approved normal-runtime verification passed.
 
 Baseline:
 
@@ -17,8 +17,9 @@ Baseline:
 - clone SHA-256:
   `1FD08B7C2F62E36ACAB33CECCD1316967CD900E876F347A1A3B230D242312170`
 
-The original plan remains an untracked planning input. This evidence file is
-separate so neither file is silently bundled with unrelated work.
+The original plan began as an untracked planning input. It and this separate
+evidence record were intentionally included only in the reviewed implementation
+commit, rather than being silently bundled with unrelated work.
 
 ## 1. Scope decision
 
@@ -1194,3 +1195,144 @@ port-5000 listener remains untouched at PID 37456.
 Gate 5 is complete. The normal application has not been restarted, and no
 live-catalogue rollout verification has begun. Per the plan, both require
 Dante's separate approval.
+
+## 30. Separately approved normal-runtime verification
+
+Dante approved all remaining plan work after the Gate 5 stop. The reviewed
+16-file implementation, regression, plan, and evidence patch was committed as:
+
+```text
+bed56a8d3a82665758571709a240af096728e6d2 Complete search and Discover pagination
+```
+
+The commit contains 3,466 insertions and 236 deletions. Every path was staged
+explicitly; no directory-wide add, amend, push, or pull request was used.
+
+The exact existing port-5000 process chain was resolved before restart:
+
+- old parent PID: 46548;
+- old listener PID: 37456;
+- command: `.venv\Scripts\python.exe app.py`, spawning the Python 3.12
+  listener.
+
+The normal application was restarted from `bed56a8d3a82665758571709a240af096728e6d2`.
+The final healthy process chain is:
+
+- parent PID: 29644;
+- listener PID: 46612;
+- address: `127.0.0.1:5000`;
+- application version rendered by the desktop UI: `v2.8.0`;
+- API ready: 120.406 ms;
+- reconcile status: `completed`.
+
+The active log files are:
+
+```text
+C:\Users\dante\AppData\Local\Temp\cp-normal-runtime-20260726-041135.stdout.log
+C:\Users\dante\AppData\Local\Temp\cp-normal-runtime-20260726-041135.stderr.log
+```
+
+They remain present because the running application owns them.
+
+### 30.1 Live-state boundary
+
+Only lightweight read-only state was captured; no live integrity audit,
+backfill, rescan, repair, or performance benchmark was run.
+
+Before restart:
+
+- database:
+  `C:\Users\dante\AppData\Local\Cinema Paradiso\Catalog\catalog-read-cb30c1d963c88463.sqlite`;
+- schema version: 8;
+- write authority: `sqlite`;
+- media generation: 6076;
+- curation generation: 16752;
+- aggregate generation: 28951;
+- media files: 3,737;
+- provider snapshots: 7,447;
+- people: 37,648;
+- movie credits: 56,088;
+- keywords: 7,937;
+- movie-keyword relationships: 33,984;
+- user lists: 11;
+- collections: 583;
+- followed releases: 11.
+
+After restart and browser verification, schema version, write authority, media
+generation, and every recorded row count were unchanged. Aggregate generation
+advanced once to 28952 and curation generation advanced once to 16753,
+coincident with the existing Home followed-release refresh. That request
+completed with HTTP 200 and the 11 followed rows received the same new
+`last_checked` value. No media generation changed.
+
+### 30.2 Live desktop evidence
+
+The in-app desktop browser exercised ordinary read, search, paging, and
+navigation behavior:
+
+- normal Library rendered 3,736 accepted movies as page 1 of 94, with 40
+  cards and existing play controls;
+- live Library keyword query `s` returned 925 identities across 19 pages;
+- Library page 11 rendered 50 replacement cards and
+  `Showing 501-550 of 925`;
+- Library page 19 rendered its final 25 cards and
+  `Showing 901-925 of 925`, with Next disabled;
+- selecting the page-19 `survival thriller` identity opened its one SQL-owned
+  movie;
+- normal Trending Week Discover rendered 10,000 provider results as 250
+  40-card application pages;
+- normal Discover page 11 rendered 40 replacement cards and
+  `Showing 401-440 of 10,000`;
+- TMDB keyword query `space` returned 152 identities across eight bounded
+  pages; page 8 rendered its final 12 identities;
+- the selected `space` relationship returned 719 movies across 36
+  20-card pages;
+- moving that relationship from page 1 to page 2 replaced the first movie
+  (`Supergirl` became `Alien³`), retained 20 cards, and exposed zero
+  `Load more` buttons;
+- Tom Hanks acting credits rendered 181 movies across ten bounded pages;
+- Eric Roberts acting credits rendered 680 movies across 34 bounded pages;
+- the Eric Roberts relationship reached page 11 with 20 replacement cards and
+  `Showing 201-220 of 680`, with zero `Load more` buttons;
+- Back restored the prior paged keyword identity state;
+- Home, Movie Lists, Maintenance, and Downloads rendered normally;
+- Movie Lists rendered its existing selected-list counts and playable owned
+  cards;
+- Maintenance rendered zero duplicate groups, 728 upgrade candidates, and one
+  unmatched file;
+- Downloads rendered the existing qBittorrent workspace;
+- the SQL-owned Star Wars collection route returned HTTP 200 with nine parts,
+  nine owned movies, media generation 6076, and curation generation 16753.
+
+The server access log recorded:
+
+- 20 bounded Library keyword identity requests, one per explicit page
+  transition and no speculative page prefetch;
+- 15 TMDB Discover requests;
+- 15 TMDB keyword identity requests;
+- two TMDB People identity requests;
+- 12 TMDB person-movie requests;
+- 30 existing authoritative `/api/library/check` ownership attachments;
+- 257 HTTP 200 responses;
+- two HTTP 304 responses;
+- zero HTTP 500 responses and zero tracebacks.
+
+One HTTP 404 was caused by the verification script issuing an empty collection
+ID after assuming an obsolete SQL column name. The corrected read-only
+`/api/library/collection/10` request returned HTTP 200. This was a probe error,
+not an application failure, and made no write.
+
+The existing followed-release refresh took 179,365.5 ms. It returned HTTP 200,
+did not block the other threaded application routes, and is outside the
+search/pagination change. It is recorded as an unrelated operational
+observation, not concealed or attributed to this implementation.
+
+The browser tab was closed after verification. The normal application remains
+running on commit `bed56a8d3a82665758571709a240af096728e6d2`.
+
+## 31. Plan completion
+
+All formal gates, required regression evidence, documentation, commit
+boundaries, and the separately approved normal-runtime verification are
+complete. No schema migration, catalogue backfill, live rescan, repair, broad
+live keyword benchmark, push, or pull request was performed.
