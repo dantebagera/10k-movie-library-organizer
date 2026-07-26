@@ -4193,7 +4193,8 @@ def _ai_control_submit_download(item):
         'year': item.get('year', ''),
         'tmdb_id': item.get('tmdb_id', ''),
         'imdb_id': item.get('imdb_id', ''),
-        'source_title': variant.get('title', ''),
+        'upgrade': bool(item.get('upgrade')),
+        'release_title': variant.get('title', ''),
         'indexer': variant.get('indexer', ''),
     })
     magnet = str(variant.get('magnet_url', '') or '').strip()
@@ -4371,6 +4372,7 @@ def _qbittorrent_submission_metadata(data):
         'year': str(data.get('year', '') or '').strip(),
         'tmdb_id': str(data.get('tmdb_id', '') or '').strip(),
         'imdb_id': str(data.get('imdb_id', '') or '').strip(),
+        'upgrade': bool(data.get('upgrade')),
         'identity_handoff': {'state': 'pending'},
         'release_title': str(data.get('release_title', data.get('title', '')) or '').strip(),
         'indexer': str(data.get('indexer', '') or '').strip(),
@@ -10539,6 +10541,13 @@ def _best_download_variant(variants, quality, trusted_ids):
     return candidates[0] if candidates else None
 
 
+def _source_review_variants_by_quality(variants, trusted_ids):
+    return {
+        quality: _best_download_variant(variants, quality, trusted_ids)
+        for quality in ('1080p', '4K')
+    }
+
+
 @app.route('/api/sources/review/preview', methods=['POST'])
 def source_review_preview():
     body = request.get_json(force=True, silent=True) or {}
@@ -10560,38 +10569,32 @@ def source_review_preview():
             row = {
                 **payload,
                 'quality': quality,
+                'upgrade': False,
                 'selected': False,
                 'status': 'identity_required',
                 'variant': None,
+                'variants_by_quality': {'1080p': None, '4K': None},
                 'reason': 'A TMDB or IMDb identity is required before download',
             }
             blocked.append(row)
             rows.append(row)
             continue
-        if _curated_movie_is_owned(payload):
-            row = {
-                **payload,
-                'quality': quality,
-                'selected': False,
-                'status': 'owned',
-                'variant': None,
-                'reason': 'Already in library',
-            }
-            blocked.append(row)
-            rows.append(row)
-            continue
+        upgrade = _curated_movie_is_owned(payload)
         try:
             variants = _ai_control_source_search(payload, config)
         except Exception as error:
             variants = []
             payload['source_error'] = str(error)
-        variant = _best_download_variant(variants, quality, trusted_ids)
+        variants_by_quality = _source_review_variants_by_quality(variants, trusted_ids)
+        variant = variants_by_quality.get(quality)
         row = {
             **payload,
             'quality': quality,
+            'upgrade': upgrade,
             'selected': bool(variant),
             'status': 'ready' if variant else 'blocked',
             'variant': variant,
+            'variants_by_quality': variants_by_quality,
             'reason': '' if variant else payload.get('source_error') or f'No trusted {quality} source found',
         }
         if variant:
@@ -10624,11 +10627,11 @@ def source_review_submit():
         return jsonify({'error': 'No selected ready downloads were submitted'}), 400
     results = []
     for row in selected:
-        if _curated_movie_is_owned(row):
+        if _curated_movie_is_owned(row) and not bool(row.get('upgrade')):
             results.append({
                 'movie': row.get('title', ''),
                 'skipped': True,
-                'reason': 'Already in library',
+                'reason': 'Movie became owned after review; refresh to submit it as an upgrade',
             })
             continue
         try:

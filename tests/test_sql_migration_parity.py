@@ -799,15 +799,68 @@ class SqlMigrationParityTest(unittest.TestCase):
             },
         })
 
-    def test_source_review_blocks_owned_movies_before_search_and_submission(self):
+    def test_source_review_allows_owned_movies_as_explicit_upgrades(self):
         owned = {
             "tmdb_id": "100",
             "imdb_id": "tt0000100",
             "title": "Correct Movie",
             "year": "2020",
         }
+        variants = [{
+            "title": "Correct Movie 2020 1080p",
+            "resolution": "1080p",
+            "indexer": "Trusted",
+            "indexer_id": "7",
+            "seeders": 20,
+            "magnet_url": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        }, {
+            "title": "Correct Movie 2020 4K",
+            "resolution": "4K",
+            "indexer": "Trusted",
+            "indexer_id": "7",
+            "seeders": 10,
+            "magnet_url": "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567",
+        }]
+        client = app.app.test_client()
+
+        with patch("app._fetch_enabled_prowlarr_indexers", return_value=[]), patch(
+            "app._effective_download_trusted_indexer_ids",
+            return_value=["7"],
+        ), patch(
+            "app._ai_control_source_search",
+            return_value=variants,
+        ) as source_search:
+            preview = client.post("/api/sources/review/preview", json={"movies": [owned]})
+
+        self.assertEqual(preview.status_code, 200)
+        preview_row = preview.get_json()["rows"][0]
+        self.assertEqual(preview_row["status"], "ready")
+        self.assertTrue(preview_row["selected"])
+        self.assertTrue(preview_row["upgrade"])
+        self.assertEqual(preview_row["variant"]["resolution"], "1080p")
+        self.assertEqual(preview_row["variants_by_quality"]["4K"]["resolution"], "4K")
+        self.assertEqual(preview.get_json()["blocked"], [])
+        source_search.assert_called_once()
+
+        with patch(
+            "app._ai_control_submit_download",
+            return_value={"hash": "upgrade-download"},
+        ) as submit_download:
+            submitted = client.post("/api/sources/review/submit", json={"rows": [preview_row]})
+
+        self.assertEqual(submitted.status_code, 200)
+        self.assertEqual(submitted.get_json()["submitted_count"], 1)
+        self.assertEqual(submitted.get_json()["skipped_count"], 0)
+        submit_download.assert_called_once()
+        self.assertTrue(submit_download.call_args.args[0]["upgrade"])
+
+    def test_source_review_rechecks_an_unflagged_movie_that_became_owned(self):
         ready = {
-            **owned,
+            "tmdb_id": "100",
+            "imdb_id": "tt0000100",
+            "title": "Correct Movie",
+            "year": "2020",
+            "upgrade": False,
             "selected": True,
             "status": "ready",
             "variant": {
@@ -818,25 +871,16 @@ class SqlMigrationParityTest(unittest.TestCase):
         }
         client = app.app.test_client()
 
-        with patch("app._fetch_enabled_prowlarr_indexers", return_value=[]), patch(
-            "app._ai_control_source_search",
-            side_effect=AssertionError("owned movies must not perform a source lookup"),
-        ):
-            preview = client.post("/api/sources/review/preview", json={"movies": [owned]})
         with patch(
             "app._ai_control_submit_download",
-            side_effect=AssertionError("owned movies must not submit a download"),
+            side_effect=AssertionError("an unflagged newly owned movie must not submit"),
         ):
             submitted = client.post("/api/sources/review/submit", json={"rows": [ready]})
 
-        self.assertEqual(preview.status_code, 200)
-        preview_row = preview.get_json()["rows"][0]
-        self.assertEqual(preview_row["status"], "owned")
-        self.assertFalse(preview_row["selected"])
-        self.assertEqual(preview_row["reason"], "Already in library")
         self.assertEqual(submitted.status_code, 200)
         self.assertEqual(submitted.get_json()["submitted_count"], 0)
         self.assertEqual(submitted.get_json()["skipped_count"], 1)
+        self.assertIn("refresh", submitted.get_json()["results"][0]["reason"].lower())
 
     def test_source_review_requires_a_stable_identity_before_search(self):
         client = app.app.test_client()

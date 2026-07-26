@@ -183,6 +183,29 @@ class QBittorrentApiTests(unittest.TestCase):
         self.assertIn("already in the library", blocked.get_json()["error"])
         self.assertEqual(upgrade.status_code, 200)
         self.assertEqual(len(self.manager.submitted), 1)
+        self.assertTrue(self.manager.submitted[0][2]["upgrade"])
+
+    def test_bulk_upgrade_submission_journals_upgrade_and_exact_release(self):
+        release_title = "Movie 2026 2160p BluRay REMUX"
+        result = app._ai_control_submit_download({
+            "title": "Movie",
+            "year": "2026",
+            "tmdb_id": "800",
+            "imdb_id": "tt0000800",
+            "upgrade": True,
+            "variant": {
+                "title": release_title,
+                "indexer": "Trusted",
+                "resolution": "4K",
+                "magnet_url": "magnet:?xt=urn:btih:2123456789abcdef0123456789abcdef01234567",
+            },
+        })
+
+        self.assertEqual(result["state"], "downloading")
+        metadata = self.manager.submitted[0][2]
+        self.assertTrue(metadata["upgrade"])
+        self.assertEqual(metadata["release_title"], release_title)
+        self.assertEqual(metadata["identity_handoff"]["state"], "pending")
 
     def test_submit_rejects_title_only_jobs(self):
         response = self.client.post("/api/qbittorrent/submit", json={

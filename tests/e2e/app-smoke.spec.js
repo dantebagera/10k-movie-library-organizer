@@ -1184,6 +1184,146 @@ test('Discover unowned cards keep remote actions and do not acquire an ownership
   await expect(card.getByRole('button', { name: 'Play', exact: true })).toHaveCount(0);
 });
 
+test('bulk Find sources keeps owned movies as upgrades and switches the actual quality variant', async ({ page }) => {
+  const ownedMovie = {
+    tmdb_id: '8401',
+    imdb_id: 'tt0008401',
+    title: 'Owned Upgrade Movie',
+    year: '2024',
+    poster_url: '',
+    genres: ['Action'],
+    plot: 'An existing library movie selected for a better copy.'
+  };
+  const missingMovie = {
+    tmdb_id: '8402',
+    imdb_id: 'tt0008402',
+    title: 'Missing Download Movie',
+    year: '2025',
+    poster_url: '',
+    genres: ['Drama'],
+    plot: 'A movie that is not yet in the library.'
+  };
+  const owned1080 = {
+    title: 'Owned Upgrade Movie 2024 1080p',
+    resolution: '1080p',
+    indexer: 'Trusted',
+    size_human: '2.0 GB',
+    seeders: 20,
+    magnet_url: 'magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  };
+  const owned4K = {
+    title: 'Owned Upgrade Movie 2024 4K',
+    resolution: '4K',
+    indexer: 'Trusted',
+    size_human: '8.0 GB',
+    seeders: 10,
+    magnet_url: 'magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  };
+  const missing1080 = {
+    title: 'Missing Download Movie 2025 1080p',
+    resolution: '1080p',
+    indexer: 'Trusted',
+    size_human: '2.5 GB',
+    seeders: 30,
+    magnet_url: 'magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc'
+  };
+  let previewMovies = [];
+  let submittedRows = [];
+
+  await page.route('**/api/tmdb/discover**', (route) => route.fulfill({ json: {
+    results: [ownedMovie, missingMovie],
+    page: 1,
+    total_pages: 1,
+    total_results: 2
+  } }));
+  await page.route('**/api/library/check', async (route) => {
+    const movies = (await route.request().postDataJSON()).movies || [];
+    await route.fulfill({ json: {
+      results: movies.map((movie) => movie.tmdb_id === ownedMovie.tmdb_id ? {
+        found: true,
+        path: 'E:/Movies/Owned.Upgrade.Movie.2024.720p.mkv',
+        tmdb_id: ownedMovie.tmdb_id,
+        imdb_id: ownedMovie.imdb_id,
+        title: ownedMovie.title,
+        year: ownedMovie.year,
+        resolution: '720p',
+        maintenance_upgrade_candidate: true
+      } : {
+        found: false,
+        tmdb_id: movie.tmdb_id
+      }),
+      catalog_generation: 1
+    } });
+  });
+  await page.route('**/api/sources/review/preview', async (route) => {
+    previewMovies = (await route.request().postDataJSON()).movies || [];
+    await route.fulfill({ json: {
+      rows: [{
+        ...ownedMovie,
+        path: 'E:/Movies/Owned.Upgrade.Movie.2024.720p.mkv',
+        upgrade: true,
+        selected: true,
+        status: 'ready',
+        quality: '1080p',
+        variant: owned1080,
+        variants_by_quality: { '1080p': owned1080, '4K': owned4K },
+        reason: ''
+      }, {
+        ...missingMovie,
+        upgrade: false,
+        selected: true,
+        status: 'ready',
+        quality: '1080p',
+        variant: missing1080,
+        variants_by_quality: { '1080p': missing1080, '4K': null },
+        reason: ''
+      }],
+      blocked: [],
+      defaults: { quality: '1080p', trusted_indexers: ['7'] }
+    } });
+  });
+  await page.route('**/api/sources/review/submit', async (route) => {
+    submittedRows = (await route.request().postDataJSON()).rows || [];
+    await route.fulfill({ json: {
+      submitted_count: 2,
+      skipped_count: 0,
+      results: []
+    } });
+  });
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  const ownedCheckbox = page.getByRole('checkbox', { name: `Select ${ownedMovie.title}` });
+  const missingCheckbox = page.getByRole('checkbox', { name: `Select ${missingMovie.title}` });
+  await ownedCheckbox.check({ force: true });
+  await expect(ownedCheckbox).toBeChecked();
+  await missingCheckbox.check({ force: true });
+  await expect(missingCheckbox).toBeChecked();
+  await page.locator('.discover-bulk-selection').getByRole('button', { name: 'Find sources', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Find sources' });
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => previewMovies.map((movie) => movie.tmdb_id)).toEqual([
+    ownedMovie.tmdb_id,
+    missingMovie.tmdb_id
+  ]);
+  await expect(dialog).toContainText('1 owned movie will be downloaded as an upgrade copy.');
+  await expect(dialog).toContainText('Existing library files will be kept for comparison in Maintenance.');
+
+  const ownedRow = dialog.locator('.source-review-row').filter({ hasText: ownedMovie.title });
+  await expect(ownedRow).toContainText(owned1080.title);
+  await expect(ownedRow).toContainText('Upgrade');
+  await ownedRow.getByRole('combobox').selectOption('4K');
+  await expect(ownedRow).toContainText(owned4K.title);
+  await expect(ownedRow).not.toContainText(owned1080.title);
+
+  await dialog.getByRole('button', { name: 'Submit selected to qBittorrent' }).click();
+  await expect.poll(() => submittedRows.length).toBe(2);
+  const submittedOwned = submittedRows.find((row) => row.tmdb_id === ownedMovie.tmdb_id);
+  expect(submittedOwned.upgrade).toBe(true);
+  expect(submittedOwned.quality).toBe('4K');
+  expect(submittedOwned.variant.title).toBe(owned4K.title);
+});
+
 test('Maintenance tabs remain interactive after the audit loads', async ({ page }) => {
   await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
   const storage = page.getByRole('tab', { name: 'Storage' });

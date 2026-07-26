@@ -3,11 +3,28 @@ import { submitSourceReview } from '../api/sourceReview.js';
 import { formatCount } from '../utils/appUtils.js';
 import SelectionCheckbox from './SelectionCheckbox.jsx';
 
+function rowWithQuality(row, quality) {
+  const variantsByQuality = row.variants_by_quality || {};
+  if (!Object.prototype.hasOwnProperty.call(variantsByQuality, quality)) {
+    return { ...row, quality };
+  }
+  const variant = variantsByQuality[quality] || null;
+  const wasUnavailable = row.status === 'blocked' && !row.variant;
+  return {
+    ...row,
+    quality,
+    variant,
+    status: variant ? 'ready' : 'blocked',
+    selected: variant ? (wasUnavailable ? true : row.selected !== false) : false,
+    reason: variant ? '' : `No trusted ${quality} source found`
+  };
+}
+
 export default function SourceReviewDialog({ state, setState, onClose, notify }) {
   const readyRows = (state.rows || []).filter((row) => row.status === 'ready');
   const selectedCount = readyRows.filter((row) => row.selected !== false).length;
-  const unavailableCount = (state.blocked || []).filter((row) => row.status === 'blocked').length;
-  const ownedCount = (state.blocked || []).filter((row) => row.status === 'owned').length;
+  const unavailableCount = (state.rows || []).filter((row) => row.status === 'blocked').length;
+  const upgradeCount = readyRows.filter((row) => row.upgrade === true && row.selected !== false).length;
 
   function updateRows(updater) {
     setState((current) => ({ ...current, rows: updater(current.rows || []) }));
@@ -19,7 +36,7 @@ export default function SourceReviewDialog({ state, setState, onClose, notify })
 
   function setSelectedQuality(quality) {
     updateRows((rows) => rows.map((row) => (
-      row.status === 'ready' && row.selected !== false ? { ...row, quality } : row
+      row.status === 'ready' && row.selected !== false ? rowWithQuality(row, quality) : row
     )));
   }
 
@@ -80,21 +97,23 @@ export default function SourceReviewDialog({ state, setState, onClose, notify })
                   <span>{row.variant?.indexer || '-'}</span>
                   <select
                     value={row.quality || state.defaults?.quality || '1080p'}
-                    disabled={row.status !== 'ready'}
-                    onChange={(event) => updateRows((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, quality: event.target.value } : item))}
+                    disabled={!Object.values(row.variants_by_quality || {}).some(Boolean)}
+                    onChange={(event) => updateRows((rows) => rows.map((item, itemIndex) => (
+                      itemIndex === index ? rowWithQuality(item, event.target.value) : item
+                    )))}
                   >
                     <option value="1080p">1080p</option>
                     <option value="4K">4K</option>
                   </select>
-                  <span>{row.status === 'ready' ? [row.variant?.size_human, row.variant?.seeders ? `${row.variant.seeders} seeders` : ''].filter(Boolean).join(' - ') || 'Ready' : row.reason || row.status}</span>
+                  <span>{row.status === 'ready' ? [row.upgrade ? 'Upgrade' : '', row.variant?.size_human, row.variant?.seeders ? `${row.variant.seeders} seeders` : ''].filter(Boolean).join(' - ') || 'Ready' : row.reason || row.status}</span>
                 </div>
               ))}
             </div>
-            {unavailableCount || ownedCount ? (
+            {unavailableCount || upgradeCount ? (
               <p className="settings-empty-note">
                 {unavailableCount ? `${formatCount(unavailableCount)} movie${unavailableCount === 1 ? '' : 's'} had no trusted source.` : ''}
-                {unavailableCount && ownedCount ? ' ' : ''}
-                {ownedCount ? `${formatCount(ownedCount)} movie${ownedCount === 1 ? '' : 's'} already in library.` : ''}
+                {unavailableCount && upgradeCount ? ' ' : ''}
+                {upgradeCount ? `${formatCount(upgradeCount)} owned movie${upgradeCount === 1 ? '' : 's'} will be downloaded as ${upgradeCount === 1 ? 'an upgrade copy' : 'upgrade copies'}. Existing library files will be kept for comparison in Maintenance.` : ''}
               </p>
             ) : null}
           </>

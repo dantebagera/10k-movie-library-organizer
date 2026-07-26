@@ -279,6 +279,9 @@ class UserCurationStoreTest(unittest.TestCase):
         self.assertEqual(data["defaults"]["quality"], "1080p")
         self.assertEqual(data["rows"][0]["quality"], "1080p")
         self.assertEqual(data["rows"][0]["variant"]["resolution"], "1080p")
+        self.assertEqual(data["rows"][0]["variants_by_quality"]["1080p"]["resolution"], "1080p")
+        self.assertEqual(data["rows"][0]["variants_by_quality"]["4K"]["resolution"], "4K")
+        self.assertFalse(data["rows"][0]["upgrade"])
         self.assertEqual(data["rows"][0]["status"], "ready")
 
     def test_source_review_submit_only_downloads_selected_ready_rows(self):
