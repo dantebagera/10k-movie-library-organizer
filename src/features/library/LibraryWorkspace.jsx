@@ -26,6 +26,8 @@ import {
   listsForItem, movieHasSystemState, movieIdentityKey, moviePayload, rootLabel
 } from '../../utils/libraryUtils.js';
 
+const LIBRARY_KEYWORD_PAGE_SIZE = 50;
+
 function LibraryPeopleSearchResults({ people, query, onOpenFilmography }) {
   if (!query.trim()) {
     return <div className="empty-state library-empty"><strong>Search people in your library.</strong><span>Only accepted movies and their stored actor, director, or writer metadata are used.</span></div>;
@@ -49,7 +51,8 @@ function LibraryPeopleSearchResults({ people, query, onOpenFilmography }) {
   );
 }
 
-function LibraryKeywordSearchResults({ keywords, query, loading, error, onOpenKeyword }) {
+function LibraryKeywordSearchResults({ result, query, loading, error, onOpenKeyword, onPageChange }) {
+  const keywords = result.items || [];
   if (loading) {
     return <div className="discover-grid keyword-search-grid"><div className="keyword-search-card skeleton-card" /></div>;
   }
@@ -63,17 +66,27 @@ function LibraryKeywordSearchResults({ keywords, query, loading, error, onOpenKe
     return <div className="empty-state library-empty"><strong>No owned keywords match that search.</strong><span>Try a shorter spelling or search movie titles instead.</span></div>;
   }
   return (
-    <div className="discover-grid keyword-search-grid library-keyword-search-grid">
-      {keywords.map((keyword) => (
-        <KeywordSearchCard
-          key={keyword.keyword_key || keyword.tmdb_id || keyword.normalized_name}
-          keyword={keyword}
-          scope="library"
-          meta={`${formatCount(keyword.movie_count)} owned movie${Number(keyword.movie_count) === 1 ? '' : 's'}`}
-          onOpen={onOpenKeyword}
-        />
-      ))}
-    </div>
+    <>
+      <Pagination
+        total={result.total_results}
+        page={result.page}
+        totalPages={result.total_pages}
+        pageStart={(result.page - 1) * result.page_size}
+        pageEnd={(result.page - 1) * result.page_size + keywords.length}
+        onPageChange={onPageChange}
+      />
+      <div className="discover-grid keyword-search-grid library-keyword-search-grid">
+        {keywords.map((keyword) => (
+          <KeywordSearchCard
+            key={keyword.keyword_key || keyword.tmdb_id || keyword.normalized_name}
+            keyword={keyword}
+            scope="library"
+            meta={`${formatCount(keyword.movie_count)} owned movie${Number(keyword.movie_count) === 1 ? '' : 's'}`}
+            onOpen={onOpenKeyword}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -161,7 +174,13 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [peopleItems, setPeopleItems] = useState([]);
-  const [libraryKeywordResults, setLibraryKeywordResults] = useState([]);
+  const [libraryKeywordResult, setLibraryKeywordResult] = useState({
+    items: [],
+    page: 1,
+    page_size: LIBRARY_KEYWORD_PAGE_SIZE,
+    total_pages: 1,
+    total_results: 0
+  });
   const [libraryKeywordLoading, setLibraryKeywordLoading] = useState(false);
   const [libraryKeywordError, setLibraryKeywordError] = useState('');
   const [listCoverageItems, setListCoverageItems] = useState([]);
@@ -323,24 +342,39 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     loadPeopleProjection().catch((peopleError) => notify(`People index unavailable: ${peopleError.message}`, 'error'));
   }, [librarySearchKind, loadPeopleProjection, mode, notify, peopleLoaded]);
 
-  const loadKeywordProjection = useCallback(async (keywordQuery) => {
+  const loadKeywordProjection = useCallback(async (keywordQuery, requestedPage = 1) => {
     const normalizedQuery = String(keywordQuery || '').trim();
+    const nextPage = Math.max(Number(requestedPage) || 1, 1);
     const requestSeq = libraryKeywordRequestSeq.current + 1;
     libraryKeywordRequestSeq.current = requestSeq;
     if (!normalizedQuery) {
-      setLibraryKeywordResults([]);
+      setLibraryKeywordResult({
+        items: [],
+        page: 1,
+        page_size: LIBRARY_KEYWORD_PAGE_SIZE,
+        total_pages: 1,
+        total_results: 0
+      });
       setLibraryKeywordError('');
       setLibraryKeywordLoading(false);
       return;
     }
     setLibraryKeywordLoading(true);
     setLibraryKeywordError('');
-    setLibraryKeywordResults([]);
+    setLibraryKeywordResult((state) => ({ ...state, items: [] }));
     try {
-      const data = await fetchJson(`/api/library?view=keywords&q=${encodeURIComponent(normalizedQuery)}&limit=50`);
+      const data = await fetchJson(
+        `/api/library?view=keywords&q=${encodeURIComponent(normalizedQuery)}&page=${nextPage}&page_size=${LIBRARY_KEYWORD_PAGE_SIZE}`
+      );
       if (requestSeq !== libraryKeywordRequestSeq.current) return;
       observeCatalogGeneration(data.catalog_generation);
-      setLibraryKeywordResults(data.items || []);
+      setLibraryKeywordResult({
+        items: data.items || [],
+        page: Number(data.page || nextPage),
+        page_size: Number(data.page_size || LIBRARY_KEYWORD_PAGE_SIZE),
+        total_pages: Number(data.total_pages || 1),
+        total_results: Number(data.total_results || 0)
+      });
     } catch (keywordError) {
       if (requestSeq !== libraryKeywordRequestSeq.current) return;
       setLibraryKeywordError(keywordError.message);
@@ -355,11 +389,17 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       setLibraryKeywordLoading(false);
       return undefined;
     }
-    setLibraryKeywordResults([]);
+    setLibraryKeywordResult({
+      items: [],
+      page: 1,
+      page_size: LIBRARY_KEYWORD_PAGE_SIZE,
+      total_pages: 1,
+      total_results: 0
+    });
     setLibraryKeywordError('');
     setLibraryKeywordLoading(Boolean(query.trim()));
     if (!query.trim()) return undefined;
-    const timer = window.setTimeout(() => loadKeywordProjection(query), 150);
+    const timer = window.setTimeout(() => loadKeywordProjection(query, 1), 150);
     return () => window.clearTimeout(timer);
   }, [librarySearchKind, loadKeywordProjection, mode, query]);
 
@@ -964,7 +1004,18 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         </div>
       </div>
 
-      <form className="library-search-panel" data-people-search={mode === 'movie' || undefined} onSubmit={(event) => { event.preventDefault(); resetLibraryPage(); }}>
+      <form
+        className="library-search-panel"
+        data-people-search={mode === 'movie' || undefined}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (mode === 'movie' && librarySearchKind === 'keywords') {
+            loadKeywordProjection(query, 1);
+          } else {
+            resetLibraryPage();
+          }
+        }}
+      >
         <label className="library-search library-main-search">
           <Search size={17} />
           <input
@@ -1173,11 +1224,12 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
           />
         ) : librarySearchKind === 'keywords' && mode === 'movie' ? (
           <LibraryKeywordSearchResults
-            keywords={libraryKeywordResults}
+            result={libraryKeywordResult}
             query={query}
             loading={libraryKeywordLoading}
             error={libraryKeywordError}
             onOpenKeyword={applyLibraryKeywordFilter}
+            onPageChange={(nextPage) => loadKeywordProjection(query, nextPage)}
           />
         ) : (
         <>

@@ -1368,35 +1368,122 @@ class CatalogStore:
         finally:
             connection.close()
 
-    def _library_keywords_sql(self):
-        return f"""
-            {self._library_effective_cte()}
-            SELECT
-                k.keyword_key,
-                k.tmdb_id,
-                k.name,
-                k.normalized_name,
-                COUNT(DISTINCT e.path_key) AS movie_count
-            FROM keywords AS k INDEXED BY idx_keywords_normalized_name
-            JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
-              ON mk.keyword_key = k.keyword_key
-            JOIN effective AS e ON e.snapshot_key = mk.snapshot_key
-            WHERE k.normalized_name >= ? AND k.normalized_name < ?
-            GROUP BY k.keyword_key, k.tmdb_id, k.name, k.normalized_name
-            ORDER BY
-                CASE WHEN k.normalized_name = ? THEN 0 ELSE 1 END,
-                movie_count DESC,
-                k.name COLLATE NOCASE,
-                k.keyword_key
-            LIMIT ?
+    @staticmethod
+    def _library_keyword_counts_cte():
+        return """
+            WITH ranked_effective AS MATERIALIZED (
+                SELECT
+                    mf.path_key,
+                    pms.snapshot_key,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY mf.path_key
+                        ORDER BY
+                            CASE
+                                WHEN pms.provider = cm.selected_provider
+                                     AND pms.path_key = mf.path_key THEN 0
+                                WHEN pms.provider = cm.selected_provider THEN 1
+                                WHEN pms.provider <> cm.selected_provider
+                                     AND pms.path_key = mf.path_key THEN 2
+                                ELSE 3
+                            END,
+                            CASE
+                                WHEN pms.provider <> cm.selected_provider
+                                THEN CASE pms.provider WHEN 'tmdb' THEN 0 ELSE 1 END
+                                ELSE 0
+                            END,
+                            pms.updated_at DESC,
+                            pms.snapshot_key
+                    ) AS choice_rank
+                FROM media_files AS mf
+                JOIN canonical_movie_files AS cmf ON cmf.path_key = mf.path_key
+                JOIN canonical_movies AS cm ON cm.movie_key = cmf.movie_key
+                JOIN provider_movie_snapshots AS pms ON pms.movie_key = cm.movie_key
+                WHERE mf.identity_status = 'accepted' OR mf.metadata_accepted = 1
+            ),
+            effective AS MATERIALIZED (
+                SELECT path_key, snapshot_key
+                FROM ranked_effective
+                WHERE choice_rank = 1
+            ),
+            matching_keywords AS MATERIALIZED (
+                SELECT keyword_key, tmdb_id, name, normalized_name
+                FROM keywords INDEXED BY idx_keywords_normalized_name
+                WHERE normalized_name >= ? AND normalized_name < ?
+            ),
+            keyword_counts AS (
+                SELECT
+                    k.keyword_key,
+                    k.tmdb_id,
+                    k.name,
+                    k.normalized_name,
+                    COUNT(DISTINCT e.path_key) AS movie_count
+                FROM matching_keywords AS k
+                JOIN movie_keywords AS mk INDEXED BY idx_movie_keywords_keyword
+                  ON mk.keyword_key = k.keyword_key
+                JOIN effective AS e ON e.snapshot_key = mk.snapshot_key
+                GROUP BY k.keyword_key, k.tmdb_id, k.name, k.normalized_name
+            )
         """
 
-    def library_keywords(self, query="", *, limit=50):
+    def _library_keywords_page_sql(self):
+        return f"""
+            {self._library_keyword_counts_cte()}
+            SELECT keyword_key, tmdb_id, name, normalized_name, movie_count
+            FROM keyword_counts
+            ORDER BY
+                CASE WHEN normalized_name = ? THEN 0 ELSE 1 END,
+                movie_count DESC,
+                name COLLATE NOCASE,
+                keyword_key
+            LIMIT ? OFFSET ?
+        """
+
+    def library_keywords(self, query="", *, page=1, page_size=50):
         normalized, upper_bound = _keyword_prefix_bounds(query)
-        limit = min(max(int(limit or 50), 1), 100)
+        try:
+            page = max(int(page or 1), 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = min(max(int(page_size or 50), 1), 50)
+        except (TypeError, ValueError):
+            page_size = 50
+
         connection = self.connect()
         try:
-            return [
+            if not normalized:
+                generation_row = connection.execute(
+                    "SELECT value FROM catalog_meta WHERE key='media_generation'"
+                ).fetchone()
+                return {
+                    "items": [],
+                    "page": 1,
+                    "page_size": page_size,
+                    "total_pages": 1,
+                    "total_results": 0,
+                    "catalog_generation": int(generation_row[0]) if generation_row else 0,
+                }
+
+            connection.execute("BEGIN")
+            total_row = connection.execute(
+                f"""
+                    {self._library_keyword_counts_cte()}
+                    SELECT
+                        COUNT(*) AS total_results,
+                        COALESCE((
+                            SELECT CAST(value AS INTEGER)
+                            FROM catalog_meta
+                            WHERE key = 'media_generation'
+                        ), 0) AS catalog_generation
+                    FROM keyword_counts
+                """,
+                (normalized, upper_bound),
+            ).fetchone()
+            total_results = int(total_row["total_results"] or 0)
+            total_pages = max(1, (total_results + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            offset = (page - 1) * page_size
+            items = [
                 {
                     "keyword_key": row["keyword_key"],
                     "tmdb_id": row["tmdb_id"],
@@ -1405,12 +1492,24 @@ class CatalogStore:
                     "movie_count": int(row["movie_count"] or 0),
                 }
                 for row in connection.execute(
-                    self._library_keywords_sql(),
-                    (normalized, upper_bound, normalized, limit),
+                    self._library_keywords_page_sql(),
+                    (normalized, upper_bound, normalized, page_size, offset),
                 ).fetchall()
             ]
+            return {
+                "items": items,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_results": total_results,
+                "catalog_generation": int(total_row["catalog_generation"] or 0),
+            }
         finally:
-            connection.close()
+            try:
+                if connection.in_transaction:
+                    connection.rollback()
+            finally:
+                connection.close()
 
     def maintenance_upgrade_candidates(self):
         """Return only low-quality accepted rows that can still be upgrade candidates."""
@@ -1569,19 +1668,34 @@ class CatalogStore:
             connection.close()
 
     def _decode_media_rows(self, connection, rows, include_identity_keys):
+        identity_keys_by_path = {}
+        if include_identity_keys:
+            path_keys = list(dict.fromkeys(
+                _text(row["path_key"])
+                for row in rows
+                if _text(row["path_key"])
+            ))
+            if path_keys:
+                for key_row in connection.execute(
+                    """
+                    SELECT path_key, identity_key
+                    FROM media_identity_keys
+                    WHERE path_key IN (SELECT value FROM json_each(?))
+                    ORDER BY path_key, identity_key
+                    """,
+                    (_json_text(path_keys),),
+                ).fetchall():
+                    identity_keys_by_path.setdefault(key_row["path_key"], []).append(
+                        key_row["identity_key"]
+                    )
+
         result = []
         for row in rows:
             item = dict(row)
             for column in ("raw_json", "plex_json", "manual_json", "tmdb_json"):
                 item[column] = json.loads(item[column]) if item.get(column) else {}
             if include_identity_keys:
-                item["identity_keys"] = [
-                    key_row[0]
-                    for key_row in connection.execute(
-                        "SELECT identity_key FROM media_identity_keys WHERE path_key = ?",
-                        (item["path_key"],),
-                    ).fetchall()
-                ]
+                item["identity_keys"] = list(identity_keys_by_path.get(item["path_key"], ()))
             result.append(item)
         return result
 

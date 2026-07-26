@@ -242,7 +242,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("handledPersonRequestRef", discover_source)
         self.assertIn("function buildPersonMoviesContext(movie, role, person, labelPrefix = '')", discover_source)
         self.assertIn("setActiveTab('explore')", discover_source)
-        self.assertIn("loadContextPage('explore', context, { append: false })", discover_source)
+        self.assertIn("loadContextPage('explore', context, { page: 1 })", discover_source)
         self.assertIn("onPersonDiscover={onOpenDiscoverPerson}", library_source)
         self.assertIn("onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined", library_card_source)
         self.assertIn("onDiscover={onPersonDiscover}", APP)
@@ -261,7 +261,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("if (!isPick) appendDiscoverCriteria(params);", discover_source)
         self.assertIn("function filterDiscoverContextResults(results)", discover_source)
         self.assertIn("if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl)", discover_source)
-        self.assertIn("loadContextPage('explore', discoverContext, { append: false });", discover_source)
+        self.assertIn("loadContextPage('explore', discoverContext, { page: 1 });", discover_source)
         self.assertIn("setDiscoverContextSourceResults(results);", discover_source)
 
     def test_collection_browse_uses_the_tmdb_payload_and_keeps_default_criteria_non_destructive(self):
@@ -302,12 +302,49 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("role === 'writer' ? 'Written films'", discover_source)
         self.assertIn("/api/tmdb/keywords/search", discover_source)
         self.assertIn("/api/tmdb/discover?list=catalog&keyword_id=", discover_source)
-        self.assertIn("function searchDiscoverKeywords()", discover_source)
+        self.assertIn("function searchDiscoverKeywords({ page = 1, reset = false } = {})", discover_source)
         self.assertIn("function openSearchedKeywordMovies(keyword)", discover_source)
         self.assertIn("const requestSeq = discoverRequestSeq.current + 1;", discover_source)
         self.assertIn("if (requestSeq !== discoverRequestSeq.current) return;", discover_source)
         self.assertIn("role: ['actor', 'director', 'writer'].includes(role) ? role : 'actor'", APP)
         self.assertIn("Directed films", APP)
+
+    def test_discover_uses_shared_replacement_pagination_for_identities_and_relationships(self):
+        discover_source = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+        pagination_source = (ROOT / "src" / "components" / "Pagination.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("const [discoverPeoplePage, setDiscoverPeoplePage] = useState(1);", discover_source)
+        self.assertIn("const [discoverKeywordPage, setDiscoverKeywordPage] = useState(1);", discover_source)
+        self.assertIn("async function loadContextPage(target, context, { page = 1 } = {})", discover_source)
+        self.assertIn("setDiscoverResults(nextResults);", discover_source)
+        self.assertIn("setPickResults(nextResults);", discover_source)
+        context_loader = discover_source[
+            discover_source.index("async function loadContextPage"):
+            discover_source.index("function filterDiscoverContextResults")
+        ]
+        self.assertNotIn("append ? [...state, ...nextResults]", context_loader)
+        self.assertNotIn("Load more", discover_source)
+        self.assertIn('ariaLabel="TMDB People search pagination"', discover_source)
+        self.assertIn('ariaLabel="TMDB keyword search pagination"', discover_source)
+        self.assertIn('ariaLabel="TMDB relationship pagination"', discover_source)
+        self.assertIn('ariaLabel="AI Pick relationship pagination"', discover_source)
+        self.assertIn("ariaLabel = 'Library pagination'", pagination_source)
+        self.assertIn('aria-label={ariaLabel}', pagination_source)
+
+    def test_discover_pagination_snapshots_totals_and_aborts_stale_requests(self):
+        discover_source = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("peoplePage: discoverPeoplePage", discover_source)
+        self.assertIn("keywordPage: discoverKeywordPage", discover_source)
+        self.assertIn("ownershipFilter: discoverOwnershipFilter", discover_source)
+        self.assertIn("setDiscoverPeoplePage(snapshot.peoplePage || 1);", discover_source)
+        self.assertIn("setDiscoverKeywordPage(snapshot.keywordPage || 1);", discover_source)
+        self.assertIn("setDiscoverOwnershipFilter(snapshot.ownershipFilter || 'all');", discover_source)
+        self.assertIn("const discoverAbortRef = useRef(null);", discover_source)
+        self.assertIn("const pickAbortRef = useRef(null);", discover_source)
+        self.assertIn("signal: controller.signal", discover_source)
+        self.assertIn("if (isAbortedRequest(error)) return;", discover_source)
+        self.assertIn("requestedPage > totalPages && responsePage !== totalPages", discover_source)
 
     def test_shared_desktop_search_ui_exposes_writer_and_keyword_actions(self):
         library_source = (ROOT / "src" / "features" / "library" / "LibraryWorkspace.jsx").read_text(encoding="utf-8")
@@ -319,6 +356,9 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("Written films", person_card_source)
         self.assertIn('<option value="keywords">Keywords</option>', library_source)
         self.assertIn("/api/library?view=keywords", library_source)
+        self.assertIn("<Pagination", library_source)
+        self.assertIn("total={result.total_results}", library_source)
+        self.assertIn("totalPages={result.total_pages}", library_source)
         self.assertIn("keyword_id: keywordFilter?.tmdb_id || ''", library_source)
         self.assertIn("<KeywordSearchCard", library_source)
         self.assertIn('<option value="keywords">Keywords</option>', discover_source)

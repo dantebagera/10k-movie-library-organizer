@@ -113,6 +113,25 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("page={safePage}", self.source)
         self.assertIn("total={mode === 'movie' ? libraryResult.total : filteredItems.length}", self.source)
 
+    def test_shared_pagination_keeps_library_default_and_accepts_discover_labels(self):
+        pagination_source = (APP_JSX.parent / "components" / "Pagination.jsx").read_text(encoding="utf-8")
+
+        self.assertIn("ariaLabel = 'Library pagination'", pagination_source)
+        self.assertIn('aria-label={ariaLabel}', pagination_source)
+        self.assertIn('ariaLabel="TMDB movie pagination"', self.discover_source)
+        self.assertEqual(self.discover_source.count("import Pagination from '../../components/Pagination.jsx';"), 1)
+
+    def test_library_keyword_search_uses_the_authoritative_page_contract(self):
+        self.assertIn("const LIBRARY_KEYWORD_PAGE_SIZE = 50;", self.source)
+        self.assertIn("const [libraryKeywordResult, setLibraryKeywordResult] = useState({", self.source)
+        self.assertIn("page_size: LIBRARY_KEYWORD_PAGE_SIZE", self.source)
+        self.assertIn("total_pages: 1", self.source)
+        self.assertIn("total_results: 0", self.source)
+        self.assertIn("&page=${nextPage}&page_size=${LIBRARY_KEYWORD_PAGE_SIZE}", self.source)
+        self.assertNotIn("&limit=50", self.source)
+        self.assertIn("result={libraryKeywordResult}", self.source)
+        self.assertIn("onPageChange={(nextPage) => loadKeywordProjection(query, nextPage)}", self.source)
+
     def test_discover_search_forces_adult_titles_off(self):
         self.assertIn("include_adult=false", self.source)
         self.assertIn("metadata_context: 'unmatched'", self.source)
@@ -397,7 +416,7 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("params.set('year_from', discoverYearFrom.trim())", discover_source)
         self.assertIn("params.set('min_rating', discoverMinRating)", discover_source)
         self.assertIn("return `/api/tmdb/${query ? 'search' : 'discover'}?${params.toString()}`", discover_source)
-        self.assertIn("fetchJson(buildDiscoverUrl(query, nextPage))", discover_source)
+        self.assertIn("fetchJson(buildDiscoverUrl(query, nextPage), { signal: controller.signal })", discover_source)
         self.assertIn("{ value: 'catalog', label: 'TMDB Catalog' }", self.source)
         self.assertIn("Search: ${tmdbQuery.trim()}${hasAdvancedDiscoverCriteria() ? ' / refined' : ''}", discover_source)
 

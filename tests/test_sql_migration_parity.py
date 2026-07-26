@@ -379,6 +379,12 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(people_item["canonical_metadata"]["cast"][0]["name"], "Lead Actor 1")
         self.assertEqual(people_item["canonical_metadata"]["writers"][0]["name"], "Lead Writer")
         self.assertEqual(keywords.get_json()["items"][0]["normalized_name"], "time travel")
+        self.assertEqual(keywords.get_json()["page"], 1)
+        self.assertEqual(keywords.get_json()["page_size"], 50)
+        self.assertEqual(keywords.get_json()["total_pages"], 1)
+        self.assertEqual(keywords.get_json()["total_results"], 1)
+        self.assertEqual(keywords.get_json()["count"], 1)
+        self.assertEqual(keywords.get_json()["source"], "catalog")
         self.assertEqual(
             keywords_with_refresh_ignored.get_json()["items"],
             keywords.get_json()["items"],
@@ -388,6 +394,44 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(writer_selection.get_json()["paths"], [str(self.paths["corrected"])])
         self.assertEqual(keyword_selection.get_json()["paths"], [str(self.paths["corrected"])])
         self.assertEqual(full_item["canonical_metadata"]["plot"], "TMDB plot wins the canonical summary.")
+
+    def test_library_keyword_route_uses_page_contract_and_retires_limit(self):
+        result = {
+            "items": [{
+                "keyword_key": "tmdb:501",
+                "tmdb_id": "501",
+                "name": "time travel",
+                "normalized_name": "time travel",
+                "movie_count": 1,
+            }],
+            "page": 3,
+            "page_size": 25,
+            "total_pages": 4,
+            "total_results": 76,
+            "catalog_generation": 9,
+        }
+        client = app.app.test_client()
+        with patch("app._metadata_store", return_value=self.store), \
+                patch.object(
+                    self.store.catalog,
+                    "library_keywords",
+                    return_value=result,
+                ) as library_keywords, \
+                patch(
+                    "app.urllib.request.urlopen",
+                    side_effect=AssertionError("Library keyword search must not call TMDB"),
+                ):
+            response = client.get(
+                "/api/library?view=keywords&q=time&page=3&page_size=25&limit=1"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        library_keywords.assert_called_once_with("time", page=3, page_size=25)
+        self.assertEqual(response.get_json(), {
+            **result,
+            "count": 1,
+            "source": "catalog",
+        })
 
     def test_owned_details_route_never_uses_full_catalog_or_snapshot(self):
         client = app.app.test_client()

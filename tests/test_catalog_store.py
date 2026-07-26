@@ -215,6 +215,46 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual([row["path"] for row in by_title], ["E:/Movies/Alien.mkv"])
         self.assertEqual(by_tmdb[0]["tmdb_json"]["title"], "Alien")
 
+    def test_ownership_candidates_batch_identity_keys_without_n_plus_one(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(20), {})
+            statements = []
+            original_connect = store.connect
+
+            def traced_connect():
+                connection = original_connect()
+                connection.set_trace_callback(statements.append)
+                return connection
+
+            store.connect = traced_connect
+            candidates = store.ownership_candidates([
+                f"tmdb:{1000 + index}"
+                for index in range(20)
+            ])
+
+        reads = [
+            statement for statement in statements
+            if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+        ]
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len(candidates), 20)
+        self.assertEqual(
+            [row["tmdb_id"] for row in candidates],
+            [str(1000 + index) for index in range(20)],
+        )
+        self.assertEqual(
+            [row["identity_keys"] for row in candidates],
+            [
+                [
+                    f"title:movie {index:03d}|{1980 + index % 40}",
+                    f"tmdb:{1000 + index}",
+                ]
+                for index in range(20)
+            ],
+        )
+        self.assertEqual(candidates[0]["tmdb_json"]["title"], "Movie 000")
+
     def test_audit_library_candidates_return_provider_snapshots_without_filesystem_scan(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")
@@ -397,11 +437,13 @@ class CatalogStoreTest(unittest.TestCase):
             store = CatalogStore(Path(root) / "catalog.sqlite")
             store.import_documents(documents, {})
 
-            shared = store.library_keywords("  SHARED   KEYWORD  ", limit=5)
-            numbered = store.library_keywords("keyword 1", limit=2)
-            non_latin = store.library_keywords("رحلة")
-            empty = store.library_keywords("does not exist", limit=5)
+            shared_result = store.library_keywords("  SHARED   KEYWORD  ", page=1, page_size=5)
+            numbered_result = store.library_keywords("keyword 1", page=1, page_size=2)
+            non_latin_result = store.library_keywords("رحلة")
+            empty_result = store.library_keywords("does not exist", page=1, page_size=5)
+            blank_result = store.library_keywords("   ")
 
+        shared = shared_result["items"]
         self.assertEqual(shared, [{
             "keyword_key": shared[0]["keyword_key"],
             "tmdb_id": "501",
@@ -410,14 +452,187 @@ class CatalogStoreTest(unittest.TestCase):
             "movie_count": 12,
         }])
         self.assertEqual(
-            [(row["normalized_name"], row["movie_count"]) for row in numbered],
+            [(row["normalized_name"], row["movie_count"]) for row in numbered_result["items"]],
             [("keyword 1", 1), ("keyword 10", 1)],
         )
         self.assertEqual(
-            [(row["normalized_name"], row["movie_count"]) for row in non_latin],
+            [(row["normalized_name"], row["movie_count"]) for row in non_latin_result["items"]],
             [("رحلة عبر الزمن", 1)],
         )
-        self.assertEqual(empty, [])
+        self.assertEqual(empty_result["items"], [])
+        self.assertEqual(blank_result["items"], [])
+        self.assertEqual(shared_result["page"], 1)
+        self.assertEqual(shared_result["page_size"], 5)
+        self.assertEqual(shared_result["total_pages"], 1)
+        self.assertEqual(shared_result["total_results"], 1)
+        self.assertIsInstance(shared_result["catalog_generation"], int)
+
+    def test_library_keyword_pages_are_complete_unique_and_deterministic(self):
+        documents = self._paging_documents(125)
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1000"]["keywords"] = [
+            "keyword",
+            "shared keyword",
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+
+            first = store.library_keywords("  KEYWORD  ", page=1, page_size=50)
+            middle = store.library_keywords("keyword", page=2, page_size=50)
+            last = store.library_keywords("keyword", page=3, page_size=50)
+            repeated_middle = store.library_keywords("keyword", page=2, page_size=50)
+            out_of_range = store.library_keywords("keyword", page=999, page_size=500)
+
+        items = [*first["items"], *middle["items"], *last["items"]]
+        keys = [item["keyword_key"] for item in items]
+        self.assertEqual(first["items"][0]["normalized_name"], "keyword")
+        self.assertEqual([len(first["items"]), len(middle["items"]), len(last["items"])], [50, 50, 25])
+        self.assertEqual(first["total_results"], 125)
+        self.assertEqual(first["total_pages"], 3)
+        self.assertEqual(len(keys), 125)
+        self.assertEqual(len(set(keys)), 125)
+        self.assertEqual(repeated_middle, middle)
+        self.assertEqual(out_of_range["page"], 3)
+        self.assertEqual(out_of_range["page_size"], 50)
+        self.assertEqual(out_of_range["items"], last["items"])
+
+    def test_library_keyword_pages_follow_generation_changes_without_persisted_counts(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(12), {})
+            with store.transaction() as connection:
+                connection.execute(
+                    "INSERT OR IGNORE INTO catalog_meta(key, value) "
+                    "VALUES('media_generation', '0')"
+                )
+            before = store.library_keywords("gate")
+
+            with store.transaction() as connection:
+                snapshot_key = connection.execute(
+                    "SELECT snapshot_key FROM movie_keywords ORDER BY snapshot_key LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    "INSERT INTO keywords(keyword_key, tmdb_id, name, normalized_name) "
+                    "VALUES('tmdb:gate-keyword', 'gate-keyword', 'gate keyword', 'gate keyword')"
+                )
+                connection.execute(
+                    "INSERT INTO movie_keywords(snapshot_key, position, keyword_key) "
+                    "VALUES(?, 99999, 'tmdb:gate-keyword')",
+                    (snapshot_key,),
+                )
+                connection.execute(
+                    "UPDATE catalog_meta SET value=CAST(value AS INTEGER)+1 "
+                    "WHERE key='media_generation'"
+                )
+
+            inserted = store.library_keywords("gate")
+            with store.transaction() as connection:
+                connection.execute(
+                    "DELETE FROM movie_keywords WHERE keyword_key='tmdb:gate-keyword'"
+                )
+                connection.execute(
+                    "DELETE FROM keywords WHERE keyword_key='tmdb:gate-keyword'"
+                )
+                connection.execute(
+                    "UPDATE catalog_meta SET value=CAST(value AS INTEGER)+1 "
+                    "WHERE key='media_generation'"
+                )
+            deleted = store.library_keywords("gate")
+
+        self.assertEqual(before["total_results"], 0)
+        self.assertEqual(inserted["total_results"], 1)
+        self.assertEqual(inserted["items"][0]["movie_count"], 1)
+        self.assertEqual(deleted["total_results"], 0)
+        self.assertEqual(
+            [before["catalog_generation"] + 1, before["catalog_generation"] + 2],
+            [inserted["catalog_generation"], deleted["catalog_generation"]],
+        )
+
+    def test_library_keyword_query_interruption_does_not_mutate_catalogue(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(125), {})
+            connection = store.connect()
+            before = tuple(connection.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM keywords), "
+                "(SELECT COUNT(*) FROM movie_keywords), "
+                "(SELECT value FROM catalog_meta WHERE key='media_generation')"
+            ).fetchone())
+            callbacks = 0
+
+            def interrupt():
+                nonlocal callbacks
+                callbacks += 1
+                return int(callbacks > 20)
+
+            connection.set_progress_handler(interrupt, 1)
+            with patch.object(store, "connect", return_value=connection):
+                with self.assertRaisesRegex(sqlite3.OperationalError, "interrupted"):
+                    store.library_keywords("keyword", page=2, page_size=50)
+
+            verification = store.connect()
+            try:
+                after = tuple(verification.execute(
+                    "SELECT "
+                    "(SELECT COUNT(*) FROM keywords), "
+                    "(SELECT COUNT(*) FROM movie_keywords), "
+                    "(SELECT value FROM catalog_meta WHERE key='media_generation')"
+                ).fetchone())
+            finally:
+                verification.close()
+
+        self.assertEqual(after, before)
+
+    def test_library_keyword_query_preserves_snapshot_fallback_selection(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(1), {})
+            with store.transaction() as connection:
+                movie_key = connection.execute(
+                    "SELECT movie_key FROM canonical_movies LIMIT 1"
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE canonical_movies SET selected_provider='plex' WHERE movie_key=?",
+                    (movie_key,),
+                )
+                connection.execute(
+                    "DELETE FROM provider_movie_snapshots "
+                    "WHERE movie_key=? AND provider='plex'",
+                    (movie_key,),
+                )
+            result = store.library_keywords("keyword 0")
+
+        self.assertEqual(result["total_results"], 1)
+        self.assertEqual(result["items"][0]["normalized_name"], "keyword 0")
+        self.assertEqual(result["items"][0]["movie_count"], 1)
+
+    def test_library_keyword_page_uses_two_relational_queries_and_blank_search_is_bounded(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(12), {})
+            statements = []
+            connection = store.connect()
+            connection.set_trace_callback(statements.append)
+            with patch.object(store, "connect", return_value=connection):
+                result = store.library_keywords("keyword", page=1, page_size=50)
+
+            blank_statements = []
+            blank_connection = store.connect()
+            blank_connection.set_trace_callback(blank_statements.append)
+            with patch.object(store, "connect", return_value=blank_connection):
+                blank = store.library_keywords("   ", page=1, page_size=50)
+
+        relational_queries = [
+            statement for statement in statements
+            if "keyword_counts AS" in statement
+        ]
+        self.assertEqual(len(relational_queries), 2)
+        self.assertNotIn("source_json", "\n".join(relational_queries))
+        self.assertEqual(result["total_results"], 12)
+        self.assertEqual(len(blank_statements), 1)
+        self.assertNotIn("keyword_counts AS", blank_statements[0])
+        self.assertEqual(blank["total_results"], 0)
 
     def test_library_keyword_queries_use_relational_indexes(self):
         with tempfile.TemporaryDirectory() as root:
@@ -436,8 +651,8 @@ class CatalogStoreTest(unittest.TestCase):
                 plans = [
                     str(row["detail"])
                     for row in connection.execute(
-                        f"EXPLAIN QUERY PLAN {store._library_keywords_sql()}",
-                        (normalized, upper_bound, normalized, 50),
+                        f"EXPLAIN QUERY PLAN {store._library_keywords_page_sql()}",
+                        (normalized, upper_bound, normalized, 50, 0),
                     ).fetchall()
                 ]
                 plans.extend(

@@ -103,3 +103,27 @@ The schema-8 writer and keyword implementation was exercised on 2026-07-25 again
 | Live rollout | Fresh archive `cp-catalog-migration-20260725T172051Z.zip` was checksum verified and rehearsal restored. Production migrated atomically to schema 8 with preserved cast/director and provider-JSON digests, zero migration provider calls, zero parity violations, integrity `ok`, 0 foreign-key violations, and successful first- and second-start desktop/API verification. | Passed |
 
 The final ownership map is `docs/plans/writer-keyword-search-authoritative-paths.md`. The complete command, path, count, digest, parity, runtime, and test record is `docs/plans/writer-keyword-search-stage-e-evidence-2026-07-25.md`.
+
+## Search completeness and Discover pagination acceptance addendum
+
+The search-completeness work was accepted on 2026-07-26 against disposable
+schema-8 catalogue clones. It changed neither schema nor catalogue data and
+did not require a migration or backfill. The normal runtime and live catalogue
+were not used for tests or performance probes.
+
+| Acceptance area | Final evidence | Result |
+| --- | --- | --- |
+| Git and catalogue authority | Work remained based on clean `master` commit `4f143dfbc7c7a635fe47bdf18f96faa42ef6a4dc`. `services/catalog_store.py` remains the SQLite owner; Library stayed SQL-only; Discover stayed TMDB-owned. | Passed |
+| Library keyword completeness | Broad query `s` returned 924 identities across 19 bounded 50-row pages. The page union contained 924 unique identities with ordered-key digest `bef37e297bcb092005ca37e49f30122b58c0823bcf833096c8621ffa578181ce`; each non-empty identity request used two relational reads and zero provider calls. | Passed |
+| Library paging and performance | Keyword identity pages expose accurate totals and replace results; selecting an identity uses the existing 40-card Library movie pager. Broad identity pages stayed below the frozen 350 ms cold, warm-median, and warm-p95 limits; the isolated selected-movie page stayed below its 600/500/650 ms limits. | Passed |
+| Discover completeness and routing | Keyword and People identities use bounded provider pages; keyword and person relationships use bounded 20-movie pages; normal Discover/Movies uses 40-card pages formed from two TMDB pages and preserves TMDB's 500-page boundary as 250 reachable application pages. No ten-page application cap remains. | Passed |
+| Desktop pagination and state | The shared pagination presentation renders Previous / Page X of Y / Next. Explore, Pick a Movie, keyword relationships, and person relationships replace pages without card accumulation. Request cancellation, stale-response rejection, history, filters, selection, detail, and navigation regression coverage passed. | Passed |
+| Ownership attachment | `/api/library/check` remained the only local attachment route. A 20-movie request returned 20 authoritative matches with zero provider calls in 18 first-cold reads and 4 warm reads after batching identity keys; cold was 616.564 ms and warm p95 was 359.211 ms. | Passed |
+| Complete verification | 772 Python tests, 63 Node tests, the production Vite build, and 35 desktop Playwright tests passed. A 1600 by 1000 isolated schema-8 browser run reached Library keyword page 19 of 19 without prefetching or accumulating cards; SQLite finished with `quick_check=ok`, zero foreign-key violations, and unchanged media generation 6048. | Passed |
+| Rollout boundary | No schema migration, catalogue backfill, live-catalogue probe, normal-runtime restart, commit, stage, or push was performed as part of Gate 5 acceptance. | Passed |
+
+The final ownership map is
+`docs/plans/writer-keyword-search-authoritative-paths.md`. The gate-by-gate
+commands, thresholds, timings, hashes, browser observations, cleanup, and Git
+scope are recorded in
+`docs/plans/search-completeness-discover-pagination-execution-evidence-2026-07-26.md`.

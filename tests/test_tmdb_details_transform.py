@@ -4,6 +4,20 @@ from unittest.mock import Mock, patch
 import app
 
 
+class JsonResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return app._json.dumps(self.payload).encode()
+
+
 class TmdbDetailsTransformTest(unittest.TestCase):
     def test_extracts_director_cast_and_collection(self):
         payload = {
@@ -420,6 +434,309 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual([movie["title"] for movie in data["results"]], ["Alpha Animation", "Zed Animation"])
         self.assertEqual(data["total_results"], 2)
+
+    def test_keyword_and_people_identity_pages_beyond_ten_remain_reachable(self):
+        original_key = app._tmdb_key
+        app._tmdb_key = "tmdb-key"
+        requested_urls = []
+
+        def fake_urlopen(request, timeout=0):
+            requested_urls.append(request.full_url)
+            query = app.urllib.parse.parse_qs(app.urllib.parse.urlparse(request.full_url).query)
+            page = int(query["page"][0])
+            if "/search/keyword?" in request.full_url:
+                return JsonResponse({
+                    "page": page,
+                    "total_pages": 27,
+                    "total_results": 521,
+                    "results": [{"id": 9000 + page, "name": f"keyword {page}"}] if page <= 27 else [],
+                })
+            return JsonResponse({
+                "page": page,
+                "total_pages": 31,
+                "total_results": 602,
+                "results": [{
+                    "id": 7000 + page,
+                    "name": f"Person {page}",
+                    "known_for": [{"title": f"Known {page}"}],
+                }] if page <= 31 else [],
+            })
+
+        try:
+            with patch("app._metadata_store", side_effect=AssertionError("identity search must not persist")), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                keyword_response = app.app.test_client().get(
+                    "/api/tmdb/keywords/search?q=space&page=11"
+                )
+                people_response = app.app.test_client().get(
+                    "/api/tmdb/people/search?q=person&page=12"
+                )
+                out_of_range_response = app.app.test_client().get(
+                    "/api/tmdb/keywords/search?q=space&page=40"
+                )
+        finally:
+            app._tmdb_key = original_key
+
+        self.assertEqual(keyword_response.status_code, 200)
+        keyword_payload = keyword_response.get_json()
+        self.assertEqual(keyword_payload["page"], 11)
+        self.assertEqual(keyword_payload["total_pages"], 27)
+        self.assertEqual(keyword_payload["provider_total_pages"], 27)
+        self.assertEqual(keyword_payload["provider_page_limit"], 500)
+        self.assertEqual(keyword_payload["page_size"], 20)
+        self.assertEqual(keyword_payload["results"][0]["tmdb_id"], "9011")
+
+        self.assertEqual(people_response.status_code, 200)
+        people_payload = people_response.get_json()
+        self.assertEqual(people_payload["page"], 12)
+        self.assertEqual(people_payload["total_pages"], 31)
+        self.assertEqual(people_payload["results"][0]["known_for"], ["Known 12"])
+
+        self.assertEqual(out_of_range_response.status_code, 200)
+        self.assertEqual(out_of_range_response.get_json()["page"], 40)
+        self.assertEqual(out_of_range_response.get_json()["total_pages"], 27)
+        self.assertEqual(out_of_range_response.get_json()["results"], [])
+        self.assertEqual(len(requested_urls), 3)
+        self.assertTrue(any("page=11" in url for url in requested_urls))
+        self.assertTrue(any("page=12" in url for url in requested_urls))
+        self.assertTrue(any("page=40" in url for url in requested_urls))
+
+    def test_discover_and_movie_search_native_pages_beyond_ten_remain_reachable(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {878: "Sci-Fi"}
+        requested_urls = []
+
+        def fake_urlopen(request, timeout=0):
+            requested_urls.append(request.full_url)
+            query = app.urllib.parse.parse_qs(app.urllib.parse.urlparse(request.full_url).query)
+            page = int(query["page"][0])
+            return JsonResponse({
+                "page": page,
+                "total_pages": 24,
+                "total_results": 477,
+                "results": [{
+                    "id": 1000 + page,
+                    "title": f"Remote Movie {page}",
+                    "release_date": "2024-01-01",
+                    "genre_ids": [878],
+                    "vote_average": 8.0,
+                    "vote_count": 200,
+                    "original_language": "en",
+                }],
+            })
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app._metadata_store", side_effect=AssertionError("remote movie pages must not persist")), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                discover_response = app.app.test_client().get(
+                    "/api/tmdb/discover?list=catalog&keyword_id=501&keyword_name=space&page=11"
+                )
+                search_response = app.app.test_client().get(
+                    "/api/tmdb/search?q=space&page=13&genre=878&sort=title.asc"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+
+        self.assertEqual(discover_response.status_code, 200)
+        discover_payload = discover_response.get_json()
+        self.assertEqual(discover_payload["page"], 11)
+        self.assertEqual(discover_payload["total_pages"], 24)
+        self.assertEqual(discover_payload["provider_total_pages"], 24)
+        self.assertEqual(discover_payload["results"][0]["title"], "Remote Movie 11")
+        self.assertEqual(discover_payload["keyword"]["tmdb_id"], "501")
+
+        self.assertEqual(search_response.status_code, 200)
+        search_payload = search_response.get_json()
+        self.assertEqual(search_payload["page"], 13)
+        self.assertEqual(search_payload["total_pages"], 24)
+        self.assertTrue(search_payload["criteria_applied"])
+        self.assertEqual(search_payload["results"][0]["genres"], ["Sci-Fi"])
+        self.assertIn("with_keywords=501", requested_urls[0])
+        self.assertIn("page=11", requested_urls[0])
+        self.assertIn("/search/movie?", requested_urls[1])
+        self.assertIn("page=13", requested_urls[1])
+
+    def test_page_size_forty_maps_provider_pages_and_skips_missing_partial_page(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {}
+        requested_pages = []
+
+        def fake_urlopen(request, timeout=0):
+            query = app.urllib.parse.parse_qs(app.urllib.parse.urlparse(request.full_url).query)
+            page = int(query["page"][0])
+            requested_pages.append(page)
+            return JsonResponse({
+                "page": page,
+                "total_pages": 23,
+                "total_results": 451,
+                "results": [{
+                    "id": page,
+                    "title": f"Movie {page}",
+                    "release_date": "2024-01-01",
+                    "genre_ids": [],
+                    "vote_average": 7.0,
+                    "vote_count": 100,
+                    "original_language": "en",
+                }],
+            })
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                middle_response = app.app.test_client().get(
+                    "/api/tmdb/search?q=space&page=11&page_size=40"
+                )
+                last_response = app.app.test_client().get(
+                    "/api/tmdb/discover?list=catalog&page=12&page_size=40"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+
+        self.assertEqual(middle_response.status_code, 200)
+        middle_payload = middle_response.get_json()
+        self.assertEqual([movie["title"] for movie in middle_payload["results"]], ["Movie 21", "Movie 22"])
+        self.assertEqual(middle_payload["page"], 11)
+        self.assertEqual(middle_payload["page_size"], 40)
+        self.assertEqual(middle_payload["provider_total_pages"], 23)
+        self.assertEqual(middle_payload["total_pages"], 12)
+
+        self.assertEqual(last_response.status_code, 200)
+        last_payload = last_response.get_json()
+        self.assertEqual([movie["title"] for movie in last_payload["results"]], ["Movie 23"])
+        self.assertEqual(last_payload["page"], 12)
+        self.assertEqual(last_payload["total_pages"], 12)
+        self.assertEqual(requested_pages, [21, 22, 23])
+
+    def test_tmdb_provider_limit_caps_reachability_without_capping_provider_totals(self):
+        native_metadata = app._tmdb_page_metadata(700, 20)
+        combined_metadata = app._tmdb_page_metadata(700, 40)
+
+        self.assertEqual(native_metadata["provider_total_pages"], 700)
+        self.assertEqual(native_metadata["provider_page_limit"], 500)
+        self.assertEqual(native_metadata["total_pages"], 500)
+        self.assertEqual(combined_metadata["provider_total_pages"], 700)
+        self.assertEqual(combined_metadata["total_pages"], 250)
+        self.assertEqual(app._tmdb_page_contract("500", "20"), (500, 20, [500]))
+        self.assertEqual(app._tmdb_page_contract("250", "40"), (250, 40, [499, 500]))
+
+    def test_tmdb_pagination_improves_existing_routes_without_duplicate_owners(self):
+        route_counts = {}
+        for rule in app.app.url_map.iter_rules():
+            route_counts[rule.rule] = route_counts.get(rule.rule, 0) + 1
+
+        for route in (
+            "/api/tmdb/discover",
+            "/api/tmdb/search",
+            "/api/tmdb/people/search",
+            "/api/tmdb/keywords/search",
+            "/api/tmdb/person_movies",
+        ):
+            self.assertEqual(route_counts.get(route), 1)
+
+    def test_remote_routes_reject_provider_overflow_without_a_provider_call(self):
+        original_key = app._tmdb_key
+        app._tmdb_key = "tmdb-key"
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app.urllib.request.urlopen") as provider_call:
+                responses = [
+                    app.app.test_client().get("/api/tmdb/search?q=space&page=501"),
+                    app.app.test_client().get("/api/tmdb/discover?list=catalog&page=251&page_size=40"),
+                    app.app.test_client().get("/api/tmdb/people/search?q=person&page=501"),
+                    app.app.test_client().get("/api/tmdb/keywords/search?q=space&page=501"),
+                ]
+        finally:
+            app._tmdb_key = original_key
+
+        self.assertTrue(all(response.status_code == 400 for response in responses))
+        provider_call.assert_not_called()
+
+    def test_person_filmography_pages_beyond_ten_and_clamps_to_computed_last_page(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {}
+        credits = [
+            {
+                "id": movie_id,
+                "title": f"Movie {movie_id:03d}",
+                "release_date": "2024-01-01",
+                "genre_ids": [],
+                "popularity": 1000 - movie_id,
+            }
+            for movie_id in range(1, 222)
+        ]
+        credits.append(dict(credits[0]))
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app._metadata_store", side_effect=AssertionError("filmography must not persist")), \
+                    patch("app.urllib.request.urlopen", return_value=JsonResponse({
+                        "cast": credits,
+                        "crew": [],
+                    })) as provider_call:
+                page_eleven_response = app.app.test_client().get(
+                    "/api/tmdb/person_movies?person_id=55&role=actor&page=11"
+                )
+                overflow_response = app.app.test_client().get(
+                    "/api/tmdb/person_movies?person_id=55&role=actor&page=999"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+
+        self.assertEqual(page_eleven_response.status_code, 200)
+        page_eleven = page_eleven_response.get_json()
+        self.assertEqual(page_eleven["page"], 11)
+        self.assertEqual(page_eleven["page_size"], 20)
+        self.assertEqual(page_eleven["total_pages"], 12)
+        self.assertEqual(page_eleven["total_results"], 221)
+        self.assertEqual(len(page_eleven["results"]), 20)
+
+        self.assertEqual(overflow_response.status_code, 200)
+        overflow = overflow_response.get_json()
+        self.assertEqual(overflow["page"], 12)
+        self.assertEqual(overflow["total_pages"], 12)
+        self.assertEqual(len(overflow["results"]), 1)
+        self.assertEqual(provider_call.call_count, 2)
+
+    def test_tmdb_rate_limit_and_malformed_payload_errors_remain_visible(self):
+        original_key = app._tmdb_key
+        app._tmdb_key = "tmdb-key"
+        try:
+            with patch(
+                "app.urllib.request.urlopen",
+                side_effect=app.urllib.error.HTTPError(
+                    "https://api.themoviedb.org/3/search/keyword",
+                    429,
+                    "Too Many Requests",
+                    None,
+                    None,
+                ),
+            ):
+                rate_limited = app.app.test_client().get(
+                    "/api/tmdb/keywords/search?q=space&page=11"
+                )
+            with patch(
+                "app.urllib.request.urlopen",
+                return_value=JsonResponse({"total_pages": "invalid", "results": []}),
+            ):
+                malformed = app.app.test_client().get(
+                    "/api/tmdb/keywords/search?q=space&page=11"
+                )
+        finally:
+            app._tmdb_key = original_key
+
+        self.assertEqual(rate_limited.status_code, 502)
+        self.assertEqual(rate_limited.get_json()["error"], "TMDB returned HTTP 429")
+        self.assertEqual(malformed.status_code, 500)
 
     def test_person_endpoint_returns_biography_profile_payload(self):
         original_key = app._tmdb_key

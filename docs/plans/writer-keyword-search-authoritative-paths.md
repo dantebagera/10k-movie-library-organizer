@@ -14,28 +14,36 @@ This document records the final ownership boundaries for schema version 8. It do
 ## Library ownership
 
 - `/api/library?view=people` reads the canonical SQL people projection. Library People search can select existing actor, director, or writer roles without a provider call.
-- `/api/library?view=keywords` delegates to `CatalogStore.library_keywords()`, which performs an indexed, bounded relational prefix query.
-- Movie filtering by person or keyword is composed into the existing `CatalogStore.library_page()` query. Writer filtering uses the existing credit index; keyword filtering uses `idx_keywords_tmdb` or `idx_keywords_normalized_name` and `idx_movie_keywords_keyword`.
+- `/api/library?view=keywords` delegates to `CatalogStore.library_keywords()`, which performs an indexed relational prefix query with an accurate total and bounded pages of at most 50 identities. Page size is not a total-result cap: every matching identity remains reachable.
+- Movie filtering by person or keyword is composed into the existing `CatalogStore.library_page()` query. Writer filtering uses the existing credit index; keyword filtering uses `idx_keywords_tmdb` or `idx_keywords_normalized_name` and `idx_movie_keywords_keyword`. Selected-identity movie results retain the existing 40-card Library paging contract.
 - `/api/library/details` reads owned expanded details from SQL. Stored writers and keywords are returned through the same canonical details contract as cast, directors, and other persisted metadata.
+- `/api/library/check` remains the sole local-ownership attachment route for remote cards. Its catalogue candidate decoder reads identity keys in one bounded batch after the candidate query, rather than issuing one identity-key query per candidate.
 - Existing Movies search semantics, paging, sorting, filters, selection, and shared cards remain on their existing path.
 
 ## Discover ownership
 
-- `/api/tmdb/people/search` remains TMDB-owned person discovery.
-- `/api/tmdb/person_movies` remains the one person-credit relationship route. `role=writer` selects the accepted TMDB writing jobs from movie crew credits; actor and director behavior is unchanged.
-- `/api/tmdb/keywords/search` resolves TMDB keyword identities.
-- `/api/tmdb/discover?...&keyword_id=...` passes the selected TMDB identity as `with_keywords`; it does not reinterpret a keyword as a movie-title query.
+- `/api/tmdb/people/search` remains TMDB-owned person discovery and exposes the provider's reachable pages in bounded 20-identity responses.
+- `/api/tmdb/person_movies` remains the one person-credit relationship route. It builds the finite accepted movie-credit set, applies the existing actor/director/writer rules, and returns a bounded 20-movie slice with accurate page metadata. `role=writer` selects the accepted TMDB writing jobs from movie crew credits; actor and director behavior is unchanged.
+- `/api/tmdb/keywords/search` resolves TMDB keyword identities and exposes the provider's reachable pages in bounded 20-identity responses.
+- `/api/tmdb/discover?...&keyword_id=...` passes the selected TMDB identity as `with_keywords`; it does not reinterpret a keyword as a movie-title query. Keyword relationship pages remain provider-owned and bounded to 20 movies.
+- Normal Discover and Movies searches retain 40-card application pages by composing two TMDB pages. TMDB's 500-page boundary is preserved, so the reachable application range is 250 40-card pages; no application ten-page cap exists.
 - Remote Discover cards attach local ownership through the existing `/api/library/check` authoritative path. An owned expansion switches to the existing SQL details contract.
 
 ## Desktop UI ownership
 
-- `src/features/library/LibraryWorkspace.jsx` owns Library mode state and maps Movies, People, and Keywords onto the existing Library routes and filters.
-- `src/features/discover/DiscoverWorkspace.jsx` owns Discover mode state, request cancellation, stale-response protection, person-role navigation, and keyword-identity navigation.
+- `src/features/library/LibraryWorkspace.jsx` owns Library mode state and maps Movies, People, and Keywords onto the existing Library routes and filters. Keyword identity pages replace rather than accumulate results, and selection returns to the existing Library movie-page owner.
+- `src/features/discover/DiscoverWorkspace.jsx` owns Discover mode state, request cancellation, stale-response protection, person-role navigation, keyword-identity navigation, and all Discover page transitions. Explore, Pick a Movie, keyword relationships, and person relationships replace the current page rather than accumulating cards.
+- `src/components/Pagination.jsx` remains the shared Previous / Page X of Y / Next presentation owner. It does not own result data, page totals, or provider policy.
 - `src/components/SharedMovieCards.jsx` remains the shared card/details presentation owner. No writer- or keyword-specific card implementation was introduced.
 
 ## Compatibility retirement
 
 No parallel search implementation or temporary feature flag was introduced.
+
+The former Library keyword total cap, Discover application page cap, and
+relationship-card `Load more` accumulation path were removed after their
+existing owners gained accurate bounded pagination. No compatibility route or
+fallback retains those obsolete limits.
 
 The version 7 to version 8 migration is not an obsolete compatibility path: it is the required one-time upgrade path for installations that have not completed the controlled rollout. Its retirement criterion is an explicitly approved future schema-support decision after all supported catalogues are known to be version 8 or later. Removing it before then would make a valid version 7 catalogue unopenable.
 

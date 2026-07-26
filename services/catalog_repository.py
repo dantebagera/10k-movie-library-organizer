@@ -239,8 +239,8 @@ class CatalogRepository:
     def library_selection_paths(self, filters=None):
         return self.store.library_selection_paths(self._normalize_filter_paths(filters))
 
-    def library_keywords(self, query="", *, limit=50):
-        return self.store.library_keywords(query, limit=limit)
+    def library_keywords(self, query="", *, page=1, page_size=50):
+        return self.store.library_keywords(query, page=page, page_size=page_size)
 
     def library_candidates_for_paths(self, paths):
         path_keys = [

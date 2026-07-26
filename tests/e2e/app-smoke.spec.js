@@ -326,6 +326,10 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
 
   await page.route('**/api/library?view=keywords*', (route) => route.fulfill({ json: {
     items: [{ keyword_key: 'tmdb:501', tmdb_id: '501', name: 'space opera', normalized_name: 'space opera', movie_count: 1 }],
+    page: 1,
+    page_size: 50,
+    total_pages: 1,
+    total_results: 1,
     count: 1,
     source: 'catalog',
     catalog_generation: 1
@@ -372,6 +376,76 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
   expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
 });
 
+test('Library keyword pagination replaces bounded pages and reaches every identity', async ({ page }) => {
+  const requestedUrls = [];
+  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+    items: [],
+    count: 0,
+    total: 0,
+    page: 1,
+    total_pages: 1,
+    page_start: 0,
+    page_end: 0,
+    facets: { genres: [], sources: [], languages: [], countries: [] },
+    stats: { total: 0, low: 0, matched: 0, pending: 0, unmatched: 0 },
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/library?view=keywords*', (route) => {
+    const url = new URL(route.request().url());
+    requestedUrls.push(url);
+    const requestedPage = Number(url.searchParams.get('page') || 1);
+    const start = (requestedPage - 1) * 50;
+    const count = requestedPage < 3 ? 50 : 25;
+    const items = Array.from({ length: count }, (_, index) => {
+      const identity = start + index + 1;
+      return {
+        keyword_key: `tmdb:${identity}`,
+        tmdb_id: String(identity),
+        name: `paged keyword ${String(identity).padStart(3, '0')}`,
+        normalized_name: `paged keyword ${String(identity).padStart(3, '0')}`,
+        movie_count: 1
+      };
+    });
+    return route.fulfill({ json: {
+      items,
+      page: requestedPage,
+      page_size: 50,
+      total_pages: 3,
+      total_results: 125,
+      count: items.length,
+      source: 'catalog',
+      catalog_generation: 1
+    } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('Library search type').selectOption('keywords');
+  await page.getByLabel('Search keywords in your library').fill('paged');
+
+  const pagination = page.getByRole('navigation', { name: 'Library pagination' });
+  await expect(pagination.getByText('Page 1 of 3', { exact: true })).toBeVisible();
+  await expect(page.locator('.keyword-search-card')).toHaveCount(50);
+  await expect(page.getByText('paged keyword 001', { exact: true })).toBeVisible();
+
+  await pagination.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(pagination.getByText('Page 2 of 3', { exact: true })).toBeVisible();
+  await expect(page.locator('.keyword-search-card')).toHaveCount(50);
+  await expect(page.getByText('paged keyword 001', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('paged keyword 051', { exact: true })).toBeVisible();
+
+  await pagination.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(pagination.getByText('Page 3 of 3', { exact: true })).toBeVisible();
+  await expect(page.locator('.keyword-search-card')).toHaveCount(25);
+  await expect(page.getByText('paged keyword 125', { exact: true })).toBeVisible();
+  await expect(pagination.getByRole('button', { name: 'Next', exact: true })).toBeDisabled();
+
+  await pagination.getByRole('button', { name: 'Previous', exact: true }).click();
+  await expect(pagination.getByText('Page 2 of 3', { exact: true })).toBeVisible();
+  expect(requestedUrls.map((url) => url.searchParams.get('page'))).toEqual(['1', '2', '3', '2']);
+  expect(requestedUrls.every((url) => url.searchParams.get('page_size') === '50')).toBe(true);
+  expect(requestedUrls.every((url) => !url.searchParams.has('limit'))).toBe(true);
+});
+
 test('Library Keywords ignores an older in-flight SQL suggestion response', async ({ page }) => {
   let releaseSlowSearch;
   let slowSearchStarted = false;
@@ -396,6 +470,10 @@ test('Library Keywords ignores an older in-flight SQL suggestion response', asyn
       await slowSearchGate;
       await route.fulfill({ json: {
         items: [{ keyword_key: 'tmdb:1', tmdb_id: '1', name: 'slow keyword', movie_count: 1 }],
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+        total_results: 1,
         count: 1,
         catalog_generation: 1
       } });
@@ -403,6 +481,10 @@ test('Library Keywords ignores an older in-flight SQL suggestion response', asyn
     }
     await route.fulfill({ json: {
       items: [{ keyword_key: 'tmdb:2', tmdb_id: '2', name: 'current keyword', movie_count: 1 }],
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+      total_results: 1,
       count: 1,
       catalog_generation: 1
     } });
@@ -433,22 +515,35 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
   };
   let selectedKeywordUrl = '';
 
-  await page.route('**/api/tmdb/keywords/search**', (route) => route.fulfill({ json: {
-    results: [{ tmdb_id: '501', name: 'space opera' }],
-    page: 1,
-    total_pages: 1,
-    total_results: 1
-  } }));
+  await page.route('**/api/tmdb/keywords/search**', (route) => {
+    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+    const names = {
+      1: { tmdb_id: '500', name: 'space station' },
+      2: { tmdb_id: '501', name: 'space opera' },
+      3: { tmdb_id: '502', name: 'deep space' }
+    };
+    return route.fulfill({ json: {
+      results: [names[requestedPage]],
+      page: requestedPage,
+      total_pages: 3,
+      total_results: 41
+    } });
+  });
   await page.route('**/api/tmdb/discover**', (route) => {
     const url = route.request().url();
     if (new URL(url).searchParams.get('keyword_id') === '501') {
       selectedKeywordUrl = url;
+      const requestedPage = Number(new URL(url).searchParams.get('page') || 1);
+      const movie = requestedPage === 1
+        ? keywordMovie
+        : { ...keywordMovie, tmdb_id: `880${requestedPage}`, title: `Remote Space Page ${requestedPage}` };
       return route.fulfill({ json: {
-        results: [keywordMovie],
+        results: [movie],
         keyword: { tmdb_id: '501', name: 'space opera' },
-        page: 1,
-        total_pages: 1,
-        total_results: 1
+        page: requestedPage,
+        page_size: 20,
+        total_pages: 3,
+        total_results: 41
       } });
     }
     return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
@@ -475,6 +570,11 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
   await page.getByLabel('Search TMDB keywords').fill('space');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
+  const keywordPager = page.getByRole('navigation', { name: 'TMDB keyword search pagination' });
+  await expect(keywordPager.getByText('Page 1 of 3')).toBeVisible();
+  await expect(keywordPager.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await keywordPager.getByRole('button', { name: 'Next' }).click();
+  await expect(keywordPager.getByText('Page 2 of 3')).toBeVisible();
   const keywordCard = page.locator('.keyword-search-card').filter({ hasText: 'space opera' });
   await expect(keywordCard).toBeVisible();
   await keywordCard.getByRole('button', { name: 'Discover movies' }).click();
@@ -483,9 +583,22 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
   await expect(page.locator('.unified-owned-badge').filter({ hasText: 'Owned' })).toBeVisible();
   expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
 
+  const relationshipPager = page.getByRole('navigation', { name: 'TMDB relationship pagination' });
+  await expect(relationshipPager.getByText('Page 1 of 3')).toBeVisible();
+  await relationshipPager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('Remote Space Page 2', { exact: true })).toBeVisible();
+  await expect(page.getByText('Remote Space Archive', { exact: true })).toHaveCount(0);
+  await expect(relationshipPager.getByText('Page 2 of 3')).toBeVisible();
+
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(page.getByLabel('TMDB search type')).toHaveValue('keywords');
   await expect(page.locator('.keyword-search-card').filter({ hasText: 'space opera' })).toBeVisible();
+  await expect(keywordPager.getByText('Page 2 of 3')).toBeVisible();
+  await keywordPager.getByRole('button', { name: 'Next' }).click();
+  await expect(keywordPager.getByText('Page 3 of 3')).toBeVisible();
+  await expect(keywordPager.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await keywordPager.getByRole('button', { name: 'Previous' }).click();
+  await expect(keywordPager.getByText('Page 2 of 3')).toBeVisible();
 });
 
 test('Discover Keywords ignores a stale TMDB keyword response', async ({ page }) => {
@@ -529,6 +642,92 @@ test('Discover Keywords ignores a stale TMDB keyword response', async ({ page })
   releaseSlowSearch();
   await expect(page.locator('.keyword-search-card').filter({ hasText: 'slow keyword' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled();
+});
+
+test('Discover relationship paging rejects stale pages and follows shrinking provider totals', async ({ page }) => {
+  let releaseSlowPage;
+  let slowPageStarted = false;
+  let totalsShrank = false;
+  const requestedPages = [];
+  const slowPageGate = new Promise((resolve) => {
+    releaseSlowPage = resolve;
+  });
+
+  await page.route('**/api/tmdb/keywords/search**', (route) => route.fulfill({ json: {
+    results: [{ tmdb_id: '601', name: 'time loop' }],
+    page: 1,
+    page_size: 20,
+    total_pages: 1,
+    total_results: 1
+  } }));
+  await page.route('**/api/tmdb/discover**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('keyword_id') !== '601') {
+      return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
+    }
+    const requestedPage = Number(url.searchParams.get('page') || 1);
+    const genre = url.searchParams.get('genre') || '';
+    requestedPages.push({ page: requestedPage, genre });
+    if (requestedPage === 2 && !genre) {
+      slowPageStarted = true;
+      await slowPageGate;
+      await route.fulfill({ json: {
+        results: [{ tmdb_id: 'slow-2', title: 'Stale relationship page', year: '2024', genres: [] }],
+        page: 2,
+        page_size: 20,
+        total_pages: 3,
+        total_results: 41
+      } }).catch(() => {});
+      return;
+    }
+    if (requestedPage === 2 && genre === '28') {
+      totalsShrank = true;
+      return route.fulfill({ json: {
+        results: [],
+        page: 2,
+        page_size: 20,
+        total_pages: 1,
+        total_results: 1
+      } });
+    }
+    const title = totalsShrank ? 'Shrunk total page 1' : genre === '28' ? 'Filtered page 1' : 'Original page 1';
+    return route.fulfill({ json: {
+      results: [{ tmdb_id: `page-${requestedPage}`, title, year: '2024', genres: genre ? ['Action'] : [] }],
+      page: requestedPage,
+      page_size: 20,
+      total_pages: totalsShrank ? 1 : 3,
+      total_results: totalsShrank ? 1 : 41
+    } });
+  });
+  await page.route('**/api/library/check', (route) => route.fulfill({
+    json: { results: [], catalog_generation: 1 }
+  }));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('keywords');
+  await page.getByLabel('Search TMDB keywords').fill('time');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('button', { name: 'Discover movies' }).click();
+
+  const pager = page.getByRole('navigation', { name: 'TMDB relationship pagination' });
+  await expect(page.getByText('Original page 1', { exact: true })).toBeVisible();
+  await pager.getByRole('button', { name: 'Next' }).click();
+  await expect.poll(() => slowPageStarted).toBe(true);
+  await page.locator('.discover-toolbar select').nth(2).selectOption('28');
+  await expect(page.getByText('Filtered page 1', { exact: true })).toBeVisible();
+  await expect(pager.getByText('Page 1 of 3')).toBeVisible();
+
+  releaseSlowPage();
+  await expect(page.getByText('Stale relationship page', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Could not load this view.')).toHaveCount(0);
+
+  await pager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('Shrunk total page 1', { exact: true })).toBeVisible();
+  await expect(pager).toHaveCount(0);
+  expect(requestedPages.slice(-2)).toEqual([
+    { page: 2, genre: '28' },
+    { page: 1, genre: '28' }
+  ]);
 });
 
 test('Keyword modes surface their authoritative SQL and TMDB errors', async ({ page }) => {
@@ -599,6 +798,180 @@ test('Discover People search ignores a stale response and clears its loading sta
   releaseSlowSearch();
   await expect(page.locator('.person-search-card').filter({ hasText: 'Slow Person' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeEnabled();
+});
+
+test('Discover People and Actor Director Writer relationships replace pages beyond ten', async ({ page }) => {
+  const requestedRelationships = [];
+
+  await page.route('**/api/tmdb/people/search**', (route) => {
+    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+    return route.fulfill({ json: {
+      results: [{
+        tmdb_id: '730',
+        name: `Page Person ${requestedPage}`,
+        known_for_department: 'Acting',
+        known_for: [`Known page ${requestedPage}`]
+      }],
+      page: requestedPage,
+      page_size: 20,
+      total_pages: 12,
+      total_results: 221
+    } });
+  });
+  await page.route('**/api/tmdb/person_movies**', (route) => {
+    const url = new URL(route.request().url());
+    const requestedPage = Number(url.searchParams.get('page') || 1);
+    const role = url.searchParams.get('role') || 'actor';
+    const genre = url.searchParams.get('genre') || '';
+    requestedRelationships.push({ page: requestedPage, role, genre });
+    return route.fulfill({ json: {
+      results: [{
+        tmdb_id: `${role}-${requestedPage}`,
+        title: `${role} page ${requestedPage}${genre ? ` genre ${genre}` : ''}`,
+        year: '2024',
+        poster_url: '',
+        genres: genre === '28' ? ['Action'] : ['Drama'],
+        tmdb_rating: '8.0',
+        tmdb_vote_count: 500,
+        plot: `${role} relationship page`
+      }],
+      role,
+      person_id: '730',
+      page: requestedPage,
+      page_size: 20,
+      total_pages: 12,
+      total_results: 221
+    } });
+  });
+  await page.route('**/api/library/check', (route) => route.fulfill({
+    json: { results: [], catalog_generation: 1 }
+  }));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('people');
+  await page.getByLabel('Search TMDB people').fill('Page Person');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+
+  const peoplePager = page.getByRole('navigation', { name: 'TMDB People search pagination' });
+  await expect(peoplePager.getByText('Page 1 of 12')).toBeVisible();
+  await peoplePager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.locator('.person-search-card').filter({ hasText: 'Page Person 2' })).toBeVisible();
+  await expect(page.locator('.person-search-card').filter({ hasText: 'Page Person 1' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Acting credits' }).click();
+  const relationshipPager = page.getByRole('navigation', { name: 'TMDB relationship pagination' });
+  await expect(relationshipPager.getByText('Page 1 of 12')).toBeVisible();
+  await page.getByLabel('Select actor page 1').check({ force: true });
+  await relationshipPager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('actor page 2', { exact: true })).toBeVisible();
+  await relationshipPager.getByRole('button', { name: 'Previous' }).click();
+  await expect(page.getByLabel('Select actor page 1')).toBeChecked();
+  for (let expectedPage = 2; expectedPage <= 11; expectedPage += 1) {
+    await relationshipPager.getByRole('button', { name: 'Next' }).click();
+    await expect(relationshipPager.getByText(`Page ${expectedPage} of 12`)).toBeVisible();
+  }
+  await expect(page.getByText('actor page 11', { exact: true })).toBeVisible();
+  await expect(page.getByText('actor page 10', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Library ownership').selectOption('owned');
+  await expect(page.getByText('No owned movies match this TMDB result page.')).toBeVisible();
+  await expect(relationshipPager.getByRole('button', { name: 'Next' })).toBeEnabled();
+  await relationshipPager.getByRole('button', { name: 'Next' }).click();
+  await expect(relationshipPager.getByText('Page 12 of 12')).toBeVisible();
+  await expect(relationshipPager.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+  await page.getByLabel('Library ownership').selectOption('all');
+  await expect(page.getByText('actor page 12', { exact: true })).toBeVisible();
+  await page.locator('.discover-toolbar select').nth(2).selectOption('28');
+  await expect(page.getByText('actor page 1 genre 28', { exact: true })).toBeVisible();
+  await expect(relationshipPager.getByText('Page 1 of 12')).toBeVisible();
+  expect(requestedRelationships.at(-1)).toEqual({ page: 1, role: 'actor', genre: '28' });
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.locator('.person-search-card').filter({ hasText: 'Page Person 2' })).toBeVisible();
+  await expect(peoplePager.getByText('Page 2 of 12')).toBeVisible();
+  await page.getByRole('button', { name: 'Directed films' }).click();
+  await expect(page.getByText('director page 1', { exact: true })).toBeVisible();
+  await relationshipPager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('director page 2', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await page.getByRole('button', { name: 'Written films' }).click();
+  await expect(page.getByText('writer page 1', { exact: true })).toBeVisible();
+  await relationshipPager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('writer page 2', { exact: true })).toBeVisible();
+});
+
+test('Pick relationship browsing uses shared Previous and Next replacement pages', async ({ page }) => {
+  const pickMovie = {
+    tmdb_id: '9400',
+    title: 'AI Pick Root',
+    year: '2024',
+    poster_url: '',
+    genres: ['Drama'],
+    tmdb_rating: '8.0',
+    tmdb_vote_count: 500,
+    plot: 'The AI starting point.'
+  };
+
+  await page.route('**/api/ollama/recommend', (route) => route.fulfill({
+    json: { results: [pickMovie], model: 'test-model' }
+  }));
+  await page.route('**/api/tmdb/details**', (route) => route.fulfill({ json: {
+    ...pickMovie,
+    summary: pickMovie.plot,
+    cast: [{ id: '9900', name: 'Pick Actor', character: 'Lead' }],
+    directors: [],
+    writers: [],
+    keywords: []
+  } }));
+  await page.route('**/api/tmdb/person_movies**', (route) => {
+    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+    return route.fulfill({ json: {
+      results: [{
+        tmdb_id: `pick-${requestedPage}`,
+        title: `Pick actor page ${requestedPage}`,
+        year: '2024',
+        poster_url: '',
+        genres: ['Drama'],
+        tmdb_rating: '7.5',
+        tmdb_vote_count: 100,
+        plot: 'Pick relationship result.'
+      }],
+      page: requestedPage,
+      page_size: 20,
+      total_pages: 2,
+      total_results: 21,
+      role: 'actor',
+      person_id: '9900'
+    } });
+  });
+  await page.route('**/api/library/check', (route) => route.fulfill({
+    json: { results: [], catalog_generation: 1 }
+  }));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Pick My Movie', exact: true }).click();
+  await page.getByPlaceholder('Something funny but a little sad, maybe an indie movie with a warm ending...').fill('A thoughtful drama');
+  await page.getByRole('button', { name: 'Ask AI' }).click();
+
+  const rootCard = page.locator('.discover-movie-card').filter({ hasText: pickMovie.title });
+  await expect(rootCard).toBeVisible();
+  await rootCard.getByRole('heading', { name: pickMovie.title }).click();
+  await rootCard.locator('.person-card').filter({ hasText: 'Pick Actor' }).click();
+
+  const pager = page.getByRole('navigation', { name: 'AI Pick relationship pagination' });
+  await expect(page.getByText('Pick actor page 1', { exact: true })).toBeVisible();
+  await expect(pager.getByText('Page 1 of 2')).toBeVisible();
+  await expect(pager.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await pager.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('Pick actor page 2', { exact: true })).toBeVisible();
+  await expect(page.getByText('Pick actor page 1', { exact: true })).toHaveCount(0);
+  await expect(pager.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await expect(page.getByText('Load more', { exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByText(pickMovie.title, { exact: true })).toBeVisible();
 });
 
 test('Library credit clicks load the people projection before filtering owned work', async ({ page }) => {
