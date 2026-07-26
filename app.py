@@ -4210,6 +4210,14 @@ def _ai_control_delete_file(path):
 
 def _ai_control_submit_download(item):
     variant = item.get('variant') or {}
+    selected_quality = _normalize_download_quality(item.get('quality') or variant.get('resolution'))
+    actual_quality = _download_variant_quality(variant.get('resolution'))
+    if actual_quality != selected_quality:
+        actual_label = str(variant.get('resolution') or 'Unknown')
+        raise ValueError(
+            f'Selected {selected_quality} source is actually {actual_label}. '
+            'Refresh source review before submitting.'
+        )
     metadata = _qbittorrent_submission_metadata({
         'title': item.get('title', ''),
         'year': item.get('year', ''),
@@ -10535,6 +10543,15 @@ def _normalize_download_quality(value):
     return '4K' if text in {'4k', '2160p', 'uhd'} else '1080p'
 
 
+def _download_variant_quality(value):
+    text = str(value or '').strip().lower()
+    if text in {'4k', '2160p', 'uhd'}:
+        return '4K'
+    if text in {'1080p', '1080'}:
+        return '1080p'
+    return ''
+
+
 def _effective_download_trusted_indexer_ids(indexers=None):
     if _download_indexer_mode == 'custom':
         return [str(value) for value in _download_trusted_indexers if str(value).strip()]
@@ -10557,7 +10574,7 @@ def _best_download_variant(variants, quality, trusted_ids):
         indexer_id = str(variant.get('indexer_id') or variant.get('indexer') or '')
         if trusted and indexer_id not in trusted:
             continue
-        if _normalize_download_quality(variant.get('resolution')) != wanted:
+        if _download_variant_quality(variant.get('resolution')) != wanted:
             continue
         candidates.append(variant)
     candidates.sort(key=lambda item: (

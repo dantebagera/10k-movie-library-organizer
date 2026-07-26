@@ -284,6 +284,85 @@ class UserCurationStoreTest(unittest.TestCase):
         self.assertFalse(data["rows"][0]["upgrade"])
         self.assertEqual(data["rows"][0]["status"], "ready")
 
+    def test_source_review_never_places_lower_or_unknown_releases_in_the_1080p_bucket(self):
+        movie = {"tmdb_id": "294254", "title": "Maze Runner: The Scorch Trials", "year": "2015"}
+        variants = [
+            {
+                "title": "Maze Runner The Scorch Trials 2015 720p BRRip",
+                "resolution": "720p",
+                "indexer": "YTS",
+                "indexer_id": "7",
+                "seeders": 500,
+            },
+            {
+                "title": "Maze Runner The Scorch Trials 2015",
+                "resolution": "Unknown",
+                "indexer": "YTS",
+                "indexer_id": "7",
+                "seeders": 900,
+            },
+            {
+                "title": "Maze Runner The Scorch Trials 2015 1080p BluRay",
+                "resolution": "1080p",
+                "indexer": "YTS",
+                "indexer_id": "7",
+                "seeders": 5,
+            },
+            {
+                "title": "Maze Runner The Scorch Trials 2015 2160p BluRay",
+                "resolution": "4K",
+                "indexer": "YTS",
+                "indexer_id": "7",
+                "seeders": 2,
+            },
+        ]
+
+        with patch("app._curated_movie_is_owned", return_value=True), patch(
+            "app._effective_download_trusted_indexer_ids",
+            return_value=["7"],
+        ), patch("app._ai_control_source_search", return_value=variants):
+            response = app.app.test_client().post(
+                "/api/sources/review/preview",
+                json={"movies": [movie], "quality": "1080p"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        row = response.get_json()["rows"][0]
+        self.assertEqual(row["variant"]["resolution"], "1080p")
+        self.assertIn("1080p", row["variant"]["title"])
+        self.assertEqual(row["variants_by_quality"]["1080p"]["resolution"], "1080p")
+        self.assertEqual(row["variants_by_quality"]["4K"]["resolution"], "4K")
+        self.assertTrue(row["upgrade"])
+
+    def test_source_review_blocks_1080p_when_yts_only_returns_720p(self):
+        movie = {"tmdb_id": "294254", "title": "Maze Runner: The Scorch Trials", "year": "2015"}
+        lower_quality = [{
+            "title": "Maze Runner The Scorch Trials 2015 720p BRRip",
+            "resolution": "720p",
+            "indexer": "YTS",
+            "indexer_id": "7",
+            "seeders": 500,
+        }]
+
+        with patch("app._curated_movie_is_owned", return_value=True), patch(
+            "app._effective_download_trusted_indexer_ids",
+            return_value=["7"],
+        ), patch("app._ai_control_source_search", return_value=lower_quality):
+            response = app.app.test_client().post(
+                "/api/sources/review/preview",
+                json={"movies": [movie], "quality": "1080p"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        row = response.get_json()["rows"][0]
+        self.assertEqual(row["quality"], "1080p")
+        self.assertEqual(row["status"], "blocked")
+        self.assertFalse(row["selected"])
+        self.assertIsNone(row["variant"])
+        self.assertIsNone(row["variants_by_quality"]["1080p"])
+        self.assertIsNone(row["variants_by_quality"]["4K"])
+        self.assertEqual(row["reason"], "No trusted 1080p source found")
+
     def test_source_review_submit_only_downloads_selected_ready_rows(self):
         ready = {
             "selected": True,

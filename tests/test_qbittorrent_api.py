@@ -207,6 +207,28 @@ class QBittorrentApiTests(unittest.TestCase):
         self.assertEqual(metadata["release_title"], release_title)
         self.assertEqual(metadata["identity_handoff"]["state"], "pending")
 
+    def test_bulk_submission_rejects_a_variant_below_the_selected_quality(self):
+        response = self.client.post("/api/sources/review/submit", json={"rows": [{
+            "title": "Maze Runner: The Death Cure",
+            "year": "2018",
+            "tmdb_id": "336843",
+            "quality": "1080p",
+            "upgrade": True,
+            "selected": True,
+            "status": "ready",
+            "variant": {
+                "title": "Maze Runner The Death Cure 2018 720p BRRip",
+                "indexer": "YTS",
+                "resolution": "720p",
+                "magnet_url": "magnet:?xt=urn:btih:3123456789abcdef0123456789abcdef01234567",
+            },
+        }]})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["submitted_count"], 0)
+        self.assertIn("Selected 1080p source is actually 720p", response.get_json()["results"][0]["error"])
+        self.assertEqual(self.manager.submitted, [])
+
     def test_submit_rejects_title_only_jobs(self):
         response = self.client.post("/api/qbittorrent/submit", json={
             "magnet_url": "magnet:?xt=urn:btih:2123456789abcdef0123456789abcdef01234567",

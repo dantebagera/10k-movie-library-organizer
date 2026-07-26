@@ -1203,6 +1203,15 @@ test('bulk Find sources keeps owned movies as upgrades and switches the actual q
     genres: ['Drama'],
     plot: 'A movie that is not yet in the library.'
   };
+  const lowerOnlyMovie = {
+    tmdb_id: '8403',
+    imdb_id: 'tt0008403',
+    title: 'Lower Quality Only Movie',
+    year: '2023',
+    poster_url: '',
+    genres: ['Action'],
+    plot: 'An owned movie for which YTS returned only 720p.'
+  };
   const owned1080 = {
     title: 'Owned Upgrade Movie 2024 1080p',
     resolution: '1080p',
@@ -1231,21 +1240,21 @@ test('bulk Find sources keeps owned movies as upgrades and switches the actual q
   let submittedRows = [];
 
   await page.route('**/api/tmdb/discover**', (route) => route.fulfill({ json: {
-    results: [ownedMovie, missingMovie],
+    results: [ownedMovie, missingMovie, lowerOnlyMovie],
     page: 1,
     total_pages: 1,
-    total_results: 2
+    total_results: 3
   } }));
   await page.route('**/api/library/check', async (route) => {
     const movies = (await route.request().postDataJSON()).movies || [];
     await route.fulfill({ json: {
-      results: movies.map((movie) => movie.tmdb_id === ownedMovie.tmdb_id ? {
+      results: movies.map((movie) => [ownedMovie.tmdb_id, lowerOnlyMovie.tmdb_id].includes(movie.tmdb_id) ? {
         found: true,
-        path: 'E:/Movies/Owned.Upgrade.Movie.2024.720p.mkv',
-        tmdb_id: ownedMovie.tmdb_id,
-        imdb_id: ownedMovie.imdb_id,
-        title: ownedMovie.title,
-        year: ownedMovie.year,
+        path: `E:/Movies/${movie.title.replaceAll(' ', '.')}.${movie.year}.720p.mkv`,
+        tmdb_id: movie.tmdb_id,
+        imdb_id: movie.imdb_id,
+        title: movie.title,
+        year: movie.year,
         resolution: '720p',
         maintenance_upgrade_candidate: true
       } : {
@@ -1277,8 +1286,18 @@ test('bulk Find sources keeps owned movies as upgrades and switches the actual q
         variant: missing1080,
         variants_by_quality: { '1080p': missing1080, '4K': null },
         reason: ''
+      }, {
+        ...lowerOnlyMovie,
+        path: 'E:/Movies/Lower.Quality.Only.Movie.2023.720p.mkv',
+        upgrade: true,
+        selected: false,
+        status: 'blocked',
+        quality: '1080p',
+        variant: null,
+        variants_by_quality: { '1080p': null, '4K': null },
+        reason: 'No trusted 1080p source found'
       }],
-      blocked: [],
+      blocked: [{ ...lowerOnlyMovie, status: 'blocked', reason: 'No trusted 1080p source found' }],
       defaults: { quality: '1080p', trusted_indexers: ['7'] }
     } });
   });
@@ -1294,18 +1313,27 @@ test('bulk Find sources keeps owned movies as upgrades and switches the actual q
   await page.goto('/discover', { waitUntil: 'domcontentloaded' });
   const ownedCheckbox = page.getByRole('checkbox', { name: `Select ${ownedMovie.title}` });
   const missingCheckbox = page.getByRole('checkbox', { name: `Select ${missingMovie.title}` });
+  const lowerOnlyCheckbox = page.getByRole('checkbox', { name: `Select ${lowerOnlyMovie.title}` });
   await ownedCheckbox.check({ force: true });
   await expect(ownedCheckbox).toBeChecked();
   await missingCheckbox.check({ force: true });
   await expect(missingCheckbox).toBeChecked();
+  await lowerOnlyCheckbox.check({ force: true });
+  await expect(lowerOnlyCheckbox).toBeChecked();
   await page.locator('.discover-bulk-selection').getByRole('button', { name: 'Find sources', exact: true }).click();
 
   const dialog = page.getByRole('dialog', { name: 'Find sources' });
   await expect(dialog).toBeVisible();
   await expect.poll(() => previewMovies.map((movie) => movie.tmdb_id)).toEqual([
     ownedMovie.tmdb_id,
-    missingMovie.tmdb_id
+    missingMovie.tmdb_id,
+    lowerOnlyMovie.tmdb_id
   ]);
+  const lowerOnlyRow = dialog.locator('.source-review-row').filter({ hasText: lowerOnlyMovie.title });
+  await expect(lowerOnlyRow).toContainText('No trusted 1080p source found');
+  await expect(lowerOnlyRow).not.toContainText('720p');
+  await expect(lowerOnlyRow.getByRole('combobox')).toBeDisabled();
+  await expect(lowerOnlyRow.getByRole('checkbox')).not.toBeChecked();
   await expect(dialog).toContainText('1 owned movie will be downloaded as an upgrade copy.');
   await expect(dialog).toContainText('Existing library files will be kept for comparison in Maintenance.');
 
@@ -1317,11 +1345,15 @@ test('bulk Find sources keeps owned movies as upgrades and switches the actual q
   await expect(ownedRow).not.toContainText(owned1080.title);
 
   await dialog.getByRole('button', { name: 'Submit selected to qBittorrent' }).click();
-  await expect.poll(() => submittedRows.length).toBe(2);
+  await expect.poll(() => submittedRows.length).toBe(3);
   const submittedOwned = submittedRows.find((row) => row.tmdb_id === ownedMovie.tmdb_id);
   expect(submittedOwned.upgrade).toBe(true);
   expect(submittedOwned.quality).toBe('4K');
   expect(submittedOwned.variant.title).toBe(owned4K.title);
+  const submittedLowerOnly = submittedRows.find((row) => row.tmdb_id === lowerOnlyMovie.tmdb_id);
+  expect(submittedLowerOnly.status).toBe('blocked');
+  expect(submittedLowerOnly.selected).toBe(false);
+  expect(submittedLowerOnly.variant).toBeNull();
 });
 
 test('Maintenance tabs remain interactive after the audit loads', async ({ page }) => {
