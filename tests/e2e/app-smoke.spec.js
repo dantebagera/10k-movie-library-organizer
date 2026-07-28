@@ -515,7 +515,7 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
 
   await expect(page.getByLabel('Library search type')).toHaveValue('movies');
   await expect(page.getByText('Space Archive', { exact: true })).toBeVisible();
-  await expect(page.locator('.metadata-filter-chip')).toContainText('Keyword: space opera');
+  await expect(page.getByLabel('Library path')).toContainText('Keyword: space opera');
   expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
 });
 
