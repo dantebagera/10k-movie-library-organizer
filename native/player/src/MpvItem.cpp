@@ -125,11 +125,12 @@ private:
         }
         const char *apiType = MPV_RENDER_API_TYPE_OPENGL;
         mpv_opengl_init_params openGlParameters{&resolveOpenGlProcedure, nullptr};
-        int advancedControl = 1;
+        // Qt owns the actual window swap. Advanced control is valid only when
+        // the client reports each presentation with mpv_render_context_report_swap;
+        // enabling it here without that callback can stall libmpv's frame pipeline.
         mpv_render_param parameters[] = {
             {MPV_RENDER_PARAM_API_TYPE, const_cast<char *>(apiType)},
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &openGlParameters},
-            {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advancedControl},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
         const int result = m_api->renderContextCreate(&m_context, m_mpv, parameters);

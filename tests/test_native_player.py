@@ -15,6 +15,7 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn("Qt6::Quick", cmake)
         self.assertIn("Qt6::Network", cmake)
         self.assertIn("renderContextRender(m_context", mpv_item)
+        self.assertNotIn("MPV_RENDER_PARAM_ADVANCED_CONTROL", mpv_item)
         self.assertIn('QByteArrayLiteral("hwdec")', mpv_item)
         self.assertNotIn("QMediaPlayer", cmake + mpv_item)
 
@@ -82,6 +83,7 @@ class NativePlayerSourceTests(unittest.TestCase):
         qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
         mpv_item = (PLAYER_ROOT / "src" / "MpvItem.cpp").read_text(encoding="utf-8")
         bridge = (PLAYER_ROOT / "src" / "PlayerBridge.cpp").read_text(encoding="utf-8")
+        smoke = (PLAYER_ROOT / "tools" / "smoke_player.py").read_text(encoding="utf-8")
 
         for command in (
             "screenshot-to-file",
@@ -99,6 +101,8 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn("model: mpv.chapters", qml)
         self.assertIn("reportWindowState", qml)
         self.assertIn('QStringLiteral("window.state")', bridge)
+        self.assertIn("--require-min-position-ms", smoke)
+        self.assertIn('"max_position_ms": max_position_ms', smoke)
 
 
 if __name__ == "__main__":

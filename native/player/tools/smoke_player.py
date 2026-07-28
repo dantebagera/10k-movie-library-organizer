@@ -1,4 +1,5 @@
 import argparse
+from collections import Counter
 import ctypes
 import json
 import os
@@ -111,6 +112,7 @@ def main():
     parser.add_argument("--runtime", required=True, type=Path)
     parser.add_argument("--media", required=True, type=Path)
     parser.add_argument("--observe-seconds", type=float, default=4.0)
+    parser.add_argument("--require-min-position-ms", type=int, default=0)
     parser.add_argument("--allow-no-audio", action="store_true")
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
@@ -547,6 +549,10 @@ def main():
         for track in event.get("tracks", [])
     ]
     progress = [event for event in events if event["type"] == "progress"]
+    progress_positions = [
+        int(event.get("position_ms", 0))
+        for event in progress
+    ]
     required = {"hello", "ready", "playback.state", "progress", "tracks.changed", "closed"}
     missing = sorted(required.difference(event_types))
     if missing:
@@ -581,6 +587,12 @@ def main():
         raise RuntimeError("Production helper did not restore the requested subtitle delay.")
     if process.returncode != 0:
         raise RuntimeError(f"Production helper exited with code {process.returncode}.")
+    max_position_ms = max(progress_positions, default=0)
+    if max_position_ms < max(0, args.require_min_position_ms):
+        raise RuntimeError(
+            "Production helper did not reach the required playback position: "
+            f"{max_position_ms} ms < {args.require_min_position_ms} ms."
+        )
 
     report = {
         "schema": "cp-player-production-smoke-v1",
@@ -590,7 +602,8 @@ def main():
         "media_fixture": str(media),
         "process_arguments": [executable.name],
         "media_path_in_process_arguments": False,
-        "event_types": event_types,
+        "event_types": sorted(set(event_types)),
+        "event_type_counts": dict(sorted(Counter(event_types).items())),
         "track_count": len(tracks),
         "audio_tracks": sum(track.get("type") == "audio" for track in tracks),
         "subtitle_tracks": sum(track.get("type") == "sub" for track in tracks),
@@ -599,6 +612,8 @@ def main():
             (int(event.get("duration_ms", 0)) for event in progress),
             default=0,
         ),
+        "first_position_ms": progress_positions[0] if progress_positions else 0,
+        "max_position_ms": max_position_ms,
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
         "controls_exercised": bool(args.exercise_controls),

@@ -65,8 +65,8 @@ movie-card Stream action remain unchanged and do not use this player.
 - Focused Phase 5 player/config/protocol/runtime/settings/package suite:
   **54 tests passed**.
 - Broad Python suite under the isolated
-  `CP_TEST_ROOT=C:\Users\dante\AppData\Local\Temp\cp-player-phase5-full-final`:
-  **959 tests passed** in 80.393 seconds.
+  `CP_TEST_ROOT=C:\Users\dante\AppData\Local\Temp\cp-player-final-full-884d86035f9445839236835760d7e849`:
+  **959 tests passed** in 99.433 seconds after the long-play correction.
 - Frontend Node suite: **70 tests passed**.
 - `npm.cmd run build`: **passed**, 1,648 modules transformed.
 - Isolated Chromium desktop E2E: **46/46 passed**. This includes the
@@ -90,15 +90,24 @@ contained only the executable; no media path, subtitle path, provider secret,
 or download URL was exposed.
 
 The screenshot command was moved to libmpv's asynchronous command API after a
-real run exposed that a synchronous command could stall the QML thread.
-Following that correction, playback progress continued and the rolling
-seek-thumbnail cache produced valid JPEG frames from the current file.
+real run exposed that a synchronous command could stall the QML thread. The
+first wall-clock soak then exposed a second real render-integration defect:
+CP enabled libmpv advanced render control even though Qt owns the actual
+window swap and CP could not report those swaps to libmpv. A new uncached seek
+thumbnail could consequently stop frame advancement. The authoritative
+renderer no longer enables that unsupported mode, and the smoke harness now
+rejects a run that does not reach an explicit minimum playback position.
 
-A 7,205-second fixture was recognized as 7,205,000 ms and played, rendered,
-reported progress, and closed cleanly. Manager integration was exercised for
-both a clean close and a deliberately terminated helper. The crash path
-recorded the final session event without launching a duplicate fallback
-player.
+A fresh 7,205-second H.264 fixture completed a real 7,206.391-second
+wall-clock session. The authenticated pipe recorded 7,206 progress samples,
+playback advanced from 0 to 7,204,000 ms, 241 rolling 30-second thumbnail
+buckets completed, and the helper emitted `closing` and `closed` before
+exiting with code 0. Its error log was empty and its process arguments still
+contained only `cp-player.exe`.
+
+Manager integration was also exercised for both a clean close and a
+deliberately terminated helper. The crash path recorded the final session
+event without launching a duplicate fallback player.
 
 The available desktop exposed one 1,536 x 864 logical display at 250% scaling.
 The player rendered correctly there with controls and resume UI visible.
@@ -108,17 +117,17 @@ covered by native/backend tests.
 Final staged runtime:
 
 - Player SHA-256:
-  `4793AAA2CC6D6D937BF6CE7D6D355BBD1268139278AADCDF1A7C2F4014D17D31`
+  `080A27B3CFE8A50347FFC92D97AE32CD9DE359BE928978D2CF3482AA68BEF0A1`
 - libmpv SHA-256:
   `0A76BD542BBA2D85ABEFCC7CD1005269085E1B5815B4E8BAEC62FF4EA4246675`
 
 Final portable archive:
 
 - `Cinema-Paradiso-2.8.1-Portable.zip`
-- Size: **101,517,391 bytes**
+- Size: **101,517,891 bytes**
 - Entries: **1,560**
 - SHA-256:
-  `60D2766C8674805B1FA4697A74152B5FEC0DD7C46ACD423000E440AD3E448F22`
+  `EBF3DE6C2CD73BE6DF6455503345643254A119A5CE01E9CACB81500D8A6859E9`
 - Forbidden user-data/local-path matches: **0**
 - Native runtime manifest: **1,328 files and six licenses verified**
 
@@ -128,12 +137,10 @@ modified during Phase 5.
 
 ## Unresolved release-certification limits
 
-The implementation and available runtime checks are complete, but two
-hardware/time matrix items from the plan could not truthfully be certified in
-this session:
+The implementation and available runtime checks are complete, but one
+hardware matrix item from the plan could not truthfully be certified in this
+session:
 
-- The 7,205-second fixture was validated as long-duration media, but it was
-  not left playing for two wall-clock hours.
 - This machine exposed only one display at 250% scaling, so real secondary
   monitor placement and the requested 100%-200% display-scale matrix were not
   available. Automated validation covers those state transitions, but it is
@@ -145,5 +152,5 @@ Phase 5 actions are covered through their QML/libmpv contracts, but the final
 run does not claim a fresh automated keystroke pass.
 
 These are release-certification evidence gaps, not known code failures. The
-remaining manual release gate is a two-hour wall-clock soak plus a real
-multi-monitor 100%-200% DPI matrix on suitable hardware.
+remaining manual release gate is a real multi-monitor 100%-200% DPI matrix on
+suitable hardware.
