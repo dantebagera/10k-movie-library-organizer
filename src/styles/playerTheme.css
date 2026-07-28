@@ -1,0 +1,22 @@
+/* Generated from design/player-theme.json. Do not edit by hand. */
+:root {
+  --archive-black: #0a0a0b;
+  --panel-black: #121316;
+  --surface-raised: #1a1c20;
+  --border: #26282d;
+  --border-strong: #3a3d45;
+  --text-primary: #e6e6e6;
+  --text-strong: #ffffff;
+  --text-soft: #d6d7da;
+  --text-muted: #a3a6ad;
+  --text-faint: #6d7178;
+  --projector-gold: #d4af37;
+  --projector-gold-bright: #f7d57a;
+  --danger-red: #ef4444;
+  --radius-small: 4px;
+  --radius-medium: 6px;
+  --radius-large: 8px;
+  --radius-extra-large: 10px;
+  --shadow-card: 0 16px 48px #0000008f;
+  --shadow-pop: 0 24px 64px #000000ad;
+}

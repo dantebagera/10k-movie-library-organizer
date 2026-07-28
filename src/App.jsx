@@ -648,12 +648,19 @@ function ArchiveApp() {
 
   async function playLocal(path) {
     try {
-      await fetchJson('/api/open-file', {
+      const result = await fetchJson('/api/player/play', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path })
+        body: JSON.stringify({ path_key: path })
       });
-      notify('Opening local file');
+      notify(
+        result.fallback
+          ? 'Cinema Paradiso Player was unavailable. Opened the OS player.'
+          : result.mode === 'built_in'
+            ? 'Playing in Cinema Paradiso Player'
+            : 'Opening in the OS player',
+        result.fallback ? 'neutral' : 'success'
+      );
     } catch (error) {
       notify(`Could not play file: ${error.message}`, 'error');
     }

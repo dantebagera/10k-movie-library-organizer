@@ -1,0 +1,31 @@
+{
+  "schema": "cinema-paradiso-player-theme-v1",
+  "colors": {
+    "archiveBlack": "#0a0a0b",
+    "panelBlack": "#121316",
+    "surfaceRaised": "#1a1c20",
+    "border": "#26282d",
+    "borderStrong": "#3a3d45",
+    "textPrimary": "#e6e6e6",
+    "textStrong": "#ffffff",
+    "textSoft": "#d6d7da",
+    "textMuted": "#a3a6ad",
+    "textFaint": "#6d7178",
+    "projectorGold": "#d4af37",
+    "projectorGoldBright": "#f7d57a",
+    "dangerRed": "#ef4444"
+  },
+  "radii": {
+    "small": 4,
+    "medium": 6,
+    "large": 8,
+    "extraLarge": 10
+  },
+  "shadows": {
+    "card": "0 16px 48px #0000008f",
+    "pop": "0 24px 64px #000000ad"
+  },
+  "timing": {
+    "controlsHideMs": 2500
+  }
+}

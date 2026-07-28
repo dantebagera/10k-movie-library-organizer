@@ -435,6 +435,34 @@ test('Library switches between canonical movie and raw file views', async ({ pag
   await expect(page.locator('.library-file-row-expanded')).toContainText(parityLibraryItem.path);
 });
 
+test('local Library playback uses the centralized player route without changing Stream', async ({ page }) => {
+  await mockCardParityApis(page);
+  let localPlaybackRequest = null;
+  let streamingRequestCount = 0;
+  await page.route('**/api/player/play', async (route) => {
+    localPlaybackRequest = route.request().postDataJSON();
+    await route.fulfill({ json: {
+      ok: true,
+      mode: 'built_in',
+      fallback: false,
+      session_id: 'browser-evidence-session'
+    } });
+  });
+  await page.route('**/api/streaming/resolve', async (route) => {
+    streamingRequestCount += 1;
+    await route.fulfill({ status: 500, json: { error: 'Streaming route must remain separate.' } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  const movieCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await movieCard.click();
+  await movieCard.getByRole('button', { name: 'Play', exact: true }).click();
+
+  await expect.poll(() => localPlaybackRequest).toEqual({ path_key: parityLibraryItem.path });
+  expect(streamingRequestCount).toBe(0);
+  await expect(page.getByText('Playing in Cinema Paradiso Player', { exact: true })).toBeVisible();
+});
+
 test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
   const profileUrl = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
   let writerFilterUrl = '';

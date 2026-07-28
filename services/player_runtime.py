@@ -186,18 +186,8 @@ class PlayerRuntime:
         if not self.selector_path.is_file():
             return base
         try:
-            selector = _load_json(self.selector_path, "Player runtime selector")
-            if selector.get("schema") != PLAYER_SELECTOR_SCHEMA:
-                raise PlayerRuntimeError("Player runtime selector schema is incompatible")
-            bundle_version = str(selector.get("bundle_version") or "").strip()
-            if not bundle_version or Path(bundle_version).name != bundle_version:
-                raise PlayerRuntimeError("Player runtime selector is invalid")
-            bundle_root = self.runtime_root / "versions" / bundle_version
-            manifest = validate_player_manifest(
-                bundle_root,
-                app_version=self.app_version,
-                verify_hashes=verify_hashes,
-            )
+            resolved = self.resolve_bundle(verify_hashes=verify_hashes)
+            manifest = resolved["manifest"]
         except PlayerRuntimeError as error:
             detail = str(error)
             state = "incompatible" if "compatible" in detail.lower() else "damaged"
@@ -223,4 +213,22 @@ class PlayerRuntime:
             "ipc_protocol_version": int(manifest["ipc_protocol_version"]),
             "notices": notices,
             "detail": "The built-in player runtime is ready.",
+        }
+
+    def resolve_bundle(self, verify_hashes=True):
+        selector = _load_json(self.selector_path, "Player runtime selector")
+        if selector.get("schema") != PLAYER_SELECTOR_SCHEMA:
+            raise PlayerRuntimeError("Player runtime selector schema is incompatible")
+        bundle_version = str(selector.get("bundle_version") or "").strip()
+        if not bundle_version or Path(bundle_version).name != bundle_version:
+            raise PlayerRuntimeError("Player runtime selector is invalid")
+        bundle_root = self.runtime_root / "versions" / bundle_version
+        manifest = validate_player_manifest(
+            bundle_root,
+            app_version=self.app_version,
+            verify_hashes=verify_hashes,
+        )
+        return {
+            "bundle_root": bundle_root,
+            "manifest": manifest,
         }

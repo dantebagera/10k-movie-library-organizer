@@ -48,7 +48,7 @@ class PlayerSettingsUiTests(unittest.TestCase):
             "IPTV and movie-card streaming keep their existing players.",
             self.settings,
         )
-        self.assertNotIn("/api/player/play", self.backend)
+        self.assertNotIn("/api/open-file", self.backend)
 
     def test_player_card_has_desktop_two_column_layout(self):
         self.assertIn(".player-settings-columns", self.styles)

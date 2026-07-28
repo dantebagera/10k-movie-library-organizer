@@ -38,6 +38,8 @@ from services.frontend_routes import register_frontend_routes
 from services.iptv_provider_manager import IPTVProviderManager
 from services.iptv_routes import register_iptv_routes
 from services.player_config import PlayerConfig
+from services.player_catalog import resolve_library_media
+from services.player_manager import PlayerManager
 from services.player_routes import register_player_routes
 from services.player_runtime import PlayerRuntime
 from services.metadata_migration import MetadataMigrationCoordinator
@@ -205,6 +207,15 @@ except (OSError, ValueError):
     _APP_VERSION = ''
 _player_config = PlayerConfig(_cfg.get('player'))
 _player_runtime = PlayerRuntime(Path(_BASE_DIR, 'runtime', 'player'), _APP_VERSION)
+_player_manager = PlayerManager(
+    _player_config,
+    _player_runtime,
+    lambda path_key: resolve_library_media(
+        _catalog_repository(),
+        path_key,
+        get_movies_dirs(),
+    ),
+)
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1
 OLLAMA_CANDIDATE_LIMIT_MAX = 50
@@ -329,6 +340,7 @@ register_player_routes(
     app,
     _player_config,
     _player_runtime,
+    _player_manager,
     lambda: _save_config(_all_config()),
 )
 _plex_cache     = {}   # _norm(file_path) -> {plex_title, plex_year, plex_genres}
@@ -4520,19 +4532,6 @@ def prowlarr_search():
         return jsonify({'results': filtered})
     except urllib.error.HTTPError as e:
         return jsonify({'error': f'Prowlarr returned HTTP {e.code}'}), 502
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/open-file', methods=['POST'])
-def open_file():
-    data = request.get_json(silent=True)
-    path = (data or {}).get('path', '').strip()
-    if not path or not os.path.isfile(path):
-        return jsonify({'error': 'File not found'}), 404
-    try:
-        os.startfile(path)
-        return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
