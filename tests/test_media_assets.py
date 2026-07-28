@@ -101,7 +101,7 @@ class MediaAssetServiceTest(unittest.TestCase):
         finally:
             connection.close()
 
-    def test_known_schema_6_asset_migration_chains_to_8_without_changing_canonical_rows(self):
+    def test_known_schema_6_asset_migration_chains_to_9_without_changing_canonical_rows(self):
         connection = self.repository.store.connect()
         try:
             before = tuple(connection.execute(
@@ -126,7 +126,7 @@ class MediaAssetServiceTest(unittest.TestCase):
         finally:
             connection.close()
 
-        self.assertEqual(schema, 8)
+        self.assertEqual(schema, 9)
         self.assertEqual(after, before)
         self.assertEqual(self.repository.generation("media"), generation)
 

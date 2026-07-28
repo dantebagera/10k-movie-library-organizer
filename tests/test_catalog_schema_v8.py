@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from services.catalog_store import CATALOG_SCHEMA_VERSION, CatalogError, CatalogStore
+from services.catalog_store import (
+    CATALOG_SCHEMA_VERSION,
+    MEDIA_FILE_V8_COLUMNS,
+    CatalogError,
+    CatalogStore,
+)
 from tests.catalog_schema_fixtures import (
     downgrade_catalog_to_v7,
     use_historical_v7_credit_column_order,
@@ -32,7 +37,7 @@ def _digest_rows(connection, table, columns=None, where="", parameters=()):
     return count, digest.hexdigest()
 
 
-class CatalogSchemaV8Test(unittest.TestCase):
+class CatalogSchemaUpgradeChainTest(unittest.TestCase):
     def _documents(self):
         path = "e:/movies/writer-keyword.mkv"
         return {
@@ -92,7 +97,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
         downgrade_catalog_to_v7(store)
         return store
 
-    def test_fresh_database_creates_exact_version_8_search_schema(self):
+    def test_fresh_database_creates_exact_version_9_search_schema(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")
             with patch(
@@ -117,8 +122,8 @@ class CatalogSchemaV8Test(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(CATALOG_SCHEMA_VERSION, 8)
-        self.assertEqual(version, 8)
+        self.assertEqual(CATALOG_SCHEMA_VERSION, 9)
+        self.assertEqual(version, 9)
         self.assertEqual(credit_columns, [
             "snapshot_key", "credit_type", "position", "person_key",
             "credited_name", "character", "profile_url", "job",
@@ -212,7 +217,11 @@ class CatalogSchemaV8Test(unittest.TestCase):
                     for row in connection.execute("SELECT * FROM people ORDER BY person_key")
                 }
                 after_preserved = {
-                    table: _digest_rows(connection, table)
+                    table: _digest_rows(
+                        connection,
+                        table,
+                        MEDIA_FILE_V8_COLUMNS if table == "media_files" else None,
+                    )
                     for table in preserved
                 }
                 after_preserved_meta = _digest_rows(
@@ -225,7 +234,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(version, 8)
+        self.assertEqual(version, 9)
         self.assertEqual(after_credits, before_credits)
         self.assertEqual(source_json, after_source_json)
         self.assertEqual(after_preserved, preserved)
@@ -313,7 +322,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
             "snapshot_key", "credit_type", "position", "person_key",
             "character", "profile_url", "credited_name",
         ])
-        self.assertEqual(version, 8)
+        self.assertEqual(version, 9)
         self.assertEqual(after_credits, before_credits)
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])
@@ -344,7 +353,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
         self.assertGreaterEqual(report["writer_snapshots_missing"], 1)
         self.assertGreaterEqual(report["keyword_snapshots_missing"], 1)
 
-    def test_opening_version_8_again_is_a_relational_no_op(self):
+    def test_opening_version_9_again_is_a_relational_no_op(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")
             store.import_documents(self._documents(), {})
@@ -360,7 +369,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
             finally:
                 connection.close()
 
-            with patch.object(store, "_migrate_v7_to_v8") as migration:
+            with patch.object(store, "_migrate_v8_to_v9") as migration:
                 store.initialize()
             connection = store.connect()
             try:
@@ -413,7 +422,7 @@ class CatalogSchemaV8Test(unittest.TestCase):
                         )
                     elif case == "newer":
                         connection.execute(
-                            "UPDATE catalog_meta SET value='9' WHERE key='schema_version'"
+                            "UPDATE catalog_meta SET value='10' WHERE key='schema_version'"
                         )
                     elif case == "missing":
                         connection.execute(

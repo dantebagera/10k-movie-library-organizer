@@ -35,8 +35,8 @@ from services.canonical_catalog import (
 from services.curation_store import UserCurationStore, normalize_curated_movie as _normalize_curated_movie
 from services.curation_routes import register_curation_routes
 from services.frontend_routes import register_frontend_routes
+from services.iptv_provider_manager import IPTVProviderManager
 from services.iptv_routes import register_iptv_routes
-from services.iptv_service import IPTVService
 from services.metadata_migration import MetadataMigrationCoordinator
 from services.identity_audit import IdentityAuditCoordinator
 from services.identity_decision import (
@@ -81,6 +81,14 @@ from services.library_mutations import LibraryMutationError, LibraryMutationServ
 from services.source_search import ProwlarrClient
 from services.download_monitor import DownloadImportMonitor
 from services.media_assets import MediaAssetError, MediaAssetService
+from services.media_file_backfill import run_file_facts_backfill
+from services.media_file_facts import (
+    FILE_FACTS_VERSION,
+    classify_dimensions as classify_media_dimensions,
+    filename_quality_claim,
+    probe_media_file,
+    quality_display,
+)
 
 app = Flask(__name__)
 _process_started_at = time.perf_counter()
@@ -295,8 +303,17 @@ _qbt_mode = (
 _qbt_download_dir = _cfg.get('qbt_download_dir', '')
 _qbt_incomplete_dir = _cfg.get('qbt_incomplete_dir', '')
 _qbt_webui_port = int(_cfg.get('qbt_webui_port', DEFAULT_WEBUI_PORT) or DEFAULT_WEBUI_PORT)
-_iptv_service = IPTVService(_user_data_dir)
-register_iptv_routes(app, lambda: _iptv_service)
+_iptv_provider_manager = None
+
+
+def _get_iptv_provider_manager():
+    global _iptv_provider_manager
+    if _iptv_provider_manager is None:
+        _iptv_provider_manager = IPTVProviderManager(_user_data_dir)
+    return _iptv_provider_manager
+
+
+register_iptv_routes(app, _get_iptv_provider_manager)
 _plex_cache     = {}   # _norm(file_path) -> {plex_title, plex_year, plex_genres}
 _plex_unmatched = {}   # _norm(path) -> {rating_key, plex_title}  (Plex has file but no metadata)
 _plex_matched_by_fname   = {}  # filename.lower() -> matched entry   (path-mismatch fallback)
@@ -1408,15 +1425,10 @@ class AppMetadataStore:
         old_key = self._key(old_path)
         new_key = self._key(new_path)
         filename = os.path.basename(new_path)
-        parsed_title, parsed_year = parse_movie_title(filename)
+        facts = _metadata_file_facts(new_path, probe=True)
         self.catalog.migrate_path_records(old_key, new_key, new_path, file_patch={
-            'filename': filename,
-            'library_root': _path_library_root(new_path) or '',
-            'parsed_title': parsed_title,
-            'parsed_year': parsed_year,
+            **facts,
             'identity_evidence_changed': True,
-            'resolution': get_resolution_from_file(new_path),
-            'rip_source': get_rip_source(filename),
             'updated_at': time.time(),
         })
         migration = self.get_migration_state()
@@ -2106,14 +2118,6 @@ def _country_flag(code):
     if not code or len(code) != 2: return ''
     return chr(ord(code[0].upper())+127397) + chr(ord(code[1].upper())+127397)
 
-_res_cache = {}  # (abspath, mtime) -> resolution_str  — resolution probe cache
-_res_cache_reprobe = set()  # legacy cache entries that need one width-aware probe
-_RES_CACHE_FILE = (
-    str(_TEST_ROOT / 'res_cache.json')
-    if _TEST_MODE
-    else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'res_cache.json')
-)
-_RES_CACHE_VERSION = 2
 _library_status  = ''  # live status string polled by the browser during a scan
 _plex_cache_time = 0.0
 _PLEX_TTL        = 300  # seconds before auto-refresh
@@ -2125,7 +2129,6 @@ _maintenance_audit_cache = {'generation': None, 'audit': None}
 _identity_verification_audit_cache = {'revision': None, 'audit': None}
 _STATS_CACHE_TTL = 10
 _FILE_STABILITY_SECONDS = 15
-FILE_FACTS_VERSION = 1
 IDENTITY_DECISION_VERSION = 5
 _metadata_migration_coordinator = None
 _metadata_migration_store_dir = ''
@@ -2150,6 +2153,15 @@ _library_reconcile_state = {
         'total': 0,
         'completed': 0,
         'failed': 0,
+        'remaining': 0,
+    },
+    'file_facts_backfill': {
+        'facts_version': FILE_FACTS_VERSION,
+        'status': 'idle',
+        'batches': 0,
+        'selected': 0,
+        'changed': 0,
+        'failures': 0,
         'remaining': 0,
     },
     'updated_at': 0,
@@ -2193,14 +2205,6 @@ def _all_config():
     return config
 
 VIDEO_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.m4v', '.mov', '.wmv', '.flv', '.ts', '.m2ts', '.iso'}
-
-try:
-    from pymediainfo import MediaInfo as _MediaInfo
-    _MEDIAINFO_AVAILABLE = True
-except ImportError:
-    _MediaInfo = None
-    _MEDIAINFO_AVAILABLE = False
-
 
 def get_movies_dir():
     return _movies_dir
@@ -2254,7 +2258,7 @@ def _completed_download_video_paths(imported_paths):
                 continue
             seen.add(key)
             videos.append(path)
-    return sorted(videos, key=lambda path: (-int(_metadata_file_facts(path).get('size') or 0), _norm(path)))
+    return sorted(videos, key=lambda path: (-int(_metadata_file_facts(path, probe=False).get('size') or 0), _norm(path)))
 
 
 def _apply_completed_download_identity(job, store=None):
@@ -2305,7 +2309,7 @@ def _apply_completed_download_identity(job, store=None):
         metadata,
         source='download_submission',
         decision_origin=DECISION_ORIGIN_LIBRARY_RECONCILE,
-        facts=_metadata_file_facts(path),
+        facts=_metadata_file_facts(path, probe=False),
     )
     return {'state': 'applied', 'paths': [path], 'tmdb_id': tmdb_id}
 
@@ -2539,6 +2543,32 @@ def _movie_list_library_item(item, include_people=False, upgrade_paths=None):
         'metadata_status': item.get('metadata_status', ''),
         'metadata_source': item.get('metadata_source', ''),
         'metadata_accepted': bool(item.get('metadata_accepted')),
+        'video_width': int(item.get('video_width') or 0),
+        'video_height': int(item.get('video_height') or 0),
+        'video_codec': item.get('video_codec', ''),
+        'video_profile': item.get('video_profile', ''),
+        'video_bit_depth': int(item.get('video_bit_depth') or 0),
+        'video_bitrate': int(item.get('video_bitrate') or 0),
+        'video_frame_rate': float(item.get('video_frame_rate') or 0),
+        'duration_ms': int(item.get('duration_ms') or 0),
+        'display_aspect_ratio': float(item.get('display_aspect_ratio') or 0),
+        'rotation_degrees': float(item.get('rotation_degrees') or 0),
+        'audio_codec': item.get('audio_codec', ''),
+        'audio_channels': float(item.get('audio_channels') or 0),
+        'audio_bitrate': int(item.get('audio_bitrate') or 0),
+        'filename_quality_claim': item.get('filename_quality_claim', ''),
+        'quality_class': item.get('quality_class') or item.get('resolution') or 'Unknown',
+        'quality_source': item.get('quality_source', ''),
+        'quality_conflict': bool(item.get('quality_conflict')),
+        'quality_nonstandard': bool(item.get('quality_nonstandard')),
+        'file_facts_version': int(item.get('file_facts_version') or 0),
+        'classifier_version': int(item.get('classifier_version') or 0),
+        'probe_status': item.get('probe_status', 'unprobed'),
+        'probed_at': float(item.get('probed_at') or 0),
+        'probe_error': item.get('probe_error', ''),
+        'probe_size': int(item.get('probe_size') or 0),
+        'probe_modified_time': float(item.get('probe_modified_time') or 0),
+        'quality_display': item.get('quality_display') or quality_display(item),
     }
     if upgrade_paths is not None:
         projected['maintenance_upgrade_candidate'] = _norm(item.get('path', '')) in upgrade_paths
@@ -2554,6 +2584,12 @@ def _library_card_item(item, upgrade_paths=None):
             'size', 'size_human', 'added_time', 'modified_time', 'canonical_metadata',
             'metadata_status', 'metadata_source', 'metadata_accepted',
             'maintenance_upgrade_candidate',
+            'video_width', 'video_height', 'video_codec', 'video_profile',
+            'video_bit_depth', 'video_bitrate', 'video_frame_rate', 'duration_ms',
+            'audio_codec', 'audio_channels', 'audio_bitrate',
+            'filename_quality_claim', 'quality_class', 'quality_source',
+            'quality_conflict', 'quality_nonstandard', 'file_facts_version',
+            'classifier_version', 'probe_status', 'probe_error', 'quality_display',
         )
     }
     canonical = compact.get('canonical_metadata') or {}
@@ -2611,17 +2647,28 @@ def _video_file_facts(movies_dir, filename, full_path, *, include_timestamps=Fal
         size_known = False
 
     parsed_title, parsed_year = parse_movie_title(filename)
+    measured = (
+        probe_media_file(full_path).as_record()
+        if probe_resolution
+        else {
+            'resolution': get_resolution(filename),
+            'filename_quality_claim': filename_quality_claim(filename),
+            'quality_class': get_resolution(filename),
+            'quality_source': 'filename_fallback',
+            'probe_status': 'unprobed',
+        }
+    )
     facts = {
         'path': full_path,
         'filename': filename,
         'library_root': movies_dir,
         'parsed_title': parsed_title,
         'parsed_year': parsed_year,
-        'resolution': get_resolution_from_file(full_path) if probe_resolution else get_resolution(filename),
         'rip_source': get_rip_source(filename),
         'size': size,
         'size_known': size_known,
         'size_human': format_size(size),
+        **measured,
     }
     if include_timestamps:
         try:
@@ -2651,59 +2698,13 @@ def _path_library_root(path):
 
 
 def _classify_dimensions(width, height):
-    """Classify actual video dimensions, allowing normal cinematic crop."""
-    w = int(width or 0)
-    h = int(height or 0)
-    if w >= 3800 or h >= 2000:
-        return '4K'
-    if w >= 1900 or h >= 1000:
-        return '1080p'
-    if w >= 1200 or h >= 700:
-        return '720p'
-    if w >= 700 or h >= 450:
-        return '480p'
-    if h > 0:
-        return f'{h}p'
-    return None
-
-
-def _probe_resolution(filepath):
-    """Use pymediainfo to read actual video dimensions. Returns resolution string or None."""
-    if not _MEDIAINFO_AVAILABLE:
-        return None
-    try:
-        info = _MediaInfo.parse(filepath)
-        for track in info.tracks:
-            if track.track_type == 'Video':
-                w = int(track.width or 0)
-                h = int(track.height or 0)
-                return _classify_dimensions(w, h)
-        return None
-    except Exception:
-        return None
+    """Compatibility wrapper around the one authoritative classifier."""
+    return classify_media_dimensions(width, height).quality_class
 
 
 def get_resolution_from_file(filepath):
-    """Return resolution string for a video file.
-    Probes actual video stream dimensions first so cropped 1080p files are not
-    mislabeled as 720p. Falls back to filename parsing when probing is not
-    available.
-    Falls back gracefully if pymediainfo is not installed."""
-    filename = os.path.basename(filepath)
-    filename_res = get_resolution(filename)
-    # Probe with mediainfo before trusting filename-derived resolution.
-    try:
-        mtime = os.path.getmtime(filepath)
-    except OSError:
-        return filename_res
-    key = (os.path.abspath(filepath), mtime)
-    if key in _res_cache and key not in _res_cache_reprobe:
-        return _res_cache[key]
-    probed = _probe_resolution(filepath)
-    result = probed if probed else filename_res
-    _res_cache[key] = result
-    _res_cache_reprobe.discard(key)
-    return result
+    """Probe through the authoritative owner; no JSON cache is consulted."""
+    return probe_media_file(filepath).quality_class
 
 
 def get_resolution_rank_str(resolution):
@@ -2711,49 +2712,6 @@ def get_resolution_rank_str(resolution):
     order = {'4K': 4, '1080p': 3, '720p': 2, '480p': 1, 'Unknown': 0}
     return order.get(resolution, 0)
 
-
-def _load_res_cache():
-    """Load persisted resolution cache from disk into _res_cache."""
-    global _res_cache, _res_cache_reprobe
-    try:
-        with open(_RES_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = _json.load(f)
-        if not isinstance(data, dict):
-            return
-        if data.get('_version') == _RES_CACHE_VERSION:
-            entries = data.get('entries', {})
-            legacy = False
-        else:
-            entries = data
-            legacy = True
-        for path, v in entries.items():
-            if not isinstance(v, dict) or 'mtime' not in v or 'res' not in v:
-                continue
-            res = v['res']
-            if legacy and res == '720p':
-                filename_res = get_resolution(os.path.basename(path))
-                path_has_1080_hint = bool(re.search(r'(^|[^\d])1080p?([^\d]|$)', path, re.IGNORECASE))
-                if filename_res == 'Unknown' and path_has_1080_hint:
-                    res = '1080p'
-            key = (path, float(v['mtime']))
-            _res_cache[key] = res
-    except Exception:
-        pass
-
-
-def _save_res_cache():
-    """Persist resolution cache to disk so probed results survive app restarts."""
-    try:
-        data = {'_version': _RES_CACHE_VERSION, 'entries': {}}
-        for (path, mtime), res in _res_cache.items():
-            data['entries'][path] = {'mtime': mtime, 'res': res}
-        with open(_RES_CACHE_FILE, 'w', encoding='utf-8') as f:
-            _json.dump(data, f, indent=2)
-    except Exception:
-        pass
-
-
-_load_res_cache()  # populate cache from disk at startup
 
 def parse_movie_title(filename):
     """Return a (title, year) key so remakes with the same name are not grouped together."""
@@ -2785,16 +2743,7 @@ def parse_movie_title(filename):
 
 
 def get_resolution(filename):
-    name = filename.lower()
-    if '2160p' in name or '4k' in name or 'uhd' in name:
-        return '4K'
-    elif '1080p' in name or re.search(r'[\.\-_ \[\(]1080[\.\-_ \]\)\[]', name):
-        return '1080p'
-    elif '720p' in name or re.search(r'[\.\-_ \[\(]720[\.\-_ \]\)\[]', name):
-        return '720p'
-    elif '480p' in name or re.search(r'[\.\-_ \[\(]480[\.\-_ \]\)\[]', name):
-        return '480p'
-    return 'Unknown'
+    return filename_quality_claim(filename)
 
 
 def get_rip_rank(rip_source):
@@ -3758,7 +3707,7 @@ def system_folders():
 @app.route('/api/app-data/config', methods=['GET', 'POST'])
 def app_data_config():
     global _user_data_dir, _tmdb_cache_dir, _TMDB_CACHE_DIR, _TMDB_LIBRARY_CACHE_FILE, \
-           _TMDB_COLLECTION_CACHE_FILE, _tmdb_library_cache, _tmdb_collection_cache, _iptv_service
+           _TMDB_COLLECTION_CACHE_FILE, _tmdb_library_cache, _tmdb_collection_cache, _iptv_provider_manager
     if request.method == 'GET':
         return jsonify({'user_data_dir': _user_data_dir, 'tmdb_cache_dir': _tmdb_cache_dir})
     data = request.get_json(force=True, silent=True) or {}
@@ -3769,10 +3718,10 @@ def app_data_config():
     try:
         os.makedirs(user_dir, exist_ok=True)
         os.makedirs(cache_dir, exist_ok=True)
-        next_iptv_service = IPTVService(user_dir)
+        next_iptv_provider_manager = IPTVProviderManager(user_dir)
     except Exception as e:
         return jsonify({'error': f'Cannot create folder: {e}'}), 400
-    previous_iptv_service = _iptv_service
+    previous_iptv_provider_manager = _iptv_provider_manager
     _user_data_dir = user_dir
     _tmdb_cache_dir = cache_dir
     _TMDB_CACHE_DIR = _tmdb_cache_dir
@@ -3780,8 +3729,9 @@ def app_data_config():
     _TMDB_COLLECTION_CACHE_FILE = os.path.join(_TMDB_CACHE_DIR, 'tmdb_collection_cache.json')
     _tmdb_library_cache = _load_tmdb_library_cache()
     _tmdb_collection_cache = _load_tmdb_collection_cache()
-    _iptv_service = next_iptv_service
-    previous_iptv_service.close()
+    _iptv_provider_manager = next_iptv_provider_manager
+    if previous_iptv_provider_manager is not None:
+        previous_iptv_provider_manager.close()
     _save_config(_all_config())
     return jsonify({'success': True, 'user_data_dir': _user_data_dir, 'tmdb_cache_dir': _tmdb_cache_dir})
 
@@ -3894,43 +3844,40 @@ def _ai_control_library_items():
     cached_items = _fresh_library_cache_items()
     if cached_items is not None:
         return list(cached_items)
+    store = _metadata_store()
     items = []
-    for _, _, filename, path in _iter_video_files():
-        try:
-            size = os.path.getsize(path)
-        except OSError:
-            size = 0
-        title, year = parse_movie_title(filename)
-        plex_data = _plex_cache.get(_norm(path), {})
-        genres = plex_data.get('plex_genres', [])
-        directors = plex_data.get('plex_directors', [])
-        cast = plex_data.get('plex_cast', [])
-        resolution = get_resolution(filename)
+    for candidate in _current_catalog_store(store).library_projection(
+        include_details=True,
+    ):
+        item = _catalog_library_item(candidate, store, None)
+        canonical = item.get('canonical_metadata') or {}
+        directors = [
+            {key: value for key, value in person.items() if value not in ('', None)}
+            for person in (
+                item.get('plex_directors') or canonical.get('directors') or []
+            )
+        ]
+        cast = [
+            {key: value for key, value in person.items() if value not in ('', None)}
+            for person in (
+                item.get('plex_cast') or canonical.get('cast') or []
+            )
+        ]
         items.append({
-            'path': path,
-            'filename': filename,
-            'title': plex_data.get('plex_title') or title or os.path.splitext(filename)[0],
-            'year': str(plex_data.get('plex_year') or year or ''),
-            'size': size,
-            'size_human': format_size(size) if size else '',
-            'resolution': resolution,
-            'poster_url': plex_data.get('plex_poster', ''),
-            'genres': genres,
-            'plex_genres': genres,
-            'plot': plex_data.get('plex_summary', ''),
-            'summary': plex_data.get('plex_summary', ''),
-            'tmdb_rating': plex_data.get('plex_rating', ''),
-            'language': plex_data.get('plex_language', ''),
-            'country': plex_data.get('plex_country', ''),
-            'country_flag': plex_data.get('plex_country_flag', ''),
+            **item,
+            'title': canonical.get('title') or item.get('plex_title') or item.get('title', ''),
+            'year': str(canonical.get('year') or item.get('plex_year') or ''),
+            'poster_url': canonical.get('poster_url') or item.get('plex_poster') or '',
+            'genres': canonical.get('genres') or item.get('plex_genres') or [],
+            'plot': canonical.get('plot') or canonical.get('summary') or item.get('plex_summary') or '',
+            'summary': canonical.get('summary') or canonical.get('plot') or item.get('plex_summary') or '',
+            'tmdb_rating': canonical.get('rating') or item.get('plex_rating') or '',
+            'language': canonical.get('language') or item.get('plex_language') or '',
+            'country': canonical.get('country') or item.get('plex_country') or '',
+            'country_flag': canonical.get('country_flag') or item.get('plex_country_flag') or '',
             'directors': directors,
             'director': directors[0] if directors else {},
-            'plex_directors': directors,
             'cast': cast,
-            'plex_cast': cast,
-            'tmdb_id': str(plex_data.get('tmdb_id', '') or ''),
-            'imdb_id': str(plex_data.get('imdb_id', '') or ''),
-            'plex_guid': str(plex_data.get('plex_guid', '') or ''),
             'source': 'Library',
         })
     return items
@@ -4644,6 +4591,14 @@ def _catalog_file_record(candidate):
         'imdb_id', 'plex_guid', 'plex_rating_key', 'display_provider',
         'metadata_status', 'metadata_source', 'metadata_accepted', 'enrichment_status',
         'ingest_status', 'manual_lock', 'manual_locked',
+        'video_width', 'video_height', 'video_codec', 'video_profile',
+        'video_bit_depth', 'video_bitrate', 'video_frame_rate', 'duration_ms',
+        'display_aspect_ratio', 'rotation_degrees', 'audio_codec',
+        'audio_channels', 'audio_bitrate', 'filename_quality_claim',
+        'quality_class', 'quality_source', 'quality_conflict',
+        'quality_nonstandard', 'file_facts_version', 'classifier_version',
+        'probe_status', 'probed_at', 'probe_error', 'probe_size',
+        'probe_modified_time',
     ):
         if field in candidate:
             file_record[field] = candidate[field]
@@ -4690,7 +4645,7 @@ def _catalog_library_item(candidate, store, metadata_snapshot):
         'filename': file_record.get('filename') or os.path.basename(path),
         'path': path,
         'library_root': file_record.get('library_root', ''),
-        'resolution': candidate.get('resolution') or 'Unknown',
+        'resolution': candidate.get('quality_class') or candidate.get('resolution') or 'Unknown',
         'resolution_rank': get_resolution_rank_str(candidate.get('resolution')),
         'rip_source': candidate.get('rip_source') or 'Unknown',
         'rip_rank': get_rip_rank(candidate.get('rip_source')),
@@ -4717,6 +4672,32 @@ def _catalog_library_item(candidate, store, metadata_snapshot):
         'metadata_status': canonical.get('status', 'unmatched'),
         'metadata_source': canonical.get('source', ''),
         'metadata_accepted': bool(canonical.get('accepted')),
+        'video_width': int(candidate.get('video_width') or 0),
+        'video_height': int(candidate.get('video_height') or 0),
+        'video_codec': candidate.get('video_codec', ''),
+        'video_profile': candidate.get('video_profile', ''),
+        'video_bit_depth': int(candidate.get('video_bit_depth') or 0),
+        'video_bitrate': int(candidate.get('video_bitrate') or 0),
+        'video_frame_rate': float(candidate.get('video_frame_rate') or 0),
+        'duration_ms': int(candidate.get('duration_ms') or 0),
+        'display_aspect_ratio': float(candidate.get('display_aspect_ratio') or 0),
+        'rotation_degrees': float(candidate.get('rotation_degrees') or 0),
+        'audio_codec': candidate.get('audio_codec', ''),
+        'audio_channels': float(candidate.get('audio_channels') or 0),
+        'audio_bitrate': int(candidate.get('audio_bitrate') or 0),
+        'filename_quality_claim': candidate.get('filename_quality_claim', ''),
+        'quality_class': candidate.get('quality_class') or candidate.get('resolution') or 'Unknown',
+        'quality_source': candidate.get('quality_source', ''),
+        'quality_conflict': bool(candidate.get('quality_conflict')),
+        'quality_nonstandard': bool(candidate.get('quality_nonstandard')),
+        'file_facts_version': int(candidate.get('file_facts_version') or 0),
+        'classifier_version': int(candidate.get('classifier_version') or 0),
+        'probe_status': candidate.get('probe_status', 'unprobed'),
+        'probed_at': float(candidate.get('probed_at') or 0),
+        'probe_error': candidate.get('probe_error', ''),
+        'probe_size': int(candidate.get('probe_size') or 0),
+        'probe_modified_time': float(candidate.get('probe_modified_time') or 0),
+        'quality_display': quality_display(candidate),
     }
 
 
@@ -4743,7 +4724,7 @@ def _maintenance_audit_from_catalog():
         return _maintenance_audit_cache['audit']
     candidates = [
         candidate
-        for candidate in _catalog_identity_candidates(repository)
+        for candidate in _catalog_maintenance_candidates(repository)
         if candidate.get('path') and os.path.isfile(candidate['path'])
     ]
     audit = build_maintenance_audit(candidates, generation=generation)
@@ -4759,6 +4740,18 @@ def _catalog_identity_candidates(repository=None):
     for candidate in candidates:
         path = str(candidate.get('path') or (candidate.get('raw_json') or {}).get('path') or '')
         candidate['audit_fingerprint_json'] = dict(fingerprints.get(_norm(path), {}) or {})
+    return candidates
+
+
+def _catalog_maintenance_candidates(repository=None):
+    repository = repository or _catalog_repository()
+    fingerprints = _metadata_store().get_identity_audit_fingerprints()
+    candidates = repository.store.maintenance_candidates()
+    for candidate in candidates:
+        path = str(candidate.get('path') or '')
+        candidate['audit_fingerprint_json'] = dict(
+            fingerprints.get(_norm(path), {}) or {}
+        )
     return candidates
 
 
@@ -4864,16 +4857,12 @@ def _maintenance_upgrade_path_keys():
     generation = repository.generation('media')
     if _maintenance_upgrade_key_cache['generation'] == generation:
         return set(_maintenance_upgrade_key_cache['paths'])
-    fingerprints = _metadata_store().get_identity_audit_fingerprints()
-    candidates = repository.store.maintenance_upgrade_candidates()
-    for candidate in candidates:
-        candidate['audit_fingerprint_json'] = dict(
-            fingerprints.get(_norm(candidate.get('path', '')), {}) or {}
-        )
     paths = {
-        _norm(candidate.get('path', ''))
-        for candidate in candidates
-        if candidate.get('path') and verify_catalog_identity(candidate).get('classification') == 'verified'
+        _norm(item.get('path', ''))
+        for item in (
+            (_maintenance_audit_from_catalog().get('upgrades') or {}).get('items') or []
+        )
+        if item.get('path')
     }
     _maintenance_upgrade_key_cache.update({'generation': generation, 'paths': paths})
     return set(paths)
@@ -5037,7 +5026,13 @@ def library():
             n += 1
             if n % 50 == 0:
                 _library_status = f'Reading metadata\u2026 {n}\u00a0/\u00a0{total}'
-            file_facts = _video_file_facts(movies_dir, file, full_path, include_timestamps=True)
+            file_facts = _video_file_facts(
+                movies_dir,
+                file,
+                full_path,
+                include_timestamps=True,
+                probe_resolution=False,
+            )
             norm_path = _norm(full_path)
             plex_data = dict(_plex_cache.get(norm_path, {}) or _plex_matched_by_fname.get(file.lower(), {}) or {})
             file_record = metadata_snapshot.get('files', {}).get(store._key(full_path), {})
@@ -5061,7 +5056,6 @@ def library():
             if candidate.get('path') and os.path.isfile(candidate['path'])
         ]
         items.sort(key=lambda item: (-float(item.get('added_time') or 0), item['title']))
-        _save_res_cache()
         _store_library_cache(items, bool(_plex_token), len(_plex_cache) > 0)
         _library_cache['source'] = 'catalog'
         new_files = sum(1 for item in items if _norm(item['path']) not in previous_paths)
@@ -5225,6 +5219,9 @@ def _maintenance_workspace_payload(section=None, page=1, page_size=50, query='')
         'summary': summary,
         'identity': {'items': list((audit.get('identity') or {}).get('items') or [])},
         'identity_review': identity_review,
+        'file_facts_backfill': dict(
+            _library_reconcile_status().get('file_facts_backfill') or {}
+        ),
     }
     if not section:
         return base
@@ -5238,6 +5235,7 @@ def _maintenance_workspace_payload(section=None, page=1, page_size=50, query='')
         'generation': audit.get('generation', 0),
         'generated_at': audit.get('generated_at'),
         'summary': summary,
+        'file_facts_backfill': base['file_facts_backfill'],
     }
 
     if section == 'storage':
@@ -5407,8 +5405,9 @@ def library_stats():
                 decade = 'Unknown'
             by_decade[decade] = by_decade.get(decade, 0) + 1
 
-        maintenance_summary = _current_catalog_store(_metadata_store()).maintenance_storage_statistics()
-        maintenance_summary['upgrade_candidates'] = len(_maintenance_upgrade_path_keys())
+        maintenance_summary = dict(
+            (_maintenance_audit_from_catalog().get('summary') or {})
+        )
 
         total_size = sum(f['size'] for f in all_files)
         avg_size = total_size // len(all_files) if all_files else 0
@@ -5513,7 +5512,15 @@ def rename_file():
 
     ext = os.path.splitext(abs_old)[1]
     orig_basename = os.path.basename(abs_old)
-    orig_res = get_resolution_from_file(abs_old)
+    store = _metadata_store()
+    current_record = (
+        store.snapshot().get('files', {}).get(store._key(abs_old), {})
+    )
+    orig_res = (
+        current_record.get('quality_class')
+        or current_record.get('resolution')
+        or filename_quality_claim(orig_basename)
+    )
     orig_rip = get_rip_source(orig_basename)
     quality_tag = ' '.join(t for t in [orig_res, orig_rip] if t and t != 'Unknown')
     new_filename = new_title + (f' ({new_year})' if new_year else '')
@@ -5851,7 +5858,7 @@ def plex_match_apply():
         return jsonify({'error': 'File not found'}), 404
     try:
         store = _metadata_store()
-        facts = _metadata_file_facts(abs_path)
+        facts = _metadata_file_facts(abs_path, probe=False)
         poster_value = str(data.get('poster_url', '') or '')
         plex_thumb = poster_value if poster_value.startswith('/') and not poster_value.startswith('/api/plex/image') else ''
         if poster_value.startswith('/api/plex/image'):
@@ -6628,7 +6635,7 @@ def tmdb_match_apply():
         if not metadata:
             movie = body.get('movie') or body
             metadata = _normalize_tmdb_metadata({**movie, 'tmdb_id': tmdb_id, 'match_source': 'manual_tmdb'})
-        facts = _metadata_file_facts(abs_path)
+        facts = _metadata_file_facts(abs_path, probe=False)
         match = store.apply_tmdb_match(abs_path, metadata, facts=facts)
         canonical = _relational_canonical_for_path(abs_path, store=store)
         _resolve_identity_audit_path(abs_path)
@@ -6707,7 +6714,7 @@ def _metadata_override_context_for_path(path):
         raise FileNotFoundError('File not found')
     store = _metadata_store()
     snapshot = store.snapshot()
-    facts = _metadata_file_facts(abs_path)
+    facts = _metadata_file_facts(abs_path, probe=False)
     key = store._key(abs_path)
     plex_data = dict(
         snapshot.get('plex_files', {}).get(key, {})
@@ -6728,6 +6735,7 @@ def _metadata_override_context_for_path(path):
         'effective': effective,
         'identity': identity,
         'override': override,
+        'display_provider': str(snapshot.get('files', {}).get(key, {}).get('display_provider', '') or ''),
     }
 
 
@@ -6785,6 +6793,8 @@ def metadata_override():
             'provider': context['provider'],
             'effective': context['effective'],
             'override': context['override'],
+            'display_provider': context['display_provider'],
+            'providers': _metadata_provider_status(),
         })
     except Exception as error:
         return _metadata_override_api_error(error)
@@ -6828,7 +6838,7 @@ def _poster_context_for_path(path):
         raise FileNotFoundError('File not found')
     store = _metadata_store()
     snapshot = store.snapshot()
-    facts = _metadata_file_facts(abs_path)
+    facts = _metadata_file_facts(abs_path, probe=False)
     filename = facts['filename']
     plex_data = dict(_plex_cache.get(_norm(abs_path), {}) or _plex_matched_by_fname.get(filename.lower(), {}) or {})
     file_record = snapshot.get('files', {}).get(store._key(abs_path), {})
@@ -7555,7 +7565,7 @@ def _metadata_migration_paths():
     return [full_path for _, _, _, full_path in _iter_video_files()]
 
 
-def _metadata_file_facts(path):
+def _metadata_file_facts(path, *, probe=True):
     filename = os.path.basename(path)
     parsed_title, parsed_year = parse_movie_title(filename)
     try:
@@ -7567,19 +7577,21 @@ def _metadata_file_facts(path):
         size = 0
         added_time = 0
         modified_time = 0
-    return {
+    record = {
         'path': path,
         'filename': filename,
         'library_root': _path_library_root(path) or '',
         'parsed_title': parsed_title,
         'parsed_year': parsed_year,
-        'resolution': get_resolution_from_file(path),
         'rip_source': get_rip_source(filename),
         'size': size,
         'added_time': added_time,
         'modified_time': modified_time,
-        'file_facts_version': FILE_FACTS_VERSION,
+        'filename_quality_claim': filename_quality_claim(filename),
     }
+    if probe:
+        record.update(probe_media_file(path).as_record())
+    return record
 
 
 def _file_copy_is_stable(file_facts, previous=None, now=None):
@@ -7600,13 +7612,13 @@ def _file_copy_is_stable(file_facts, previous=None, now=None):
 def _reconcile_library_path(path, provider, store=None, previous=None):
     store = store or _metadata_store()
     previous = previous or {}
-    facts = _metadata_file_facts(path)
-    if not _file_copy_is_stable(facts, previous):
+    observation = _metadata_file_facts(path, probe=False)
+    if not _file_copy_is_stable(observation, previous):
         pending_patch = {
-            **facts,
+            **observation,
             'ingest_status': 'pending',
-            'observed_size': facts.get('size', 0),
-            'observed_modified_time': facts.get('modified_time', 0),
+            'observed_size': observation.get('size', 0),
+            'observed_modified_time': observation.get('modified_time', 0),
             'observed_at': time.time(),
         }
         if not resolve_authoritative_identity(previous).get('accepted'):
@@ -7617,6 +7629,7 @@ def _reconcile_library_path(path, provider, store=None, previous=None):
         store.update_file_record(path, pending_patch)
         return 'pending'
 
+    facts = _metadata_file_facts(path, probe=True)
     if provider == 'filename':
         store.update_file_record(path, {
             **facts,
@@ -7712,7 +7725,7 @@ def _record_needs_metadata_enrichment(record, path_key, snapshot):
 
 
 def _identity_evidence_fingerprint(path, file_facts=None, plex_data=None):
-    file_facts = file_facts or _metadata_file_facts(path)
+    file_facts = file_facts or _metadata_file_facts(path, probe=False)
     plex_data = plex_data or {}
     payload = {
         'queries': [
@@ -7807,7 +7820,6 @@ def _reconcile_library_files(force_unresolved=False):
         provider = _active_metadata_provider(store)
         candidates = []
         current_inventory = {}
-        file_fact_updates = {}
         for _, _, file, path in _iter_video_files():
             try:
                 stat_result = os.stat(path)
@@ -7823,16 +7835,16 @@ def _reconcile_library_files(force_unresolved=False):
             record = records.get(key, {})
             if record.get('metadata_accepted') or record.get('metadata_status') == 'accepted':
                 facts_changed = (
-                    int(record.get('file_facts_version') or 0) < FILE_FACTS_VERSION
-                    or
                     int(record.get('size') or -1) != fingerprint['size']
                     or float(record.get('modified_time') or -1) != fingerprint['modified_time']
-                    or record.get('filename') != file
+                    or (
+                        bool(record.get('filename'))
+                        and record.get('filename') != file
+                    )
                 )
                 facts = records[key]
                 if facts_changed:
-                    facts = _metadata_file_facts(path)
-                    file_fact_updates[path] = facts
+                    facts = _metadata_file_facts(path, probe=False)
                     records[key] = {**record, **facts}
                 plex_data = dict(
                     snapshot.get('plex_files', {}).get(key, {})
@@ -7848,6 +7860,9 @@ def _reconcile_library_files(force_unresolved=False):
                 ):
                     candidates.append((path, {**record, '_revalidate_identity': True}))
                     continue
+                if facts_changed:
+                    candidates.append((path, {**record, '_refresh_file_facts': True}))
+                    continue
                 if provider in {'tmdb', 'plex'} and _record_needs_metadata_enrichment(records[key], key, snapshot):
                     candidates.append((path, records[key]))
                 continue
@@ -7859,7 +7874,7 @@ def _reconcile_library_files(force_unresolved=False):
                 continue
             current_identity_fingerprint = ''
             if _record_has_unresolved_identity(record):
-                file_facts = _metadata_file_facts(path)
+                file_facts = _metadata_file_facts(path, probe=False)
                 filename = file_facts.get('filename', file)
                 plex_data = dict(
                     snapshot.get('plex_files', {}).get(key, {})
@@ -7901,7 +7916,6 @@ def _reconcile_library_files(force_unresolved=False):
             if changed:
                 candidates.append((path, record))
 
-        store.update_file_records_bulk(file_fact_updates)
         removed = 0
         configured_roots = [root for root in get_movies_dirs() if root]
         if configured_roots and all(os.path.isdir(root) for root in configured_roots):
@@ -7920,10 +7934,32 @@ def _reconcile_library_files(force_unresolved=False):
             'pending': 0,
             'failed': 0,
             'removed': removed,
-            'facts_refreshed': len(file_fact_updates),
+            'facts_refreshed': 0,
             'provider': provider,
         }
         for path, previous in candidates:
+            if previous.get('_refresh_file_facts'):
+                observation = _metadata_file_facts(path, probe=False)
+                if not _file_copy_is_stable(observation, previous):
+                    store.update_file_record(path, {
+                        **observation,
+                        'ingest_status': 'pending',
+                        'observed_size': observation.get('size', 0),
+                        'observed_modified_time': observation.get('modified_time', 0),
+                        'observed_at': time.time(),
+                    })
+                    result['pending'] += 1
+                    continue
+                refreshed_facts = _metadata_file_facts(path, probe=True)
+                store.update_file_record(path, {
+                    **refreshed_facts,
+                    'ingest_status': 'stable',
+                    'observed_size': refreshed_facts.get('size', 0),
+                    'observed_modified_time': refreshed_facts.get('modified_time', 0),
+                    'observed_at': time.time(),
+                })
+                result['facts_refreshed'] += 1
+                continue
             result['checked'] += 1
             try:
                 outcome = _reconcile_library_path(path, provider, store=store, previous=previous)
@@ -7992,7 +8028,45 @@ def _library_reconcile_status():
         }
 
 
-def _run_library_reconcile_loop(run_inventory=True, run_detail_backfill=False):
+def _run_media_file_facts_backfill():
+    global _library_reconcile_state
+
+    def publish(report):
+        global _library_reconcile_state
+        with _library_reconcile_lock:
+            _library_reconcile_state = {
+                **_library_reconcile_state,
+                'file_facts_backfill': dict(report),
+                'updated_at': time.time(),
+            }
+
+    repository = _catalog_repository()
+    initial = {
+        'facts_version': FILE_FACTS_VERSION,
+        'status': 'running',
+        'batches': 0,
+        'selected': 0,
+        'changed': 0,
+        'failures': 0,
+        'remaining': repository.file_facts_backfill_remaining(),
+    }
+    publish(initial)
+    report = run_file_facts_backfill(
+        repository,
+        get_movies_dirs(),
+        batch_size=8,
+        concurrency=2,
+        progress=publish,
+    )
+    publish(report)
+    return report
+
+
+def _run_library_reconcile_loop(
+    run_inventory=True,
+    run_detail_backfill=False,
+    run_file_facts=False,
+):
     global _library_reconcile_state
     detail_backfill = (
         _run_tmdb_detail_contract_backfill()
@@ -8000,11 +8074,17 @@ def _run_library_reconcile_loop(run_inventory=True, run_detail_backfill=False):
         else dict(_library_reconcile_state.get('detail_backfill') or {})
     )
     if not run_inventory:
+        file_facts_backfill = (
+            _run_media_file_facts_backfill()
+            if run_file_facts
+            else dict(_library_reconcile_state.get('file_facts_backfill') or {})
+        )
         with _library_reconcile_lock:
             _library_reconcile_state = {
                 **_library_reconcile_state,
                 'status': 'completed',
                 'detail_backfill': detail_backfill,
+                'file_facts_backfill': file_facts_backfill,
                 'updated_at': time.time(),
             }
         _mark_library_reconcile_complete()
@@ -8019,6 +8099,17 @@ def _run_library_reconcile_loop(run_inventory=True, run_detail_backfill=False):
                 'updated_at': time.time(),
             }
         if not result.get('pending'):
+            file_facts_backfill = (
+                _run_media_file_facts_backfill()
+                if run_file_facts
+                else dict(_library_reconcile_state.get('file_facts_backfill') or {})
+            )
+            with _library_reconcile_lock:
+                _library_reconcile_state = {
+                    **_library_reconcile_state,
+                    'file_facts_backfill': file_facts_backfill,
+                    'updated_at': time.time(),
+                }
             _mark_library_reconcile_complete()
             return
         time.sleep(_FILE_STABILITY_SECONDS)
@@ -8072,11 +8163,15 @@ def _startup_reconcile_decision():
             repository.set_operational_meta('last_library_reconcile_generation', media_generation)
     detail_backfill_count = len(_tmdb_detail_contract_backfill_ids(store=store))
     run_detail_backfill = bool(detail_backfill_count and _tmdb_key)
+    file_facts_backfill_count = repository.file_facts_backfill_remaining()
+    run_file_facts = bool(file_facts_backfill_count)
     if not inventory_run and run_detail_backfill:
         reason = 'metadata_contract_upgrade'
     elif not inventory_run and detail_backfill_count and not _tmdb_key:
         reason = 'metadata_contract_waiting_for_tmdb'
-    decision = 'run' if inventory_run or run_detail_backfill else 'skip'
+    elif not inventory_run and run_file_facts:
+        reason = 'file_facts_backfill'
+    decision = 'run' if inventory_run or run_detail_backfill or run_file_facts else 'skip'
     _startup_metrics['reconcile_decision_ms'] = round((time.perf_counter() - started) * 1000, 3)
     _startup_metrics['reconcile_decision'] = decision
     _startup_metrics['reconcile_reason'] = reason
@@ -8086,6 +8181,8 @@ def _startup_reconcile_decision():
         'run_inventory': inventory_run,
         'run_detail_backfill': run_detail_backfill,
         'detail_backfill_remaining': detail_backfill_count,
+        'run_file_facts': run_file_facts,
+        'file_facts_remaining': file_facts_backfill_count,
     }
 
 
@@ -8107,9 +8204,11 @@ def _start_library_reconcile(force=False):
             'reason': 'explicit',
             'run_inventory': True,
             'run_detail_backfill': True,
+            'run_file_facts': True,
             'detail_backfill_remaining': int(
                 (_library_reconcile_state.get('detail_backfill') or {}).get('remaining', 0) or 0
             ),
+            'file_facts_remaining': _catalog_repository().file_facts_backfill_remaining(),
         } if force else _startup_reconcile_decision()
         if not decision['run']:
             _library_reconcile_state = {
@@ -8127,6 +8226,12 @@ def _start_library_reconcile(force=False):
                         else 'completed'
                     ),
                 },
+                'file_facts_backfill': {
+                    **dict(_library_reconcile_state.get('file_facts_backfill') or {}),
+                    'facts_version': FILE_FACTS_VERSION,
+                    'remaining': decision.get('file_facts_remaining', 0),
+                    'status': 'completed',
+                },
                 'updated_at': time.time(),
             }
             return dict(_library_reconcile_state)
@@ -8142,6 +8247,7 @@ def _start_library_reconcile(force=False):
             args=(
                 decision.get('run_inventory', True),
                 decision.get('run_detail_backfill', False),
+                decision.get('run_file_facts', False),
             ),
             name='cinema-library-reconcile',
             daemon=True,
@@ -8367,7 +8473,7 @@ def _dedupe_title_year_queries(queries):
 
 
 def _identity_queries(path, file_facts=None, plex_data=None):
-    file_facts = file_facts or _metadata_file_facts(path)
+    file_facts = file_facts or _metadata_file_facts(path, probe=False)
     plex_data = plex_data or {}
     queries = []
     _append_parsed_query(queries, {
@@ -8556,7 +8662,7 @@ def _migrate_metadata_path(path, target, store=None, revalidate_accepted=False):
     snapshot = store.snapshot()
     path_key = store._key(path)
     current_record = snapshot.get('files', {}).get(path_key, {})
-    facts = _metadata_file_facts(path)
+    facts = _metadata_file_facts(path, probe=False)
     filename = facts['filename']
     plex_data = dict(
         snapshot.get('plex_files', {}).get(path_key, {})
@@ -9074,7 +9180,7 @@ def _process_identity_audit_path(path, provider='tmdb', force_deep=False):
     record = store.catalog.get_record('app_metadata/files.json', key, {})
     manual_match = store.get_manual_match(path)
     fingerprint = store.get_identity_audit_fingerprint(path)
-    facts = _metadata_file_facts(path)
+    facts = _metadata_file_facts(path, probe=False)
     filename = facts['filename']
     plex_data = dict(
         store.get_plex_metadata(path)
@@ -9411,7 +9517,7 @@ def identity_audit_apply(job_id):
                 raise ValueError('File identity changed after audit; start a new Identity Review scan')
             candidate = proposal.get('candidate', {})
             provider = proposal.get('provider') or state.get('provider') or 'tmdb'
-            facts = _metadata_file_facts(path)
+            facts = _metadata_file_facts(path, probe=False)
             if proposal.get('proposal_type') == 'metadata_discrepancy':
                 context = _metadata_override_context_for_path(path)
                 _metadata_store().save_metadata_override(
@@ -9971,7 +10077,7 @@ def _apply_plex_smart_match(proposal):
     },
         source='smart_match_plex',
         decision_origin=DECISION_ORIGIN_SMART_MATCH,
-        facts=_metadata_file_facts(proposal['path']),
+        facts=_metadata_file_facts(proposal['path'], probe=False),
     )
 
 
@@ -10004,7 +10110,7 @@ def smart_match_apply(job_id):
                     metadata,
                     source='smart_match_tmdb',
                     decision_origin=DECISION_ORIGIN_SMART_MATCH,
-                    facts=_metadata_file_facts(proposal['path']),
+                    facts=_metadata_file_facts(proposal['path'], probe=False),
                 )
             else:
                 _apply_plex_smart_match(proposal)

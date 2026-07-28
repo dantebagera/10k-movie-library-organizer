@@ -42,10 +42,10 @@ function TypeIcon({ kind, size = 18 }) {
   return <Icon size={size} />;
 }
 
-function ListArtwork({ item }) {
+function ListArtwork({ providerId, item }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [item.kind, item.item_id]);
-  const source = item.available && item.image_url ? iptvImage(item.kind, item.item_id) : '';
+  const source = item.available && item.image_url ? iptvImage(providerId, item.kind, item.item_id) : '';
   return (
     <span className="iptv-list-artwork">
       {source && !failed ? <img src={source} alt="" loading="lazy" onError={() => setFailed(true)} /> : <TypeIcon kind={item.kind} size={22} />}
@@ -82,6 +82,7 @@ export function IPTVListPickerModal({ item, lists, busy, newName, onNewName, onC
 }
 
 export default function IPTVListsWorkspace({
+  providerId,
   lists,
   selectedListId,
   catalog,
@@ -146,7 +147,7 @@ export default function IPTVListsWorkspace({
                 return (
                   <article key={`${item.kind}-${item.item_id}`} className={!item.available ? 'is-unavailable' : ''}>
                     <button type="button" className="iptv-list-entry-main" onClick={() => onOpen(item)} disabled={!item.available}>
-                      <ListArtwork item={item} />
+                      <ListArtwork providerId={providerId} item={item} />
                       <span className="iptv-list-entry-type"><TypeIcon kind={item.kind} size={14} />{item.kind === 'live' ? 'Channel' : item.kind === 'series' ? 'Series' : 'Movie'}</span>
                       <div><strong dir="auto">{listTitle(item)}</strong><small>{item.year || item.genre || (item.available ? 'Provider title' : 'Unavailable from provider')}</small></div>
                       {!item.available ? <span className="iptv-unavailable-badge">Unavailable</span> : <ChevronRight size={18} />}

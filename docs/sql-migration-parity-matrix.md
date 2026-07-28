@@ -136,3 +136,48 @@ checks. Schema remained version 8, media generation remained 6076, and all
 recorded catalogue row counts remained unchanged. The existing Home
 followed-release refresh advanced curation generation once and is documented
 separately from the search/pagination acceptance.
+
+## Media file facts schema-9 rehearsal addendum
+
+The media-file-facts implementation completed Gate 8 on 2026-07-27 against a
+verified restore of a 3,782-row schema-8 catalogue. No live schema migration or
+live file-facts backfill was performed.
+
+| Acceptance area | Final evidence | Result |
+| --- | --- | --- |
+| Schema preservation | Version 8 migrated to version 9 in 1,378.454 ms. All 3,782 old `media_files` projections retained digest `49cecf5a5c65e60f2cf20367ed00da7213f8bd4e79d2f9b1b469a2f2fa00a27f`; all 30 pre-existing table projections had an empty mismatch list. | Passed |
+| Integrity and restart | Schema 9 finished with integrity `ok`, zero foreign-key violations, unchanged media/curation generations, zero provider calls, zero migration probes, and no second-open rewrite. | Passed |
+| Measured authority | The two controlled `The Monkey (2025)` rows stored exact 1800 x 960 dimensions plus codec, profile, bit depth, bitrate, duration, aspect ratio, and audio facts. Both project `1080-class - 1800 x 960`. | Passed |
+| Backfill | One one-row batch and one resumed one-row batch changed exactly two rows and advanced media generation once per batch. A third pass selected, probed, and changed zero rows and did not advance generation. | Passed |
+| Media safety | Before/after SHA-256, byte size, and modification time were identical for both controlled real media files. | Passed |
+| Duplicate safety | Maintenance exposed the AVC/8-bit versus HEVC/10-bit difference and reported zero recommended removals. Codec efficiency and file size did not become deletion authority. | Passed |
+| Runtime ownership | SQL is the only local-file-facts runtime authority. `res_cache.json` has no runtime read/write path and remains physically untouched. | Passed |
+| Rollback | The verified archive rebuilt a passing shadow. A second full restore reproduced 26,889 files and a schema-8 catalogue byte-for-byte equal to the frozen source (`ce9c7feb49523e711fbf38c940cd0661da06eaacb00ab8b47387ec99d514238a`). | Passed |
+| Complete verification | The final 840-test Python run, 69 Node tests, the production Vite build, a clean 42-test desktop Playwright run, a final three-test media-facts card/Maintenance subset, and isolated in-app browser QA with zero console errors passed. | Passed |
+| Rollout boundary | The live catalogue remained schema 8 and independently advanced after the rehearsal freeze. Gate 9 requires a fresh baseline, backup, restore rehearsal, and separate approval. | Passed |
+
+The ownership map is
+`docs/plans/media-file-facts-authoritative-paths.md`. The complete paths,
+commands, counts, hashes, timing, browser observations, rollback procedure, and
+remaining risks are recorded in
+`docs/plans/media-file-facts-resolution-gate-8-evidence-2026-07-27.md`.
+
+## Media file facts schema-9 live rollout addendum
+
+Dante separately approved Gate 9 on 2026-07-27. The live 3,783-row catalogue
+migrated from schema 8 to schema 9 after a fresh verified backup and exact
+restore rehearsal.
+
+| Acceptance area | Live evidence | Result |
+| --- | --- | --- |
+| Backup and restore | `cp-catalog-migration-20260727T204639Z.zip` verified with 26,889 files. Its restored schema-8 catalogue matched all 30 live baseline table projections and protected digest `a00d99069ded11d6ecaf33129f21df0064228063056f6c7896e703692d6b56b3`. | Passed |
+| Transactional migration | Schema 8 to 9 completed in 1,332.644 ms with probes and network blocked. All 3,783 old media projections and all protected table projections remained identical. | Passed |
+| Live backfill | 3,783 rows were probed in bounded batches in 710.232 seconds; one explicit two-row retry brought total measured time to 710.699 seconds. Final states are 3,781 `ok`, two stable `no_video`, zero pending, and zero rejected. | Passed |
+| Idempotence and integrity | A no-op pass selected/probed/changed zero rows. A second normal start retained schema 9 and media generation 7,354 with integrity `ok`, zero foreign-key violations, and zero pending probes. | Passed |
+| Measured authority | Both live `The Monkey (2025)` files project `1080-class - 1800 x 960`; the HEVC copy exposes Main 10/10-bit and the AVC copy exposes High/8-bit. | Passed |
+| Duplicate safety | Live Maintenance reports zero recommended removals for `The Monkey (2025)` and requires manual comparison of the lower-ranked copy. | Passed |
+| API and desktop UI | Library, Maintenance, stats, runtime status, and qBittorrent status routes passed. Movie View, File View, details, and Maintenance rendered the measured facts with zero browser console errors. | Passed |
+| Operational restoration | The normal port-5000 backend and healthy qBittorrent import monitor were restored. No media, historical cache, provider state, or Git state was modified outside the approved catalogue facts. | Passed |
+
+The full Gate 9 evidence is appended to
+`docs/plans/media-file-facts-resolution-gate-8-evidence-2026-07-27.md`.

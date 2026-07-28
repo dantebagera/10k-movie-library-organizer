@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
+from services.media_file_facts import MediaFileFacts
 
 
 class CatalogFileMutationTest(unittest.TestCase):
@@ -104,7 +105,27 @@ class CatalogFileMutationTest(unittest.TestCase):
                 client = app.app.test_client()
 
                 initial = client.get("/api/library").get_json()
-                with patch("app._plex_rescan"):
+                measured = MediaFileFacts(
+                    video_width=1800,
+                    video_height=960,
+                    video_codec="HEVC",
+                    video_profile="Main 10",
+                    video_bit_depth=10,
+                    duration_ms=5_780_917,
+                    audio_codec="AAC",
+                    audio_channels=2,
+                    filename_quality_claim="1080p",
+                    quality_class="1080p",
+                    quality_source="measured",
+                    quality_nonstandard=True,
+                    probe_status="ok",
+                    probe_size=movie_path.stat().st_size,
+                    probe_modified_time=movie_path.stat().st_mtime,
+                )
+                with patch("app._plex_rescan"), patch(
+                    "app.probe_media_file",
+                    return_value=measured,
+                ) as probe:
                     renamed_response = client.post("/api/rename-file", json={
                         "path": str(movie_path),
                         "title": "Alien",
@@ -125,6 +146,14 @@ class CatalogFileMutationTest(unittest.TestCase):
         self.assertEqual(renamed_response.status_code, 200)
         self.assertEqual(after_rename["count"], 1)
         self.assertEqual(after_rename["items"][0]["path"], str(renamed_path))
+        self.assertEqual(after_rename["items"][0]["video_width"], 1800)
+        self.assertEqual(after_rename["items"][0]["video_height"], 960)
+        self.assertEqual(after_rename["items"][0]["quality_class"], "1080p")
+        self.assertEqual(
+            after_rename["items"][0]["quality_display"],
+            "1080-class - 1800 x 960",
+        )
+        probe.assert_called_once_with(str(renamed_path))
         self.assertEqual(deleted_response.status_code, 200)
         self.assertEqual(after_delete["count"], 0)
 
@@ -191,7 +220,10 @@ class CatalogFileMutationTest(unittest.TestCase):
                 app._user_data_dir = data_tmp
                 app._library_cache = {}
 
-                with patch("app._revalidate_accepted_identity") as revalidate:
+                with patch("app._revalidate_accepted_identity") as revalidate, patch(
+                    "app._file_copy_is_stable",
+                    return_value=True,
+                ):
                     result = app._reconcile_library_files()
                 refreshed = app.AppMetadataStore(Path(data_tmp)).snapshot()["files"][store._key(movie_path)]
             finally:

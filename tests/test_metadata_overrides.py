@@ -110,6 +110,8 @@ class MetadataOverrideTest(unittest.TestCase):
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(saved.get_json()["effective"]["year"], "1975")
         self.assertEqual(duplicate.get_json()["override"]["year"], "1975")
+        self.assertEqual(duplicate.get_json()["display_provider"], "tmdb")
+        self.assertEqual(set(duplicate.get_json()["providers"]), {"tmdb", "plex", "filename"})
         self.assertEqual(reset.status_code, 200)
         self.assertEqual(reset.get_json()["override"], {})
         self.assertEqual(app._library_cache, {})

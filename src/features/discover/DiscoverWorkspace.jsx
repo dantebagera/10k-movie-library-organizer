@@ -5,7 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import ListEditorModal from '../../components/ListEditorModal.jsx';
@@ -15,15 +15,17 @@ import Rating from '../../components/Rating.jsx';
 import PosterEditorModal from '../../components/PosterEditorModal.jsx';
 import PersonSearchCard from '../../components/PersonSearchCard.jsx';
 import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
+import WorkspacePathBar from '../../components/WorkspacePathBar.jsx';
 import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components/MovieLanguageToggle.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import {
-  DiscoverMovieCard, MovieExpandedCuration, MovieExpandedDetails, MovieExpandedFacts, PosterEditButton, PosterStateControls
+  DiscoverMovieCard, MovieExpandedCuration, MovieExpandedDetails, MovieExpandedFacts, OwnedFileDetailsButton, PosterEditButton, PosterStateControls
 } from '../../components/SharedMovieCards.jsx';
 import TorrentActions from '../../components/TorrentActions.jsx';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
+import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import {
   buildOwnershipMap, discoverMoviePayload, filterEnrichedIndexerResults,
   listsForDiscoverMovie, ownedMovieFor, sortTorrentVariants
@@ -77,9 +79,10 @@ export default function DiscoverWorkspace({
   browseQuery,
   setBrowseQuery,
   searchRequest,
-  personRequest,
+  relationshipRequest,
   activeTab,
-  setActiveTab
+  setActiveTab,
+  onOpenFileDetails
 }) {
   const [discoverList, setDiscoverList] = useState('trending_week');
   const [discoverGenre, setDiscoverGenre] = useState('');
@@ -128,7 +131,12 @@ export default function DiscoverWorkspace({
   const [pickError, setPickError] = useState('');
   const [ownership, setOwnership] = useState({});
   const [detailsCache, setDetailsCache] = useState({});
-  const [collectionCache, setCollectionCache] = useState({});
+  const {
+    clear: clearCollectionCache,
+    getView: getCollectionView,
+    load: loadMovieCollection,
+    storeLoaded: storeLoadedCollection
+  } = useMovieCollectionCache();
   const [userLists, setUserLists] = useState([]);
   const [expandedMovieKey, setExpandedMovieKey] = useState('');
   const [listEditorTarget, setListEditorTarget] = useState(null);
@@ -140,12 +148,12 @@ export default function DiscoverWorkspace({
   const [posterEditor, setPosterEditor] = useState(null);
   const [selectedDiscoverKeys, setSelectedDiscoverKeys] = useState(() => new Set());
   const [sourceReview, setSourceReview] = useState(null);
-  const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext] = useState(() => Boolean(personRequest?.requestId));
+  const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext] = useState(() => Boolean(relationshipRequest?.requestId));
   const discoverRequestSeq = useRef(0);
   const pickRequestSeq = useRef(0);
   const discoverAbortRef = useRef(null);
   const pickAbortRef = useRef(null);
-  const handledPersonRequestRef = useRef(0);
+  const handledRelationshipRequestRef = useRef(0);
 
   useEffect(() => () => {
     discoverAbortRef.current?.abort();
@@ -177,19 +185,19 @@ export default function DiscoverWorkspace({
   useEffect(() => {
     const clearDetailCaches = () => {
       setDetailsCache(markMovieDetailsCacheStale);
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
     return () => window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   useEffect(() => {
     const clearCurationCaches = () => {
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
     return () => window.removeEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   function updateOwnedPoster(path, posterUrl) {
     setOwnership((state) => Object.fromEntries(
@@ -757,24 +765,31 @@ export default function DiscoverWorkspace({
   }
 
   useEffect(() => {
-    if (!personRequest?.requestId || handledPersonRequestRef.current === personRequest.requestId) return;
+    if (!relationshipRequest?.requestId || handledRelationshipRequestRef.current === relationshipRequest.requestId) return;
+    handledRelationshipRequestRef.current = relationshipRequest.requestId;
+    setIsNavigatingDiscoverContext(true);
+    setActiveTab('explore');
+
+    if (relationshipRequest.type === 'collection') {
+      browseCollection('explore', relationshipRequest.movie, relationshipRequest.collection)
+        .finally(() => setIsNavigatingDiscoverContext(false));
+      return;
+    }
+
     const context = buildPersonMoviesContext(
-      personRequest.movie,
-      personRequest.role,
-      personRequest.person,
-      personRequest.source || 'Library'
+      relationshipRequest.movie,
+      relationshipRequest.role,
+      relationshipRequest.person,
+      relationshipRequest.source || 'Library'
     );
     if (!context) {
       setIsNavigatingDiscoverContext(false);
       return;
     }
-    handledPersonRequestRef.current = personRequest.requestId;
-    setIsNavigatingDiscoverContext(true);
-    setActiveTab('explore');
     setDiscoverHistory((history) => [...history, currentDiscoverSnapshot()]);
     setExpandedMovieKey('');
     loadContextPage('explore', context, { page: 1 }).finally(() => setIsNavigatingDiscoverContext(false));
-  }, [personRequest]);
+  }, [relationshipRequest]);
 
   async function browsePerson(target, movie, role, person) {
     const context = buildPersonMoviesContext(movie, role, person);
@@ -805,7 +820,10 @@ export default function DiscoverWorkspace({
         { signal: controller.signal }
       );
       if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
-      setCollectionCache((state) => ({ ...state, [collection.id]: collectionData }));
+      storeLoadedCollection({
+        detail_source: 'tmdb_live',
+        collection: { id: collection.id }
+      }, collectionData);
       const results = collectionData.parts || [];
       const context = {
         type: 'collection',
@@ -923,12 +941,7 @@ export default function DiscoverWorkspace({
         setDetailsCache((state) => ({ ...state, [cacheKey]: details }));
       }
     }
-    const collectionUrl = movieCollectionUrl(details);
-    if (collectionUrl && !collectionCache[details.collection.id]) {
-      fetchCurationJson(collectionUrl)
-        .then((collectionData) => setCollectionCache((state) => ({ ...state, [details.collection.id]: collectionData })))
-        .catch(() => {});
-    }
+    loadMovieCollection(details);
     return details;
   }
 
@@ -1379,7 +1392,8 @@ export default function DiscoverWorkspace({
 
       {activeTab === 'explore' && (
         <section className="discover-panel">
-          <DiscoverPathBar
+          <WorkspacePathBar
+            ariaLabel="Discovery path"
             history={discoverHistory}
             currentLabel={discoverContext?.label}
             resetLabel="Discover Home"
@@ -1518,7 +1532,7 @@ export default function DiscoverWorkspace({
             {filteredDiscoverResults.map((movie, index) => {
               const owned = ownedMovieFor(movie, ownership);
               const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
-              const collection = details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
+              const collectionView = getCollectionView(details);
               return (
                 <DiscoverMovieCard
                   key={`${movie.tmdb_id || movie.title}-${movie.year}-${index}`}
@@ -1527,7 +1541,9 @@ export default function DiscoverWorkspace({
                   followed={followed.some((item) => movieKey(item) === movieKey(movie))}
                   expanded={expandedMovieKey === movieKey(movie)}
                   details={details}
-                  collection={collection}
+                  collection={collectionView.data}
+                  collectionStatus={collectionView.status}
+                  collectionError={collectionView.error}
                   itemLists={listsForDiscoverMovie(movie, userLists, owned)}
                   watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
                   watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
@@ -1545,10 +1561,12 @@ export default function DiscoverWorkspace({
                   onToggleDetails={() => toggleMovieDetails(movie, owned)}
                   onPersonBrowse={(role, person) => browsePerson('explore', movie, role, person)}
                   onCollectionBrowse={(collectionItem) => browseCollection('explore', movie, collectionItem)}
+                  onCollectionRetry={() => loadMovieCollection(details, { force: true })}
                   onListBrowse={(list) => browseList('explore', movie, list)}
                   onEditLists={() => setListEditorTarget(discoverMoviePayload(movie, owned))}
                   onRemoveFromList={(listId) => removeDiscoverMovieFromList(listId, discoverMoviePayload(movie, owned))}
                   onEditPoster={owned ? () => setPosterEditor({ path: owned.path, title: movie.title }) : undefined}
+                  onOpenFileDetails={onOpenFileDetails}
                 />
               );
             })}
@@ -1658,7 +1676,7 @@ export default function DiscoverWorkspace({
                 const selectedIndex = selectedVariants[movie.parsed_title] || 0;
                 const owned = ownedMovieFor(movie, ownership);
                 const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
-                const collection = details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
+                const collectionView = getCollectionView(details);
                 return (
                   <IndexerMovieCard
                     key={`${movie.parsed_title}-${movie.parsed_year}`}
@@ -1667,7 +1685,9 @@ export default function DiscoverWorkspace({
                     owned={owned}
                     expanded={expandedMovieKey === movieKey(movie)}
                     details={details}
-                    collection={collection}
+                    collection={collectionView.data}
+                    collectionStatus={collectionView.status}
+                    collectionError={collectionView.error}
                     itemLists={listsForDiscoverMovie(movie, userLists, owned)}
                     watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
                     watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
@@ -1684,9 +1704,19 @@ export default function DiscoverWorkspace({
                     onFindTorrent={onFindTorrent}
                     onTrailer={openTrailer}
                     onToggleDetails={() => toggleMovieDetails(movie, owned)}
+                    onPersonBrowse={(role, person) => {
+                      setActiveTab('explore');
+                      browsePerson('explore', movie, role, person);
+                    }}
+                    onCollectionBrowse={(collectionItem) => {
+                      setActiveTab('explore');
+                      browseCollection('explore', movie, collectionItem);
+                    }}
+                    onCollectionRetry={() => loadMovieCollection(details, { force: true })}
                     onEditLists={() => setListEditorTarget(discoverMoviePayload(movie, owned))}
                     onRemoveFromList={(listId) => removeDiscoverMovieFromList(listId, discoverMoviePayload(movie, owned))}
                     onEditPoster={owned ? () => setPosterEditor({ path: owned.path, title: movie.title }) : undefined}
+                    onOpenFileDetails={onOpenFileDetails}
                   />
                 );
               })}
@@ -1719,7 +1749,8 @@ export default function DiscoverWorkspace({
             {pickError && <p className="discover-inline-status discover-inline-error"><AlertTriangle size={15} /> {pickError}</p>}
           </form>
 
-          <DiscoverPathBar
+          <WorkspacePathBar
+            ariaLabel="Discovery path"
             history={pickHistory}
             currentLabel={pickContext?.label}
             resetLabel="AI Picks"
@@ -1755,7 +1786,7 @@ export default function DiscoverWorkspace({
             {pickResults.map((movie) => {
               const owned = ownedMovieFor(movie, ownership);
               const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
-              const collection = details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
+              const collectionView = getCollectionView(details);
               return (
                 <DiscoverMovieCard
                   key={`${movie.title}-${movie.year}`}
@@ -1765,7 +1796,9 @@ export default function DiscoverWorkspace({
                   followed={followed.some((item) => movieKey(item) === movieKey(movie))}
                   expanded={expandedMovieKey === movieKey(movie)}
                   details={details}
-                  collection={collection}
+                  collection={collectionView.data}
+                  collectionStatus={collectionView.status}
+                  collectionError={collectionView.error}
                   itemLists={listsForDiscoverMovie(movie, userLists, owned)}
                   watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
                   watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
@@ -1783,10 +1816,12 @@ export default function DiscoverWorkspace({
                   onToggleDetails={() => toggleMovieDetails(movie, owned)}
                   onPersonBrowse={(role, person) => browsePerson('pick', movie, role, person)}
                   onCollectionBrowse={(collectionItem) => browseCollection('pick', movie, collectionItem)}
+                  onCollectionRetry={() => loadMovieCollection(details, { force: true })}
                   onListBrowse={(list) => browseList('pick', movie, list)}
                   onEditLists={() => setListEditorTarget(discoverMoviePayload(movie, owned))}
                   onRemoveFromList={(listId) => removeDiscoverMovieFromList(listId, discoverMoviePayload(movie, owned))}
                   onEditPoster={owned ? () => setPosterEditor({ path: owned.path, title: movie.title }) : undefined}
+                  onOpenFileDetails={onOpenFileDetails}
                 />
               );
             })}
@@ -1889,29 +1924,6 @@ function KeywordSearchResults({ keywords, loading, error, onOpenKeyword }) {
 
 
 
-function DiscoverPathBar({ history = [], currentLabel, resetLabel, onBack, onReset, onCrumb }) {
-  if (!history.length && !currentLabel) return null;
-  return (
-    <div className="discover-path-bar" aria-label="Discovery path">
-      <button type="button" className="mini-action" onClick={onBack} disabled={!history.length}>
-        Back
-      </button>
-      <div className="discover-crumbs">
-        {history.map((item, index) => (
-          <button type="button" key={`${item.label}-${index}`} onClick={() => onCrumb(index)}>
-            {item.label}
-          </button>
-        ))}
-        {currentLabel && <span>{currentLabel}</span>}
-      </div>
-      <button type="button" className="mini-action" onClick={onReset}>
-        <RefreshCcw size={13} /> {resetLabel}
-      </button>
-    </div>
-  );
-}
-
-
 function MovieFactChips({ movie, owned, lowQuality }) {
   return (
     <>
@@ -1944,6 +1956,8 @@ function IndexerMovieCard({
   expanded,
   details,
   collection,
+  collectionStatus,
+  collectionError,
   itemLists,
   notify,
   onVariantSelect,
@@ -1954,9 +1968,13 @@ function IndexerMovieCard({
   onFindTorrent,
   onTrailer,
   onToggleDetails,
+  onPersonBrowse,
+  onCollectionBrowse,
+  onCollectionRetry,
   onEditLists,
   onRemoveFromList,
   onEditPoster,
+  onOpenFileDetails,
   watched,
   watchlisted,
   onToggleWatched,
@@ -2020,7 +2038,11 @@ function IndexerMovieCard({
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
+          collectionStatus={collectionStatus}
+          collectionError={collectionError}
           itemLists={itemLists}
+          onCollectionBrowse={onCollectionBrowse}
+          onCollectionRetry={onCollectionRetry}
           onEditLists={onEditLists}
           onRemoveFromList={onRemoveFromList}
         />
@@ -2028,6 +2050,7 @@ function IndexerMovieCard({
       expandedFooter={expanded ? (
         <MovieExpandedDetails
           details={displayDetails}
+          onPersonBrowse={onPersonBrowse}
         />
       ) : null}
     >
@@ -2069,9 +2092,12 @@ function IndexerMovieCard({
               primary
             />
             {owned ? (
-              <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(owned.path)}>
-                <Play size={15} /> Play
-              </button>
+              <>
+                <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(owned.path)}>
+                  <Play size={15} /> Play
+                </button>
+                <OwnedFileDetailsButton owned={owned} onOpenFileDetails={onOpenFileDetails} />
+              </>
             ) : streamingAvailable ? (
               <button type="button" className="btn btn-secondary btn-green-outline" onClick={() => onStream(movie)}>
                 <MonitorPlay size={15} /> {streamingLabel}

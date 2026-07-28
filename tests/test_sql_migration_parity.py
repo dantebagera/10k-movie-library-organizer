@@ -488,6 +488,62 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertGreater(stats.get_json()["total_files"], 0)
         self.assertEqual(collection.get_json()["owned_count"], 1)
 
+    def test_file_view_projects_normalized_physical_file_facts(self):
+        path = self.paths["corrected"]
+        self.store.update_file_record(str(path), {
+            "video_width": 3840,
+            "video_height": 1608,
+            "video_codec": "HEVC",
+            "video_profile": "Main 10@L5.1",
+            "video_bit_depth": 10,
+            "video_bitrate": 24800000,
+            "video_frame_rate": 23.976,
+            "duration_ms": 7265432,
+            "display_aspect_ratio": 2.388,
+            "rotation_degrees": -90,
+            "audio_codec": "DTS XLL",
+            "audio_channels": 8,
+            "audio_bitrate": 4608000,
+            "filename_quality_claim": "1080p",
+            "quality_class": "4K",
+            "quality_source": "measured_conflict",
+            "quality_conflict": True,
+            "quality_nonstandard": True,
+            "file_facts_version": 1,
+            "classifier_version": 1,
+            "probe_status": "ok",
+            "probed_at": 1785196800,
+            "probe_error": "",
+            "probe_size": 123456789,
+            "probe_modified_time": 1785196700,
+        })
+
+        items = app.app.test_client().get("/api/library?view=files").get_json()["items"]
+        item = next(row for row in items if row["path"] == str(path))
+
+        self.assertEqual(item["video_width"], 3840)
+        self.assertEqual(item["video_height"], 1608)
+        self.assertEqual(item["video_codec"], "HEVC")
+        self.assertEqual(item["video_profile"], "Main 10@L5.1")
+        self.assertEqual(item["video_bit_depth"], 10)
+        self.assertEqual(item["video_bitrate"], 24800000)
+        self.assertEqual(item["video_frame_rate"], 23.976)
+        self.assertEqual(item["duration_ms"], 7265432)
+        self.assertEqual(item["display_aspect_ratio"], 2.388)
+        self.assertEqual(item["rotation_degrees"], -90)
+        self.assertEqual(item["audio_codec"], "DTS XLL")
+        self.assertEqual(item["audio_channels"], 8)
+        self.assertEqual(item["audio_bitrate"], 4608000)
+        self.assertEqual(item["filename_quality_claim"], "1080p")
+        self.assertEqual(item["quality_class"], "4K")
+        self.assertEqual(item["quality_source"], "measured_conflict")
+        self.assertTrue(item["quality_conflict"])
+        self.assertTrue(item["quality_nonstandard"])
+        self.assertEqual(item["probe_status"], "ok")
+        self.assertEqual(item["probed_at"], 1785196800)
+        self.assertEqual(item["probe_size"], 123456789)
+        self.assertEqual(item["probe_modified_time"], 1785196700)
+
     def test_followed_and_curation_ownership_use_the_same_sql_identity_matcher(self):
         query = {"tmdb_id": "100", "title": "Correct Movie", "year": "2020"}
         result = app.app.test_client().post("/api/library/check", json={"movies": [query]}).get_json()["results"][0]

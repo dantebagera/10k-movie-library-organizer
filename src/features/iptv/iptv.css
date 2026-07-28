@@ -51,6 +51,35 @@
   color: #7ee2a3;
 }
 
+.iptv-provider-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  border: 1px solid #d4af3750;
+  border-radius: var(--radius-md);
+  background: #101114;
+  color: var(--projector-gold);
+  padding: 0 8px 0 11px;
+}
+
+.iptv-provider-select select {
+  min-width: 150px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.iptv-provider-select option {
+  background: #111216;
+  color: var(--text-strong);
+}
+
 .iptv-tabs {
   display: flex;
   align-items: center;

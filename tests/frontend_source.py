@@ -30,6 +30,7 @@ FRONTEND_OWNER_FILES = (
     "src/api/client.js",
     "src/api/curation.js",
     "src/api/library.js",
+    "src/api/metadata.js",
     "src/api/qbittorrent.js",
     "src/discoverUtils.js",
     "src/utils/appUtils.js",

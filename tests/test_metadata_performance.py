@@ -36,7 +36,11 @@ class MetadataPerformanceTest(unittest.TestCase):
         environment.pop("CP_TEST_MODE", None)
         environment.pop("CP_TEST_ROOT", None)
         result = subprocess.run(
-            [sys.executable, "-c", "import tools.catalog_parity_audit"],
+            [
+                sys.executable,
+                "-c",
+                "import tools.catalog_parity_audit as audit; assert audit.app._iptv_provider_manager is None",
+            ],
             cwd=Path(__file__).resolve().parents[1],
             env=environment,
             capture_output=True,
@@ -54,11 +58,11 @@ class MetadataPerformanceTest(unittest.TestCase):
             Path(app._CONFIG_FILE).resolve(),
             Path(app._user_data_dir).resolve(),
             Path(app._tmdb_cache_dir).resolve(),
-            Path(app._RES_CACHE_FILE).resolve(),
             *(Path(path).resolve() for path in app._movies_dirs),
         ]
         for runtime_path in runtime_paths:
             self.assertIn(declared_root, (runtime_path, *runtime_path.parents), str(runtime_path))
+        self.assertFalse(hasattr(app, "_RES_CACHE_FILE"))
 
     @staticmethod
     def _seed_file_record(store, movie_path, title, year, tmdb_id=""):

@@ -16,6 +16,13 @@ import {
 } from 'lucide-react'
 import { fetchJson } from '../../api/client.js'
 import { announceLibraryChanged } from '../../api/library.js'
+import {
+  applyPlexMetadataMatch,
+  applyTmdbMetadataMatch,
+  requestPlexLibraryScan,
+  searchPlexMetadata,
+  searchTmdbMetadata,
+} from '../../api/metadata.js'
 import IdentityReviewPanel from '../../components/IdentityReviewPanel.jsx'
 import { ConfirmDialog, LibraryRenameModal, LibraryStat } from '../../components/LibraryControls.jsx'
 import Pagination from '../../components/Pagination.jsx'
@@ -27,7 +34,7 @@ import {
   metadataStatusLabel,
   renameModalItem,
 } from '../../utils/cleanupUtils.js'
-import { isLowQuality, rootLabel } from '../../utils/libraryUtils.js'
+import { getQualityFactsLabel, isLowQuality, rootLabel } from '../../utils/libraryUtils.js'
 import { formatVoteCount } from '../../utils/moviePresentation.js'
 
 const maintenanceTabs = [
@@ -39,6 +46,28 @@ const MAINTENANCE_PAGE_SIZE = 50;
 function maintenanceTab(initialTab) {
   if (initialTab === 'unmatched' || initialTab === 'identity') return 'identity';
   return 'storage';
+}
+
+function duplicateVerdictLabel(file) {
+  if (file.verdict_label) return file.verdict_label;
+  if (file.role === 'keep') return 'Recommended keep';
+  if (file.recommendation === 'recommended') return 'Recommended removal';
+  return 'Manual comparison';
+}
+
+function duplicateVerdictClass(tone) {
+  if (tone === 'success') return 'status-owned';
+  if (tone === 'neutral') return 'chip-muted';
+  return 'chip-warning';
+}
+
+function formatDurationMs(value) {
+  const totalSeconds = Math.round(Number(value || 0) / 1000);
+  if (!totalSeconds) return '';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours ? `${hours}h` : '', `${minutes}m`, `${seconds}s`].filter(Boolean).join(' ');
 }
 
 export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage', onHealthChanged, onOpenLibraryUpgrades }) {
@@ -148,7 +177,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     onHealthChanged();
   }, [identityAudit?.id, identityAudit?.status, identityHealthJob, onHealthChanged]);
 
-  const selectableDuplicatePaths = useMemo(() => audit.storage.groups.flatMap((group) => (group.files || []).filter((file) => file.role === 'candidate').map((file) => file.path)), [audit.storage.groups]);
+  const duplicatePaths = useMemo(() => audit.storage.groups.flatMap((group) => (group.files || []).map((file) => file.path)), [audit.storage.groups]);
   const identityItems = useMemo(() => audit.identity.items || [], [audit.identity.items]);
   const visibleUnmatched = useMemo(() => identityItems.filter((item) => !item.metadata_accepted), [identityItems]);
 
@@ -170,6 +199,22 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
       if (checked) next.add(path);
       else next.delete(path);
       return { ...state, [tab]: next };
+    });
+  }
+
+  function toggleDuplicateSelected(groupPaths, path, checked) {
+    setSelected((state) => {
+      const next = new Set(state.storage);
+      if (checked) {
+        next.add(path);
+        if (groupPaths.length > 1 && groupPaths.every((groupPath) => next.has(groupPath))) {
+          notify('Keep at least one copy in each duplicate group.', 'error');
+          return state;
+        }
+      } else {
+        next.delete(path);
+      }
+      return { ...state, storage: next };
     });
   }
 
@@ -363,14 +408,13 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     if (!matchModal?.item?.path) return;
     setMatchModal((state) => ({ ...state, loading: true, error: '', results: [] }));
     try {
-      const params = new URLSearchParams({
+      const result = await searchPlexMetadata({
         path: matchModal.item.path,
         title: matchModal.title,
-        year: matchModal.year
+        year: matchModal.year,
+        ratingKey: matchModal.ratingKey,
+        forceSearch: matchModal.context === 'identity',
       });
-      if (matchModal.ratingKey) params.set('rating_key', matchModal.ratingKey);
-      if (matchModal.context === 'identity') params.set('force_search', '1');
-      const result = await fetchJson(`/api/plex/match-search?${params.toString()}`);
       setMatchModal((state) => ({
         ...state,
         loading: false,
@@ -397,7 +441,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     if (!matchModal?.item?.path) return;
     setMatchModal((state) => ({ ...state, scanBusy: true, error: '' }));
     try {
-      await fetchJson('/api/plex/force-scan', { method: 'POST' });
+      await requestPlexLibraryScan();
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
       setMatchModal((state) => ({ ...state, scanRequested: true }));
       await runPlexMatchSearch();
@@ -412,13 +456,11 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     if (!matchModal?.item) return;
     setMatchModal((state) => ({ ...state, loading: true, error: '', results: [] }));
     try {
-      const query = String(matchModal.title || '').trim();
-      const tmdbParams = new URLSearchParams({ page: '1', metadata_context: 'unmatched' });
-      tmdbParams.set('q', query || matchModal.item.filename);
-      if (String(matchModal.year || '').trim()) {
-        tmdbParams.set('year', matchModal.year.trim());
-      }
-      const result = await fetchJson(`/api/tmdb/search?${tmdbParams.toString()}`);
+      const result = await searchTmdbMetadata({
+        title: matchModal.title,
+        year: matchModal.year,
+        fallback: matchModal.item.filename,
+      });
       setMatchModal((state) => ({ ...state, loading: false, results: result.results || [] }));
     } catch (error) {
       setMatchModal((state) => ({ ...state, loading: false, error: error.message }));
@@ -430,18 +472,10 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     if (!ratingKey || !match?.guid) return;
     setMatchModal((state) => ({ ...state, applying: match.guid, error: '' }));
     try {
-      await fetchJson('/api/plex/match-apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: matchModal.item.path,
-          rating_key: ratingKey,
-          guid: match.guid,
-          name: match.name || match.title,
-          year: match.year || '',
-          poster_url: match.poster_url || '',
-          summary: match.summary || ''
-        })
+      await applyPlexMetadataMatch({
+        path: matchModal.item.path,
+        ratingKey,
+        match,
       });
       setRowStatus((state) => ({ ...state, [matchModal.item.path]: { tone: 'success', text: `Plex match applied: ${match.name}` } }));
       if (matchModal.context === 'identity') {
@@ -469,10 +503,9 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     if (!matchModal?.item?.path || !match?.tmdb_id) return;
     setMatchModal((state) => ({ ...state, applying: String(match.tmdb_id), error: '' }));
     try {
-      await fetchJson('/api/tmdb/match-apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: matchModal.item.path, tmdb_id: match.tmdb_id, movie: match })
+      await applyTmdbMetadataMatch({
+        path: matchModal.item.path,
+        match,
       });
       if (matchModal.context === 'identity') {
         setIdentityApprovedProposal({ ...matchModal.item, candidate: match });
@@ -550,7 +583,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
             <button type="button" className="btn btn-secondary" onClick={() => loadMaintenanceSection(activeTab, pages[activeTab] || 1, filters.query)} disabled={loading}>
               <RefreshCcw size={15} /> Refresh
             </button>
-            {activeSelectedCount > 0 && (
+            {activeTab !== 'storage' && activeSelectedCount > 0 && (
               <button type="button" className="btn btn-danger" onClick={() => requestDelete(activeTab, [...selected[activeTab]], `Move ${activeSelectedCount} selected file${activeSelectedCount === 1 ? '' : 's'} to Recycle Bin?`)}>
                 <Trash2 size={15} /> Delete selected ({activeSelectedCount})
               </button>
@@ -561,8 +594,8 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
 
       <div className="library-stat-strip cleanup-stat-strip">
         <LibraryStat icon={ShieldCheck} label="Duplicate groups" value={formatCount(summary.duplicate_groups)} tone="amber" onClick={() => selectMaintenanceTab('storage')} />
-        <LibraryStat icon={Trash2} label="Reclaimable space" value={summary.reclaimable_human || '0 B'} tone="red" onClick={() => selectMaintenanceTab('storage')} />
-        <LibraryStat icon={CheckCircle2} label="Safe recommendations" value={formatCount(summary.recommended_removals)} tone="green" onClick={() => selectMaintenanceTab('storage')} />
+        <LibraryStat icon={Trash2} label="Recommended reclaimable" value={summary.reclaimable_human || '0 B'} tone="red" onClick={() => selectMaintenanceTab('storage')} />
+        <LibraryStat icon={CheckCircle2} label="Recommended removals" value={formatCount(summary.recommended_removals)} tone="green" onClick={() => selectMaintenanceTab('storage')} />
         <LibraryStat icon={Clapperboard} label="Upgrade candidates" value={formatCount(summary.upgrade_candidates)} tone="amber" onClick={onOpenLibraryUpgrades} />
         <LibraryStat icon={ScanSearch} label="Unmatched files" value={formatCount(summary.unmatched_files)} tone="violet" onClick={() => selectMaintenanceTab('identity')} />
         <LibraryStat icon={AlertTriangle} label="Actionable identities" value={formatCount(summary.actionable_identities)} tone="amber" onClick={() => selectMaintenanceTab('identity')} />
@@ -604,7 +637,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
           {activeTab === 'storage' && (
             <>
               <MaintenancePagination pagination={audit.storage.pagination} onPageChange={(page) => setPages((state) => ({ ...state, storage: page }))} />
-              <DuplicatesCleanupTab groups={audit.storage.groups} selected={selected.storage} selectablePaths={selectableDuplicatePaths} onToggle={toggleSelected} onSelectPaths={setSelectedPaths} onDelete={requestDelete} />
+              <DuplicatesCleanupTab groups={audit.storage.groups} selected={selected.storage} duplicatePaths={duplicatePaths} onToggle={toggleDuplicateSelected} onSelectPaths={setSelectedPaths} onDelete={requestDelete} onPlay={onPlay} />
             </>
           )}
           {activeTab === 'identity' && (
@@ -724,8 +757,9 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   );
 }
 
-function DuplicatesCleanupTab({ groups, selected, selectablePaths, onToggle, onSelectPaths, onDelete }) {
+function DuplicatesCleanupTab({ groups, selected, duplicatePaths, onToggle, onSelectPaths, onDelete, onPlay }) {
   const visibleRecommended = groups.flatMap((group) => (group.files || []).filter((file) => file.recommendation === 'recommended').map((file) => file.path));
+  const selectedPaths = [...selected];
   return (
     <div className="cleanup-panel">
       <CleanupSelectionBar
@@ -734,31 +768,43 @@ function DuplicatesCleanupTab({ groups, selected, selectablePaths, onToggle, onS
         selectableCount={visibleRecommended.length}
         selectLabel="Select recommended"
         onSelectAll={() => onSelectPaths('storage', visibleRecommended, true)}
-        onClear={() => onSelectPaths('storage', selectablePaths, false)}
+        onClear={() => onSelectPaths('storage', duplicatePaths, false)}
+        onDeleteSelected={() => onDelete('storage', selectedPaths, `Move ${selected.size} selected file${selected.size === 1 ? '' : 's'} to Recycle Bin?`)}
       />
-      {groups.length ? groups.map((group) => (
-        <article className="duplicate-group-card" key={group.title}>
-          <header>
-            <div>
-              <h3>{group.title}</h3>
-              <p>{formatCount((group.files || []).length)} copies found. {formatCount(group.recommended_count)} removal recommendation{group.recommended_count === 1 ? '' : 's'}; the rest need a manual comparison.</p>
+      {groups.length ? groups.map((group) => {
+        const groupPaths = (group.files || []).map((file) => file.path);
+        return (
+          <article className="duplicate-group-card" key={group.key || group.title}>
+            <header>
+              <div>
+                <h3>{group.title}</h3>
+                <p>{formatCount((group.files || []).length)} copies found. {formatCount(group.recommended_count)} recommended removal{group.recommended_count === 1 ? '' : 's'}; play any copy before changing the selection.</p>
+                {group.needs_identity_review && <p className="cleanup-hint">The shared movie identity needs manual confirmation, so CP has not preselected a deletion.</p>}
+                {group.comparison_scope && <p className="cleanup-hint">Evidence scope: {group.comparison_scope}. Verdicts separate content equivalence, technical quality, and storage efficiency.</p>}
+              </div>
+            </header>
+            <div className="cleanup-file-list">
+              {(group.files || []).map((file) => (
+                <CleanupFileRow
+                  key={file.path}
+                  item={file}
+                  selected={selected.has(file.path)}
+                  selectable
+                  badge={duplicateVerdictLabel(file)}
+                  badgeTone={file.verdict_tone}
+                  onToggle={(checked) => onToggle(groupPaths, file.path, checked)}
+                  onDelete={() => onDelete('storage', [file.path], `Move ${file.filename} to Recycle Bin?`)}
+                  actions={(
+                    <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(file.path)}>
+                      <Play size={15} /> Play file
+                    </button>
+                  )}
+                />
+              ))}
             </div>
-          </header>
-          <div className="cleanup-file-list">
-            {(group.files || []).map((file) => (
-              <CleanupFileRow
-                key={file.path}
-                item={file}
-                selected={selected.has(file.path)}
-                selectable={file.role === 'candidate'}
-                badge={file.role === 'keep' ? 'Keep copy' : file.recommendation === 'recommended' ? 'Recommended removal' : 'Manual review'}
-                onToggle={(checked) => onToggle('storage', file.path, checked)}
-                onDelete={() => onDelete('storage', [file.path], `Move ${file.filename} to Recycle Bin?`)}
-              />
-            ))}
-          </div>
-        </article>
-      )) : <CleanupEmpty title="No duplicate groups match this view." text="Refresh or adjust search when new files are added." />}
+          </article>
+        );
+      }) : <CleanupEmpty title="No duplicate groups match this view." text="Refresh or adjust search when new files are added." />}
     </div>
   );
 }
@@ -790,7 +836,7 @@ function UnmatchedCleanupTab({ items, selected, rowStatus, onToggle, onPlay, onD
                 </div>
                 <div className="cleanup-path" title={item.path}>{item.path}</div>
                 <div className="cleanup-meta-row">
-                  <span className="chip chip-muted">{item.resolution || 'Unknown'}</span>
+                  <span className="chip chip-muted">{getQualityFactsLabel(item)}</span>
                   <span className="chip chip-muted">{item.rip_source || 'Unknown source'}</span>
                   <span className="chip chip-muted">{item.file_size || '?'}</span>
                   {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
@@ -834,7 +880,7 @@ function UnmatchedCleanupTab({ items, selected, rowStatus, onToggle, onPlay, onD
   );
 }
 
-function CleanupSelectionBar({ label, selectedCount, selectableCount, selectLabel = 'Select all', onSelectAll, onClear }) {
+function CleanupSelectionBar({ label, selectedCount, selectableCount, selectLabel = 'Select all', onSelectAll, onClear, onDeleteSelected }) {
   return (
     <div className="cleanup-selection-bar">
       <span>{label}</span>
@@ -842,7 +888,11 @@ function CleanupSelectionBar({ label, selectedCount, selectableCount, selectLabe
       <div>
         <button type="button" className="mini-action" onClick={onSelectAll} disabled={!selectableCount}>{selectLabel}</button>
         <button type="button" className="mini-action" onClick={onClear} disabled={!selectedCount}>Clear</button>
-
+        {onDeleteSelected && (
+          <button type="button" className="mini-action mini-action-danger" onClick={onDeleteSelected} disabled={!selectedCount}>
+            <Trash2 size={13} /> Delete selected ({formatCount(selectedCount)})
+          </button>
+        )}
       </div>
     </div>
   );
@@ -862,7 +912,7 @@ function MaintenancePagination({ pagination = {}, onPageChange }) {
   );
 }
 
-function CleanupFileRow({ item, selected, selectable, badge, onToggle, onDelete, actions }) {
+function CleanupFileRow({ item, selected, selectable, badge, badgeTone, onToggle, onDelete, actions }) {
   return (
     <article className="cleanup-file-row">
       <label className="cleanup-check">
@@ -872,17 +922,21 @@ function CleanupFileRow({ item, selected, selectable, badge, onToggle, onDelete,
       <div className="cleanup-file-main">
         <div className="cleanup-title-line">
           <h3>{item.filename}</h3>
-          <span className={cx('chip', badge === 'Keep copy' || badge === 'Recommended removal' ? 'status-owned' : 'chip-warning')}>{badge}</span>
+          <span className={cx('chip', duplicateVerdictClass(badgeTone || (badge === 'Recommended keep' ? 'success' : 'warning')))}>{badge}</span>
         </div>
         <div className="cleanup-path" title={item.path}>{item.path}</div>
         <div className="cleanup-meta-row">
-          <span className={cx('chip', isLowQuality(item.resolution) && 'chip-warning')}>{item.resolution || 'Unknown'}</span>
+          <span className={cx('chip', isLowQuality(item.resolution) && 'chip-warning')}>{getQualityFactsLabel(item)}</span>
+          {item.video_codec && <span className="chip chip-muted">{item.video_codec}{item.video_bit_depth ? ` · ${item.video_bit_depth}-bit` : ''}{item.video_bitrate ? ` · ${(item.video_bitrate / 1000000).toFixed(2)} Mbps` : ''}</span>}
+          {item.audio_codec && <span className="chip chip-muted">{item.audio_codec}{item.audio_channels ? ` · ${item.audio_channels} ch` : ''}</span>}
+          {item.duration_ms > 0 && <span className="chip chip-muted">{formatDurationMs(item.duration_ms)}</span>}
+          {item.comparison_uses_frame_rate && item.video_frame_rate > 0 && <span className="chip chip-muted">{Number(item.video_frame_rate).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} fps</span>}
+          {item.comparison_uses_aspect_ratio && item.aspect_delta_percent != null && <span className="chip chip-muted">Framing Δ {Number(item.aspect_delta_percent).toFixed(2)}%</span>}
           <span className="chip chip-muted">{item.rip_source || 'Unknown source'}</span>
           <span className="chip chip-muted">{item.size_human || item.file_size || '?'}</span>
           {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
-          <span className={cx('chip', item.plex_matched ? 'status-owned' : 'status-missing')}>{item.plex_matched ? 'Plex matched' : 'Plex unmatched'}</span>
-          {item.plex_title && <span className="chip chip-muted">{item.plex_title}{item.plex_year ? ` (${item.plex_year})` : ''}</span>}
         </div>
+        {item.reason && <p className={cx('cleanup-comparison-reason', `cleanup-comparison-${item.verdict_tone || 'warning'}`)}>{item.reason}</p>}
       </div>
       <div className="cleanup-row-actions">
         {actions}

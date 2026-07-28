@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import app
@@ -154,10 +155,11 @@ class AiControlApiTest(unittest.TestCase):
     def test_ai_control_library_items_include_card_ready_plex_metadata(self):
         previous_cache = dict(app._library_cache)
         previous_plex_cache = dict(app._plex_cache)
-        path = "E:\\Movies\\Mission Impossible 1996.mkv"
-        app._library_cache = {}
-        app._plex_cache = {
-            app._norm(path): {
+        previous_user_data = app._user_data_dir
+        with tempfile.TemporaryDirectory() as movies_root, tempfile.TemporaryDirectory() as data_root:
+            path = str(Path(movies_root) / "Mission Impossible 1996.1080p.mkv")
+            Path(path).write_bytes(b"movie")
+            plex_record = {
                 "plex_title": "Mission: Impossible",
                 "plex_year": "1996",
                 "plex_genres": ["Action", "Thriller"],
@@ -173,16 +175,28 @@ class AiControlApiTest(unittest.TestCase):
                 "plex_guid": "plex://movie/1",
                 "plex_poster": "/api/plex/image?path=poster",
             }
-        }
-
-        try:
-            with patch("app._iter_video_files", return_value=[("", "", os.path.basename(path), path)]), patch(
-                "app.os.path.getsize", return_value=2_400_000_000
-            ):
+            app._library_cache = {}
+            app._plex_cache = {app._norm(path): plex_record}
+            app._user_data_dir = data_root
+            store = app.AppMetadataStore(Path(data_root))
+            store.apply_plex_match(path, plex_record, facts={
+                "path": path,
+                "filename": os.path.basename(path),
+                "library_root": movies_root,
+                "size": Path(path).stat().st_size,
+                "modified_time": Path(path).stat().st_mtime,
+                "resolution": "1080p",
+                "quality_class": "1080p",
+                "quality_source": "filename_fallback",
+                "filename_quality_claim": "1080p",
+                "rip_source": "Unknown",
+            })
+            try:
                 item = app._ai_control_library_items()[0]
-        finally:
-            app._library_cache = previous_cache
-            app._plex_cache = previous_plex_cache
+            finally:
+                app._library_cache = previous_cache
+                app._plex_cache = previous_plex_cache
+                app._user_data_dir = previous_user_data
 
         self.assertEqual(item["title"], "Mission: Impossible")
         self.assertEqual(item["year"], "1996")

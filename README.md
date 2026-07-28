@@ -298,7 +298,9 @@ The app separates persistent user data from rebuildable cache:
 - `data/` stores user lists, viewing states, edited collections, followed releases, poster overrides, metadata corrections, identity audit state, app metadata records, the isolated IPTV database/provider configuration, and the isolated qBittorrent profile/jobs when the default user data folder is used.
 - `runtime/` in the portable release stores bundled third-party runtimes such as qBittorrent and FFmpeg.
 - `cache/` stores rebuildable TMDB detail/collection cache.
-- `res_cache.json` stores local resolution probe cache.
+- Measured media-file facts are stored in the SQL catalogue. A pre-existing
+  `res_cache.json` may remain on disk for rollback history, but the runtime
+  neither reads nor writes it.
 - `config.json` stores local settings and secrets.
 
 These files are user-specific and should not be committed.

@@ -13,6 +13,7 @@ class IPTVUITests(unittest.TestCase):
         cls.lists_source = (ROOT / "src" / "features" / "iptv" / "IPTVListsWorkspace.jsx").read_text(encoding="utf-8")
         cls.api_source = (ROOT / "src" / "api" / "iptv.js").read_text(encoding="utf-8")
         cls.player_source = (ROOT / "src" / "features" / "iptv" / "IPTVPlayer.jsx").read_text(encoding="utf-8")
+        cls.sync_policy_source = (ROOT / "src" / "features" / "iptv" / "iptvSyncPolicy.js").read_text(encoding="utf-8")
         cls.settings_source = (ROOT / "src" / "features" / "settings" / "SettingsWorkspace.jsx").read_text(encoding="utf-8")
 
     def test_iptv_is_a_first_class_lazy_workspace(self):
@@ -46,6 +47,9 @@ class IPTVUITests(unittest.TestCase):
         self.assertIn("username_hint", self.settings_source)
         self.assertIn("password: ''", self.settings_source)
         self.assertIn("Allow invalid provider TLS certificate", self.settings_source)
+        self.assertIn("IPTV Providers", self.settings_source)
+        self.assertIn("Save & Test", self.settings_source)
+        self.assertIn("settings-provider-rail", self.settings_source)
 
     def test_live_player_keeps_headroom_and_recovers_bounded_failures(self):
         self.assertIn("initialLiveManifestSize: 1", self.player_source)
@@ -59,6 +63,32 @@ class IPTVUITests(unittest.TestCase):
         self.assertIn("mediaRecoveryAttempts < 2", self.player_source)
         self.assertIn("hls?.startLoad()", self.player_source)
         self.assertIn("hls.recoverMediaError()", self.player_source)
+
+    def test_stale_provider_catalog_is_refreshed_once_on_workspace_open(self):
+        self.assertIn("24 * 60 * 60 * 1000", self.sync_policy_source)
+        self.assertIn("shouldAutoSyncIPTVCatalog(data)", self.workspace_source)
+        self.assertIn("autoSyncRequestedRef.current.add(activeProviderId)", self.workspace_source)
+        self.assertIn("const result = await iptvApi.sync(activeProviderId)", self.workspace_source)
+
+    def test_provider_categories_follow_catalog_generation_changes(self):
+        self.assertIn("iptvApi.categories(activeProviderId, activeTab)", self.workspace_source)
+        self.assertIn("[activeProviderId, activeTab, status?.configured, status?.generation]", self.workspace_source)
+        self.assertIn("category.category_id === selectedCategory", self.workspace_source)
+        self.assertIn("setCategoryId('')", self.workspace_source)
+        self.assertNotIn("if (!categories[browseKind]?.length)", self.workspace_source)
+
+    def test_every_frontend_iptv_data_method_requires_a_provider(self):
+        self.assertIn("function providerPath(providerId", self.api_source)
+        self.assertIn("if (!providerId) throw new Error", self.api_source)
+        self.assertNotIn("'/api/iptv/status'", self.api_source)
+        self.assertNotIn("'/api/iptv/config'", self.settings_source)
+
+    def test_provider_switch_stops_playback_and_resets_provider_state(self):
+        self.assertIn("async function switchProvider(providerId)", self.workspace_source)
+        self.assertIn("resetProviderState()", self.workspace_source)
+        self.assertIn("iptvApi.stopPlayback(previousPlayback.provider_id", self.workspace_source)
+        self.assertIn("iptvApi.selectProvider(providerId)", self.workspace_source)
+        self.assertIn("activeProviderRef.current !== requestedProviderId", self.workspace_source)
 
 
 if __name__ == "__main__":

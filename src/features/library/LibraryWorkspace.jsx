@@ -1,11 +1,11 @@
 import {
-  AlertTriangle, CirclePlus, Clapperboard, Copy, Database, Folder, Info, Library,
+  AlertTriangle, ChevronDown, CirclePlus, Clapperboard, Copy, Database, Folder, Library,
   Link as LinkIcon, Loader2, Play, RefreshCcw, Search, Trash2, Wand2, X
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { announceLibraryChanged, CATALOG_GENERATION_CHANGED_EVENT, observeCatalogGeneration } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import ExportCopyDialog from '../../components/ExportCopyDialog.jsx';
@@ -16,17 +16,24 @@ import PersonSearchCard from '../../components/PersonSearchCard.jsx';
 import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
+import WorkspacePathBar from '../../components/WorkspacePathBar.jsx';
 import { LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
 import Pagination from '../../components/Pagination.jsx';
 import { ConfirmDialog, LibraryRenameModal, LibraryStat } from '../../components/LibraryControls.jsx';
+import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, getUniqueOptions } from '../../utils/appUtils.js';
 import {
   applyPosterOverrideToLibraryItems, buildLibraryPeopleIndex, buildLibraryViewModel,
-  getLocaleTag, getMovieIdentity, getTmdbCacheKey, isLowQuality, listLibraryCoverage,
+  getLocaleTag, getMovieIdentity, getQualityFactsLabel, getQualityLabel, getTmdbCacheKey, isLowQuality, listLibraryCoverage,
   listsForItem, movieHasSystemState, movieIdentityKey, moviePayload, rootLabel
 } from '../../utils/libraryUtils.js';
 
 const LIBRARY_KEYWORD_PAGE_SIZE = 50;
+
+function sameLibraryPath(left, right) {
+  return String(left || '').replaceAll('\\', '/').toLowerCase()
+    === String(right || '').replaceAll('\\', '/').toLowerCase();
+}
 
 function LibraryPeopleSearchResults({ people, query, onOpenFilmography }) {
   if (!query.trim()) {
@@ -125,7 +132,21 @@ function libraryFilterQuery(filters, page, pageSize, forceScan = false) {
   return `/api/library?${params.toString()}`;
 }
 
-export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer, notify, query, setQuery, onReviewUnmatched, onOpenDiscoverPerson, filterRequest, onFilterRequestConsumed }) {
+export default function LibraryWorkspace({
+  onPlay,
+  onFindTorrent,
+  onOpenTrailer,
+  notify,
+  query,
+  setQuery,
+  onReviewUnmatched,
+  onOpenDiscoverPerson,
+  onOpenDiscoverCollection = () => {},
+  filterRequest,
+  onFilterRequestConsumed,
+  fileDetailsRequest,
+  onFileDetailsRequestConsumed
+}) {
   const pageSize = 40;
   const [items, setItems] = useState([]);
   const [fileItems, setFileItems] = useState([]);
@@ -152,15 +173,22 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   const [viewingStateFilter, setViewingStateFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [expandedPath, setExpandedPath] = useState('');
+  const [focusedFilePath, setFocusedFilePath] = useState('');
+  const [focusedMovieItem, setFocusedMovieItem] = useState(null);
+  const [libraryHistory, setLibraryHistory] = useState([]);
+  const [libraryCurrentLabel, setLibraryCurrentLabel] = useState('');
   const [tmdbCache, setTmdbCache] = useState({});
-  const [collectionCache, setCollectionCache] = useState({});
+  const {
+    clear: clearCollectionCache,
+    getView: getCollectionView,
+    load: loadMovieCollection,
+    storeLoaded: storeLoadedCollection
+  } = useMovieCollectionCache();
   const [userLists, setUserLists] = useState([]);
   const [librarySearchKind, setLibrarySearchKind] = useState('movies');
   const [roleFilter, setRoleFilter] = useState(null);
   const [keywordFilter, setKeywordFilter] = useState(null);
-  const [collectionFilter, setCollectionFilter] = useState(null);
   const [listFilter, setListFilter] = useState(null);
-  const [metadataStatus, setMetadataStatus] = useState('');
   const [collectionEditor, setCollectionEditor] = useState(null);
   const [listEditor, setListEditor] = useState(null);
   const [listsManagerOpen, setListsManagerOpen] = useState(false);
@@ -192,23 +220,24 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   const libraryRequestSeq = useRef(0);
   const libraryKeywordRequestSeq = useRef(0);
   const peopleLoadPromiseRef = useRef(null);
+  const movieViewStateRef = useRef(null);
 
   useEffect(() => {
     const clearDetailCaches = () => {
       setTmdbCache(markMovieDetailsCacheStale);
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
     return () => window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   useEffect(() => {
     const clearCurationCaches = () => {
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
     return () => window.removeEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   useEffect(() => {
     if (!filterRequest?.id) return;
@@ -217,6 +246,12 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     setQualityFilter(filterRequest.quality || 'all');
     onFilterRequestConsumed?.(filterRequest.id);
   }, [filterRequest, onFilterRequestConsumed]);
+
+  useEffect(() => {
+    if (!fileDetailsRequest?.id || !fileDetailsRequest.path) return;
+    openFileInventory(fileDetailsRequest.path);
+    onFileDetailsRequestConsumed?.(fileDetailsRequest.id);
+  }, [fileDetailsRequest, onFileDetailsRequestConsumed]);
 
   const serverFilters = useMemo(() => ({
     query,
@@ -237,10 +272,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     keyword_id: keywordFilter?.tmdb_id || '',
     keyword_name: keywordFilter?.tmdb_id ? '' : keywordFilter?.name || '',
     keyword_query: '',
-    collection_id: collectionFilter?.id || '',
-    collection_paths: collectionFilter?.owned_paths || [],
+    collection_id: '',
+    collection_paths: [],
     list_id: listFilter?.id || ''
-  }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, collectionFilter, listFilter]);
+  }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
 
   const loadLibrary = useCallback(async (forceScan = false, options = {}) => {
     const requestSeq = libraryRequestSeq.current + 1;
@@ -480,6 +515,17 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     stats
   } = useMemo(() => {
     if (mode === 'movie') {
+      if (focusedMovieItem) {
+        return {
+          filteredItems: [focusedMovieItem],
+          totalPages: 1,
+          safePage: 1,
+          pageStart: 0,
+          pageEnd: 1,
+          visibleItems: [focusedMovieItem],
+          stats: libraryResult.stats
+        };
+      }
       return {
         filteredItems: items,
         totalPages: libraryResult.total_pages,
@@ -487,6 +533,19 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         pageStart: libraryResult.page_start,
         pageEnd: libraryResult.page_end,
         visibleItems: items,
+        stats: libraryResult.stats
+      };
+    }
+    if (focusedFilePath) {
+      const focusedItem = activeItems.find((item) => sameLibraryPath(item.path, focusedFilePath));
+      const visible = focusedItem ? [focusedItem] : [];
+      return {
+        filteredItems: visible,
+        totalPages: 1,
+        safePage: 1,
+        pageStart: 0,
+        pageEnd: visible.length,
+        visibleItems: visible,
         stats: libraryResult.stats
       };
     }
@@ -509,14 +568,13 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     sizeFilter,
     mode,
     roleFilter,
-    collectionFilter,
     listFilter,
     lists: userLists,
     viewingStateFilter,
     tmdbCache,
     showAdultMovies
     });
-  }, [activeItems, items, libraryResult, query, qualityFilter, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, collectionFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
+  }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, qualityFilter, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
 
   const selectedPageItems = useMemo(() => (
     items.filter((item) => selectedLibraryKeys.has(librarySelectionKey(item)))
@@ -676,11 +734,148 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
     setViewingStateFilter('all');
     setRoleFilter(null);
     setKeywordFilter(null);
-    setCollectionFilter(null);
     setListFilter(null);
-    setMetadataStatus('');
+    setFocusedMovieItem(null);
+    setFocusedFilePath('');
+    setLibraryHistory([]);
+    setLibraryCurrentLabel('');
     setSelectedLibraryKeys(new Set());
     resetLibraryPage();
+  }
+
+  function captureLibraryMovieView() {
+    return {
+      query,
+      qualityFilter,
+      identityFilter,
+      sortMode,
+      genreFilter,
+      resolutionFilter,
+      sourceFilter,
+      languageFilter,
+      countryFilter,
+      yearFrom,
+      yearTo,
+      minRating,
+      sizeFilter,
+      viewingStateFilter,
+      librarySearchKind,
+      roleFilter,
+      keywordFilter,
+      listFilter,
+      currentPage,
+      expandedPath,
+      focusedMovieItem
+    };
+  }
+
+  function restoreLibraryMovieView(snapshot = {}) {
+    setQuery(snapshot.query || '');
+    setQualityFilter(snapshot.qualityFilter || 'all');
+    setIdentityFilter(snapshot.identityFilter || 'all');
+    setSortMode(snapshot.sortMode || 'added');
+    setGenreFilter(snapshot.genreFilter || 'all');
+    setResolutionFilter(snapshot.resolutionFilter || 'all');
+    setSourceFilter(snapshot.sourceFilter || 'all');
+    setLanguageFilter(snapshot.languageFilter || 'all');
+    setCountryFilter(snapshot.countryFilter || 'all');
+    setYearFrom(snapshot.yearFrom || '');
+    setYearTo(snapshot.yearTo || '');
+    setMinRating(snapshot.minRating || 'all');
+    setSizeFilter(snapshot.sizeFilter || 'all');
+    setViewingStateFilter(snapshot.viewingStateFilter || 'all');
+    setLibrarySearchKind(snapshot.librarySearchKind || 'movies');
+    setRoleFilter(snapshot.roleFilter || null);
+    setKeywordFilter(snapshot.keywordFilter || null);
+    setListFilter(snapshot.listFilter || null);
+    setCurrentPage(snapshot.currentPage || 1);
+    setExpandedPath(snapshot.expandedPath || '');
+    setFocusedMovieItem(snapshot.focusedMovieItem || null);
+    setFocusedFilePath('');
+    setMode('movie');
+  }
+
+  function rememberMovieViewState() {
+    if (mode !== 'movie') return;
+    movieViewStateRef.current = {
+      snapshot: captureLibraryMovieView(),
+      history: libraryHistory,
+      currentLabel: libraryCurrentLabel
+    };
+  }
+
+  function openFileInventory(path = '') {
+    rememberMovieViewState();
+    setMode('file');
+    setFocusedMovieItem(null);
+    setFocusedFilePath(path);
+    setCurrentPage(1);
+    setExpandedPath(path || '');
+  }
+
+  function openRememberedMovieView() {
+    const remembered = movieViewStateRef.current;
+    if (remembered?.snapshot) {
+      restoreLibraryMovieView(remembered.snapshot);
+      setLibraryHistory(remembered.history || []);
+      setLibraryCurrentLabel(remembered.currentLabel || '');
+      return;
+    }
+    setMode('movie');
+    setFocusedFilePath('');
+    resetLibraryPage();
+  }
+
+  function pushLibraryContext(label, applyContext) {
+    const previous = {
+      ...captureLibraryMovieView(),
+      label: libraryCurrentLabel || 'Library Home'
+    };
+    setLibraryHistory((history) => [...history, previous]);
+    setLibraryCurrentLabel(label);
+    setFocusedMovieItem(null);
+    applyContext();
+  }
+
+  function goBackLibraryPath() {
+    const previous = libraryHistory.at(-1);
+    if (!previous) return;
+    setLibraryHistory((history) => history.slice(0, -1));
+    setLibraryCurrentLabel(previous.label === 'Library Home' ? '' : previous.label);
+    restoreLibraryMovieView(previous);
+  }
+
+  function openLibraryCrumb(index) {
+    const target = libraryHistory[index];
+    if (!target) return;
+    setLibraryHistory((history) => history.slice(0, index));
+    setLibraryCurrentLabel(target.label === 'Library Home' ? '' : target.label);
+    restoreLibraryMovieView(target);
+  }
+
+  function openMovieForFile(item) {
+    if (!item?.metadata_accepted && !item?.canonical_metadata?.accepted) return;
+    const remembered = movieViewStateRef.current;
+    if (remembered?.snapshot) {
+      setLibraryHistory([
+        ...(remembered.history || []),
+        {
+          ...remembered.snapshot,
+          label: remembered.currentLabel || 'Library Home'
+        }
+      ]);
+    } else {
+      setLibraryHistory([]);
+    }
+    const identity = getMovieIdentity(item);
+    setLibraryCurrentLabel(identity.year ? `${identity.title} (${identity.year})` : identity.title);
+    setMode('movie');
+    setLibrarySearchKind('movies');
+    setFocusedFilePath('');
+    setFocusedMovieItem(item);
+    setCurrentPage(1);
+    setExpandedPath(item.path);
+    loadLibraryDetails(item);
   }
 
   function goToLibraryPage(page) {
@@ -692,17 +887,15 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   async function loadLibraryDetails(item) {
     const cacheKey = getTmdbCacheKey(item);
     let details = tmdbCache[cacheKey];
-    if (details && !details.loading && !details.error && !details.stale) return details;
+    if (details && !details.loading && !details.error && !details.stale) {
+      loadMovieCollection(details);
+      return details;
+    }
     setTmdbCache((cache) => ({ ...cache, [cacheKey]: { loading: true, cast: [], trailer_url: '' } }));
     try {
       details = await fetchCanonicalMovieDetails(item, item);
       setTmdbCache((cache) => ({ ...cache, [cacheKey]: details }));
-      const collectionUrl = movieCollectionUrl(details);
-      if (collectionUrl && !collectionCache[details.collection.id]) {
-        fetchCurationJson(collectionUrl)
-          .then((collectionData) => setCollectionCache((cache) => ({ ...cache, [details.collection.id]: collectionData })))
-          .catch(() => {});
-      }
+      loadMovieCollection(details);
     } catch (detailsError) {
       details = { cast: [], trailer_url: '', error: detailsError.message };
       setTmdbCache((cache) => ({ ...cache, [cacheKey]: details }));
@@ -723,17 +916,19 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       notify(`People index unavailable: ${peopleError.message}`, 'error');
       return;
     }
-    setRoleFilter({
-      role,
-      id: person.id || '',
-      name: person.name || '',
-      localOnly: Boolean(options.localOnly)
+    const roleLabel = role === 'writer' ? 'Writer' : role === 'director' ? 'Director' : 'Actor';
+    pushLibraryContext(`${roleLabel}: ${person.name}`, () => {
+      setRoleFilter({
+        role,
+        id: person.id || '',
+        name: person.name || '',
+        localOnly: Boolean(options.localOnly)
+      });
+      setKeywordFilter(null);
+      setListFilter(null);
+      setQuery('');
+      resetLibraryPage();
     });
-    setKeywordFilter(null);
-    setQuery('');
-    setCollectionFilter(null);
-    resetLibraryPage();
-    setMetadataStatus('');
   }
 
   function applyLibraryPersonFilter(person, role) {
@@ -743,62 +938,24 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
 
   function applyLibraryKeywordFilter(keyword) {
     if (!keyword?.name) return;
-    setLibrarySearchKind('movies');
-    setKeywordFilter(keyword);
-    setRoleFilter(null);
-    setCollectionFilter(null);
-    setListFilter(null);
-    setQuery('');
-    setMetadataStatus('');
-    resetLibraryPage();
-  }
-
-  async function applyCollectionFilter(collection) {
-    if (!collection?.id) return;
-    setRoleFilter(null);
-    setKeywordFilter(null);
-    setListFilter(null);
-    setQuery('');
-    resetLibraryPage();
-    setMetadataStatus(`Loading ${collection.name} collection...`);
-    setCollectionFilter({ ...collection, parts: [] });
-    try {
-      const data = await fetchCurationJson(`/api/library/collection/${encodeURIComponent(collection.id)}`);
-      setCollectionCache((cache) => ({ ...cache, [data.id || collection.id]: data }));
-      setCollectionFilter({
-        id: data.id || collection.id,
-        name: data.name || collection.name,
-        parts: data.parts || [],
-        owned_paths: data.owned_paths || [],
-        owned_count: Number(data.owned_count || 0),
-        unresolved_count: Number(data.unresolved_count || 0),
-        unresolved_parts: data.unresolved_parts || [],
-        conflicts: data.conflicts || [],
-        source: data.source,
-        is_edited: data.is_edited
-      });
-      setMetadataStatus('');
-    } catch (collectionError) {
-      setMetadataStatus(`Collection unavailable: ${collectionError.message}`);
-    }
-  }
-
-  function clearMetadataFilters() {
-    setRoleFilter(null);
-    setKeywordFilter(null);
-    setCollectionFilter(null);
-    setListFilter(null);
-    setMetadataStatus('');
-    resetLibraryPage();
+    pushLibraryContext(`Keyword: ${keyword.name}`, () => {
+      setLibrarySearchKind('movies');
+      setKeywordFilter(keyword);
+      setRoleFilter(null);
+      setListFilter(null);
+      setQuery('');
+      resetLibraryPage();
+    });
   }
 
   function applyListFilter(list) {
-    setRoleFilter(null);
-    setKeywordFilter(null);
-    setCollectionFilter(null);
-    setListFilter(list);
-    setQuery('');
-    resetLibraryPage();
+    pushLibraryContext(`List: ${list.name}`, () => {
+      setRoleFilter(null);
+      setKeywordFilter(null);
+      setListFilter(list);
+      setQuery('');
+      resetLibraryPage();
+    });
   }
 
   async function saveCollectionOverride(collection, parts) {
@@ -812,8 +969,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
       })
     });
     const data = await fetchCurationJson(`/api/library/collection/${encodeURIComponent(collection.id)}`);
-    setCollectionCache((cache) => ({ ...cache, [collection.id]: data }));
-    setCollectionFilter((filter) => (filter?.id === collection.id ? { ...data } : filter));
+    storeLoadedCollection({
+      detail_source: 'library_sql',
+      collection: { id: collection.id }
+    }, data);
     setCollectionEditor(null);
     notify(`Collection saved as user edited`);
   }
@@ -821,8 +980,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
   async function resetCollection(collection) {
     await fetchCurationJson(`/api/user/collection/${encodeURIComponent(collection.id)}/reset`, { method: 'POST' });
     const data = await fetchCurationJson(`/api/library/collection/${encodeURIComponent(collection.id)}?refresh=1`);
-    setCollectionCache((cache) => ({ ...cache, [collection.id]: data }));
-    setCollectionFilter((filter) => (filter?.id === collection.id ? { ...data } : filter));
+    storeLoadedCollection({
+      detail_source: 'library_sql',
+      collection: { id: collection.id }
+    }, data);
     notify('Collection reset to TMDB');
   }
 
@@ -977,10 +1138,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         <div className="library-header-actions">
           <div className="library-view-row">
             <div className="segmented-control library-view-switch" aria-label="Library mode">
-              <button type="button" className={cx(mode === 'movie' && 'segment-active')} onClick={() => { setMode('movie'); resetLibraryPage(); }}>
+              <button type="button" className={cx(mode === 'movie' && 'segment-active')} onClick={openRememberedMovieView}>
                 <Clapperboard size={18} /> Movie View
               </button>
-              <button type="button" className={cx(mode === 'file' && 'segment-active')} onClick={() => { setMode('file'); resetLibraryPage(); }}>
+              <button type="button" className={cx(mode === 'file' && 'segment-active')} onClick={() => openFileInventory()}>
                 <Folder size={18} /> File View
               </button>
             </div>
@@ -1170,48 +1331,26 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         </div>
       )}
 
-      {(roleFilter || keywordFilter || collectionFilter || listFilter || metadataStatus) && (
+      {mode === 'movie' && (
+        <WorkspacePathBar
+          ariaLabel="Library path"
+          history={libraryHistory}
+          currentLabel={libraryCurrentLabel}
+          resetLabel="Library Home"
+          onBack={goBackLibraryPath}
+          onReset={resetAllLibraryFilters}
+          onCrumb={openLibraryCrumb}
+        />
+      )}
+
+      {listMissingCoverage?.missingCount > 0 && (
         <div className="metadata-filter-bar">
-          {metadataStatus && (
-            <span className="metadata-filter-status">
-              <Loader2 size={14} className={metadataStatus.startsWith('Loading') ? 'spin' : ''} />
-              {metadataStatus}
-            </span>
-          )}
-          {roleFilter && (
-            <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
-              {roleFilter.role === 'writer' ? 'Writer' : roleFilter.role === 'director' ? 'Director' : 'Actor'}: {roleFilter.name}
-              <X size={14} />
-            </button>
-          )}
-          {keywordFilter && (
-            <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
-              Keyword: {keywordFilter.name}
-              <X size={14} />
-            </button>
-          )}
-          {collectionFilter && (
-            <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
-              Collection: {collectionFilter.name}
-              {Number.isFinite(collectionFilter.owned_count) && ` · ${formatCount(collectionFilter.owned_count)} owned`}
-              {collectionFilter.unresolved_count > 0 && ` · ${formatCount(collectionFilter.unresolved_count)} need identity review`}
-              <X size={14} />
-            </button>
-          )}
-          {listFilter && (
-            <button type="button" className="metadata-filter-chip" onClick={clearMetadataFilters}>
-              List: {listFilter.name}
-              <X size={14} />
-            </button>
-          )}
-          {listMissingCoverage?.missingCount > 0 && (
-            <span className="list-missing-warning">
-              <AlertTriangle size={14} />
-              {formatCount(listMissingCoverage.matched)} of {formatCount(listMissingCoverage.total)} list movies found in Library.
-              {' '}Missing: {listMissingCoverage.missingMovies.slice(0, 5).map((movie) => movie.title || 'Untitled').join(', ')}
-              {listMissingCoverage.missingCount > 5 && `, +${formatCount(listMissingCoverage.missingCount - 5)} more`}
-            </span>
-          )}
+          <span className="list-missing-warning">
+            <AlertTriangle size={14} />
+            {formatCount(listMissingCoverage.matched)} of {formatCount(listMissingCoverage.total)} list movies found in Library.
+            {' '}Missing: {listMissingCoverage.missingMovies.slice(0, 5).map((movie) => movie.title || 'Untitled').join(', ')}
+            {listMissingCoverage.missingCount > 5 && `, +${formatCount(listMissingCoverage.missingCount - 5)} more`}
+          </span>
         </div>
       )}
 
@@ -1260,7 +1399,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
             </div>
           )}
         <Pagination
-            total={mode === 'movie' ? libraryResult.total : filteredItems.length}
+            total={focusedMovieItem ? visibleItems.length : mode === 'movie' ? libraryResult.total : filteredItems.length}
             page={safePage}
             totalPages={totalPages}
             pageStart={pageStart}
@@ -1269,45 +1408,53 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
           />
           {visibleItems.length ? (
             <div className={cx('library-results', mode === 'movie' ? 'library-movie-results' : 'library-file-results')}>
-              {visibleItems.map((item) => (
-                mode === 'movie' ? (
-                  <LibraryMovieCard
-                    key={item.path}
-                    item={item}
-                    expanded={expandedPath === item.path}
-                    details={tmdbCache[getTmdbCacheKey(item)]}
-                    collection={(() => {
-                      const details = tmdbCache[getTmdbCacheKey(item)];
-                      return details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
-                    })()}
-                    itemLists={listsForItem(item, userLists)}
-                    onToggle={() => {
-                      const next = expandedPath === item.path ? '' : item.path;
-                      setExpandedPath(next);
-                      if (next) loadLibraryDetails(item);
-                    }}
-                    onPlay={onPlay}
-                    onFindTorrent={onFindTorrent}
-                    onTrailer={() => openLibraryTrailer(item)}
-                    onPersonFilter={applyRoleFilter}
-                    onPersonDiscover={onOpenDiscoverPerson}
-                    onCollectionFilter={applyCollectionFilter}
-                    onEditCollection={(collection) => setCollectionEditor({ collection, item })}
-                    onResetCollection={resetCollection}
-                    onListFilter={applyListFilter}
-                    onEditLists={() => setListEditor({ item })}
-                    onRemoveFromList={(listId) => removeMovieFromList(listId, item)}
-                    onEditPoster={() => setPosterEditor({ item, path: item.path, title: getMovieIdentity(item).title })}
-                    onCorrectMetadata={() => setMetadataCorrection(item)}
-                    watched={movieHasSystemState(item, userLists, 'watched')}
-                    watchlisted={movieHasSystemState(item, userLists, 'watchlist')}
-                    onToggleWatched={() => toggleSystemList('watched', item)}
-                    onToggleWatchlist={() => toggleSystemList('watchlist', item)}
-                    showOwnedBadge={false}
-                    selected={selectedLibraryKeys.has(librarySelectionKey(item))}
-                    onSelect={(checked) => toggleLibrarySelection(item, checked)}
-                  />
-                ) : (
+              {visibleItems.map((item) => {
+                if (mode === 'movie') {
+                  const details = tmdbCache[getTmdbCacheKey(item)];
+                  const collectionView = getCollectionView(details);
+                  const identity = getMovieIdentity(item);
+                  return (
+                    <LibraryMovieCard
+                      key={item.path}
+                      item={item}
+                      expanded={expandedPath === item.path}
+                      details={details}
+                      collection={collectionView.data}
+                      collectionStatus={collectionView.status}
+                      collectionError={collectionView.error}
+                      itemLists={listsForItem(item, userLists)}
+                      onToggle={() => {
+                        const next = expandedPath === item.path ? '' : item.path;
+                        setExpandedPath(next);
+                        if (next) loadLibraryDetails(item);
+                      }}
+                      onPlay={onPlay}
+                      onFindTorrent={onFindTorrent}
+                      onTrailer={() => openLibraryTrailer(item)}
+                      onPersonFilter={applyRoleFilter}
+                      onPersonDiscover={onOpenDiscoverPerson}
+                      onCollectionBrowse={(collection) => onOpenDiscoverCollection(identity, collection)}
+                      onCollectionRetry={() => loadMovieCollection(details, { force: true })}
+                      onEditCollection={(collection) => setCollectionEditor({ collection, item })}
+                      onResetCollection={resetCollection}
+                      onListFilter={applyListFilter}
+                      onEditLists={() => setListEditor({ item })}
+                      onRemoveFromList={(listId) => removeMovieFromList(listId, item)}
+                      onEditPoster={() => setPosterEditor({ item, path: item.path, title: identity.title })}
+                      onCorrectMetadata={() => setMetadataCorrection(item)}
+                      onOpenFileDetails={(owned) => openFileInventory(owned.path)}
+                      watched={movieHasSystemState(item, userLists, 'watched')}
+                      watchlisted={movieHasSystemState(item, userLists, 'watchlist')}
+                      onToggleWatched={() => toggleSystemList('watched', item)}
+                      onToggleWatchlist={() => toggleSystemList('watchlist', item)}
+                      showOwnedBadge={false}
+                      conciseFileFacts
+                      selected={selectedLibraryKeys.has(librarySelectionKey(item))}
+                      onSelect={(checked) => toggleLibrarySelection(item, checked)}
+                    />
+                  );
+                }
+                return (
                   <LibraryFileRow
                     key={item.path}
                     item={item}
@@ -1317,9 +1464,10 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
                     onFindTorrent={onFindTorrent}
                     onRename={() => setRenameTarget(item)}
                     onDelete={() => setDeleteTarget(item)}
+                    onOpenMovieView={() => openMovieForFile(item)}
                   />
-                )
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="empty-state library-empty">
@@ -1410,7 +1558,7 @@ export default function LibraryWorkspace({ onPlay, onFindTorrent, onOpenTrailer,
         <MetadataCorrectionModal
           item={metadataCorrection}
           notify={notify}
-          resetLabel="Reset to provider metadata"
+          resetLabel="Reset display title/year"
           onClose={() => setMetadataCorrection(null)}
           onSaved={() => loadLibrary(false)}
         />
@@ -1711,11 +1859,93 @@ function MyListsManagerModal({ lists, items, onClose, onCreate, onRename, onDele
 }
 
 
-function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRename, onDelete }) {
+function formatMediaDecimal(value, maximumFractionDigits = 3) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number <= 0) return '';
+  return number.toFixed(maximumFractionDigits).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatMediaBitrate(value) {
+  const bitsPerSecond = Number(value || 0);
+  if (!Number.isFinite(bitsPerSecond) || bitsPerSecond <= 0) return 'Unavailable';
+  if (bitsPerSecond >= 1000000) {
+    return `${formatMediaDecimal(bitsPerSecond / 1000000, 2)} Mbps`;
+  }
+  return `${Math.round(bitsPerSecond / 1000)} kbps`;
+}
+
+function formatMediaDuration(value) {
+  const totalSeconds = Math.round(Number(value || 0) / 1000);
+  if (!totalSeconds) return 'Unavailable';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours ? `${hours}h` : '', `${minutes}m`, `${seconds}s`].filter(Boolean).join(' ');
+}
+
+function formatMediaRotation(value) {
+  const degrees = Number(value || 0);
+  if (!Number.isFinite(degrees) || degrees === 0) return 'None';
+  const magnitude = Math.abs(degrees).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+  return `${degrees < 0 ? '-' : ''}${magnitude}°`;
+}
+
+function formatProbeStatus(item) {
+  const labels = {
+    ok: 'Measured',
+    unprobed: 'Not measured yet',
+    missing: 'File unavailable',
+    unstable: 'File changed during inspection',
+    error: 'Measurement failed'
+  };
+  const status = String(item.probe_status || 'unprobed');
+  const measuredAt = Number(item.probed_at || 0);
+  const timestamp = measuredAt > 0 ? new Date(measuredAt * 1000).toLocaleString() : '';
+  return `${labels[status] || status}${timestamp ? ` · ${timestamp}` : ''}`;
+}
+
+function describeFileQualityEvidence(item) {
+  const claim = item.filename_quality_claim && item.filename_quality_claim !== 'Unknown'
+    ? item.filename_quality_claim
+    : '';
+  const measuredClass = item.quality_class || item.resolution || 'Unknown';
+  const dimensions = item.video_width && item.video_height
+    ? `${item.video_width} × ${item.video_height}`
+    : '';
+
+  if (item.quality_conflict) {
+    return `Conflict: filename claims ${claim || 'no quality'}; measured ${dimensions || 'dimensions'} classify as ${measuredClass}.`;
+  }
+  if (item.quality_source === 'filename_fallback') {
+    return `${claim ? `Filename claims ${claim}` : 'No measured dimensions'}; stream measurement is unavailable, so this classification is provisional.`;
+  }
+  if (dimensions && item.quality_nonstandard) {
+    return `${dimensions} is a non-standard frame size classified in the ${measuredClass} quality class.`;
+  }
+  if (dimensions && claim) {
+    return `Filename claim ${claim} agrees with the measured ${dimensions} frame.`;
+  }
+  if (dimensions) {
+    return `${measuredClass} is based on the measured ${dimensions} frame.`;
+  }
+  return 'Quality evidence is unavailable until this file is measured.';
+}
+
+function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRename, onDelete, onOpenMovieView }) {
   const identity = getMovieIdentity(item);
   const canonical = item.canonical_metadata || {};
   const lowQuality = isLowQuality(item.resolution);
   const movieForSearch = { title: identity.title, year: identity.year, imdb_id: item.imdb_id || '', tmdb_id: item.tmdb_id || '' };
+  const videoFormat = [
+    item.video_codec,
+    item.video_profile,
+    item.video_bit_depth ? `${item.video_bit_depth}-bit` : ''
+  ].filter(Boolean).join(' · ') || 'Unavailable';
+  const audioFormat = [
+    item.audio_codec,
+    item.audio_channels ? `${formatMediaDecimal(item.audio_channels)} channels` : '',
+    item.audio_bitrate ? formatMediaBitrate(item.audio_bitrate) : ''
+  ].filter(Boolean).join(' · ') || 'Unavailable';
   return (
     <article className={cx('library-file-row', expanded && 'library-file-row-expanded')}>
       <div className="file-row-main">
@@ -1725,7 +1955,7 @@ function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRen
         </div>
         <div className="file-row-path" title={item.path}>{item.path}</div>
         <div className="file-row-meta">
-          <span className={cx('chip', lowQuality && 'chip-warning')}>{item.resolution || 'Unknown'}</span>
+          <span className={cx('chip', lowQuality && 'chip-warning')}>{getQualityFactsLabel(item)}</span>
           <span className="chip chip-muted">{item.rip_source || 'Unknown source'}</span>
           <span className="chip chip-muted">{item.size_human || '?'}</span>
           {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
@@ -1744,11 +1974,27 @@ function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRen
         <button type="button" className="btn btn-secondary" onClick={onRename}>
           <Clapperboard size={15} /> Rename
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onOpenMovieView}
+          disabled={!item.metadata_accepted && !canonical.accepted}
+          title={!item.metadata_accepted && !canonical.accepted ? 'This file has no accepted Movie View identity yet.' : 'Open this movie in Movie View'}
+        >
+          <Clapperboard size={15} /> Movie View
+        </button>
         <button type="button" className="btn btn-danger" onClick={onDelete}>
           <Trash2 size={15} /> Delete
         </button>
-        <button type="button" className="btn btn-secondary" onClick={onToggle}>
-          <Info size={15} /> {expanded ? 'Less' : 'Details'}
+        <button
+          type="button"
+          className="btn btn-secondary file-row-expand"
+          onClick={onToggle}
+          aria-label={expanded ? `Collapse file details for ${item.filename}` : `Expand file details for ${item.filename}`}
+          aria-expanded={expanded}
+          title={expanded ? 'Collapse file details' : 'Expand file details'}
+        >
+          <ChevronDown size={17} />
         </button>
       </div>
       {expanded && (
@@ -1762,6 +2008,30 @@ function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRen
           <div><span>Locale</span><strong>{getLocaleTag(item) || 'Unknown'}</strong></div>
           <div><span>Size</span><strong>{item.size_human || '?'} ({formatCount(item.size)} bytes)</strong></div>
           <div><span>Genres</span><strong>{(canonical.genres?.length ? canonical.genres : item.plex_genres || []).join(', ') || 'None'}</strong></div>
+          <div className="file-expanded-section-title">
+            <span>Physical file facts</span>
+            <strong>Measured from the primary video and audio streams</strong>
+          </div>
+          <div><span>Measured dimensions</span><strong>{item.video_width && item.video_height ? `${item.video_width} × ${item.video_height}` : 'Unavailable'}</strong></div>
+          <div><span>Quality classification</span><strong>{item.quality_class || getQualityLabel(item)}</strong></div>
+          <div><span>Video format</span><strong>{videoFormat}</strong></div>
+          <div><span>Video bitrate</span><strong>{formatMediaBitrate(item.video_bitrate)}</strong></div>
+          <div><span>Duration</span><strong>{formatMediaDuration(item.duration_ms)}</strong></div>
+          <div className="file-expanded-secondary-fact"><span>Frame rate</span><strong>{formatMediaDecimal(item.video_frame_rate) ? `${formatMediaDecimal(item.video_frame_rate)} fps` : 'Unavailable'}</strong></div>
+          <div className="file-expanded-secondary-fact"><span>Display aspect ratio</span><strong>{formatMediaDecimal(item.display_aspect_ratio) ? `${formatMediaDecimal(item.display_aspect_ratio)}:1` : 'Unavailable'}</strong></div>
+          <div className="file-expanded-secondary-fact"><span>Rotation</span><strong>{formatMediaRotation(item.rotation_degrees)}</strong></div>
+          <div><span>Primary audio</span><strong>{audioFormat}</strong></div>
+          <div><span>Probe status</span><strong>{formatProbeStatus(item)}</strong></div>
+          <div className={cx('file-expanded-quality-evidence', item.quality_conflict && 'file-expanded-quality-conflict')}>
+            <span>Quality evidence</span>
+            <strong>{describeFileQualityEvidence(item)}</strong>
+          </div>
+          {item.probe_error && (
+            <div className="file-expanded-probe-error">
+              <span>Probe error</span>
+              <strong>{item.probe_error}</strong>
+            </div>
+          )}
         </div>
       )}
     </article>

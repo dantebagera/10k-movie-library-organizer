@@ -22,10 +22,12 @@ import {
   Search,
   Server,
   ShieldCheck,
+  Trash2,
   Wand2,
   X,
 } from 'lucide-react'
 import { fetchJson } from '../../api/client.js'
+import { iptvApi } from '../../api/iptv.js'
 import { setTorrentHandlingConfig } from '../../api/qbittorrent.js'
 import MetadataAuthorityPanel from '../../components/MetadataAuthorityPanel.jsx'
 import { cx, formatCount } from '../../utils/appUtils.js'
@@ -64,6 +66,8 @@ const emptySettingsState = {
     url_template: 'https://streamimdb.ru/embed/movie/{tmdb_id}'
   },
   iptv: {
+    provider_id: '',
+    name: '',
     server_url: '',
     username: '',
     password: '',
@@ -83,12 +87,31 @@ const emptySettingsState = {
   }
 };
 
+function iptvProviderForm(provider = null) {
+  if (!provider) return { ...emptySettingsState.iptv, name: '' };
+  return {
+    provider_id: provider.provider_id || '',
+    name: provider.name || '',
+    server_url: provider.server_url || '',
+    username: '',
+    password: '',
+    usernameHint: provider.username_hint || '',
+    configured: Boolean(provider.configured),
+    allowInsecureTls: Boolean(provider.allow_insecure_tls),
+    counts: provider.counts || emptySettingsState.iptv.counts,
+    ffmpegAvailable: Boolean(provider.playback?.ffmpeg_available)
+  };
+}
+
 export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewIdentities, onStreamingConfigChanged }) {
   const [forms, setForms] = useState(emptySettingsState);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({});
   const [statuses, setStatuses] = useState({});
   const [revealed, setRevealed] = useState({});
+  const [iptvProviders, setIPTVProviders] = useState([]);
+  const [selectedIPTVProviderId, setSelectedIPTVProviderId] = useState('');
+  const [addingIPTVProvider, setAddingIPTVProvider] = useState(false);
   const [trustedIndexerDialogOpen, setTrustedIndexerDialogOpen] = useState(false);
   const [aiControlIndexerDialogOpen, setAiControlIndexerDialogOpen] = useState(false);
   const [ollamaModelCatalog, setOllamaModelCatalog] = useState({
@@ -120,13 +143,18 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         fetchJson('/api/qbittorrent/config'),
         fetchJson('/api/tmdb/config'),
         fetchJson('/api/streaming/config'),
-        fetchJson('/api/iptv/status'),
+        iptvApi.providers(),
         fetchJson('/api/ollama/config'),
         ollamaModelsRequest,
         fetchJson('/api/ai-control/config')
       ]);
       if (cancelled) return;
       const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, ollamaModels, aiControl] = requests;
+      const loadedIPTVProviders = iptv.status === 'fulfilled' ? (iptv.value.providers || []) : [];
+      const loadedIPTVProviderId = loadedIPTVProviders.some((provider) => provider.provider_id === iptv.value?.last_selected_provider_id)
+        ? iptv.value.last_selected_provider_id
+        : (loadedIPTVProviders[0]?.provider_id || '');
+      const loadedIPTVProvider = loadedIPTVProviders.find((provider) => provider.provider_id === loadedIPTVProviderId) || null;
       const loadedForms = {
         library: library.status === 'fulfilled' ? {
           directory: library.value.directory || '',
@@ -153,15 +181,17 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           label: streaming.value.label || 'Stream',
           url_template: streaming.value.url_template || ''
         } : emptySettingsState.streaming,
-        iptv: iptv.status === 'fulfilled' ? {
-          server_url: iptv.value.server_url || '',
+        iptv: loadedIPTVProvider ? {
+          provider_id: loadedIPTVProvider.provider_id,
+          name: loadedIPTVProvider.name || '',
+          server_url: loadedIPTVProvider.server_url || '',
           username: '',
           password: '',
-          usernameHint: iptv.value.username_hint || '',
-          configured: Boolean(iptv.value.configured),
-          allowInsecureTls: Boolean(iptv.value.allow_insecure_tls),
-          counts: iptv.value.counts || emptySettingsState.iptv.counts,
-          ffmpegAvailable: Boolean(iptv.value.playback?.ffmpeg_available)
+          usernameHint: loadedIPTVProvider.username_hint || '',
+          configured: Boolean(loadedIPTVProvider.configured),
+          allowInsecureTls: Boolean(loadedIPTVProvider.allow_insecure_tls),
+          counts: loadedIPTVProvider.counts || emptySettingsState.iptv.counts,
+          ffmpegAvailable: Boolean(loadedIPTVProvider.playback?.ffmpeg_available)
         } : emptySettingsState.iptv,
         ollama: ollama.status === 'fulfilled' ? {
           url: ollama.value.url || '',
@@ -176,6 +206,8 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           indexers: aiControl.value.indexers || []
         } : emptySettingsState.aiControl
       };
+      setIPTVProviders(loadedIPTVProviders);
+      setSelectedIPTVProviderId(loadedIPTVProviderId);
       setForms((current) => {
         const merged = { ...loadedForms };
         editedFieldsRef.current.forEach((key) => {
@@ -509,63 +541,119 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     }
   }
 
+  function selectIPTVProvider(providerId) {
+    const provider = iptvProviders.find((item) => item.provider_id === providerId) || null;
+    setSelectedIPTVProviderId(providerId);
+    setAddingIPTVProvider(false);
+    setForms((state) => ({ ...state, iptv: iptvProviderForm(provider) }));
+    setRevealed((state) => ({ ...state, iptv: false }));
+  }
+
+  function addIPTVProvider() {
+    setSelectedIPTVProviderId('');
+    setAddingIPTVProvider(true);
+    setForms((state) => ({ ...state, iptv: iptvProviderForm() }));
+    setCardStatus('iptv', 'neutral', 'New IPTV provider.', 'Save & Test creates the provider before starting its first catalog sync.');
+  }
+
+  async function refreshIPTVProviders(preferredId = selectedIPTVProviderId) {
+    const data = await iptvApi.providers();
+    const providers = data.providers || [];
+    const selected = providers.find((provider) => provider.provider_id === preferredId)
+      || providers.find((provider) => provider.provider_id === data.last_selected_provider_id)
+      || providers[0]
+      || null;
+    setIPTVProviders(providers);
+    setSelectedIPTVProviderId(selected?.provider_id || '');
+    setAddingIPTVProvider(false);
+    setForms((state) => ({ ...state, iptv: iptvProviderForm(selected) }));
+    return selected;
+  }
+
   async function saveIPTV() {
     setActionState('iptv-save', true);
+    let saved = null;
+    const creating = addingIPTVProvider || !selectedIPTVProviderId;
     try {
-      const saved = await fetchJson('/api/iptv/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          server_url: forms.iptv.server_url,
-          username: forms.iptv.username,
-          password: forms.iptv.password,
-          allow_insecure_tls: Boolean(forms.iptv.allowInsecureTls)
-        })
+      const payload = {
+        name: forms.iptv.name,
+        server_url: forms.iptv.server_url,
+        username: forms.iptv.username,
+        password: forms.iptv.password,
+        allow_insecure_tls: Boolean(forms.iptv.allowInsecureTls)
+      };
+      saved = creating
+        ? await iptvApi.createProvider(payload)
+        : await iptvApi.updateProvider(selectedIPTVProviderId, payload);
+      setSelectedIPTVProviderId(saved.provider_id);
+      setAddingIPTVProvider(false);
+      setIPTVProviders((state) => {
+        const found = state.some((provider) => provider.provider_id === saved.provider_id);
+        return found
+          ? state.map((provider) => provider.provider_id === saved.provider_id ? saved : provider)
+          : [...state, saved];
       });
-      setForms((state) => ({
-        ...state,
-        iptv: {
-          ...state.iptv,
-          server_url: saved.server_url || state.iptv.server_url,
-          username: '',
-          password: '',
-          usernameHint: saved.username_hint || state.iptv.usernameHint,
-          configured: Boolean(saved.configured)
-        }
-      }));
-      setCardStatus('iptv', 'success', 'IPTV provider saved.', 'Saved credentials remain on the Flask backend.');
-      notify('IPTV provider saved');
-      return true;
+      setForms((state) => ({ ...state, iptv: iptvProviderForm(saved) }));
     } catch (error) {
       setCardStatus('iptv', 'error', 'IPTV provider not saved.', error.message);
+      setActionState('iptv-save', false);
+      return false;
+    }
+    try {
+      const connection = await iptvApi.test(saved.provider_id);
+      if (creating) await iptvApi.sync(saved.provider_id);
+      await refreshIPTVProviders(saved.provider_id);
+      setCardStatus(
+        'iptv',
+        'success',
+        `${saved.name} saved and connected.`,
+        creating ? 'Authentication succeeded and the first catalog sync started.' : (connection.status ? `Account status: ${connection.status}.` : 'Xtream authentication succeeded.')
+      );
+      notify(`${saved.name} saved and connected`);
+      return true;
+    } catch (error) {
+      await refreshIPTVProviders(saved.provider_id).catch(() => {});
+      setCardStatus('iptv', 'error', `${saved.name} was saved, but authentication failed.`, error.message);
       return false;
     } finally {
       setActionState('iptv-save', false);
     }
   }
 
-  async function testIPTV() {
-    setActionState('iptv-test', true);
-    try {
-      const data = await fetchJson('/api/iptv/test', { method: 'POST' });
-      setCardStatus('iptv', 'success', 'IPTV provider connected.', data.status ? `Account status: ${data.status}.` : 'Xtream authentication succeeded.');
-    } catch (error) {
-      setCardStatus('iptv', 'error', 'IPTV connection failed.', error.message);
-    } finally {
-      setActionState('iptv-test', false);
-    }
-  }
-
   async function syncIPTV() {
+    if (!selectedIPTVProviderId) return;
     setActionState('iptv-sync', true);
     try {
-      await fetchJson('/api/iptv/sync', { method: 'POST' });
+      await iptvApi.sync(selectedIPTVProviderId);
       setCardStatus('iptv', 'success', 'IPTV catalog sync started.', 'Live TV, movies, and series will replace the previous catalog together.');
       notify('IPTV catalog sync started');
     } catch (error) {
       setCardStatus('iptv', 'error', 'IPTV sync did not start.', error.message);
     } finally {
       setActionState('iptv-sync', false);
+    }
+  }
+
+  async function removeIPTV() {
+    const provider = iptvProviders.find((item) => item.provider_id === selectedIPTVProviderId);
+    if (!provider) return;
+    const confirmation = window.prompt(
+      `Type "${provider.name}" to remove this provider and only its catalog, Favorites, lists, history, images, and playback data.`
+    );
+    if (confirmation !== provider.name) {
+      if (confirmation !== null) setCardStatus('iptv', 'error', 'Provider not removed.', 'The provider name did not match exactly.');
+      return;
+    }
+    setActionState('iptv-remove', true);
+    try {
+      await iptvApi.removeProvider(provider.provider_id, confirmation);
+      const selected = await refreshIPTVProviders('');
+      setCardStatus('iptv', 'success', `${provider.name} removed.`, selected ? `${selected.name} is now selected.` : 'No IPTV providers remain.');
+      notify(`${provider.name} removed`);
+    } catch (error) {
+      setCardStatus('iptv', 'error', 'IPTV provider not removed.', error.message);
+    } finally {
+      setActionState('iptv-remove', false);
     }
   }
 
@@ -677,7 +765,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     { key: 'qbittorrent', label: 'qBittorrent', ready: forms.qbittorrent.mode === 'system' || Boolean(forms.qbittorrent.installed), tone: 'gold' },
     { key: 'tmdb', label: 'TMDB', ready: Boolean(forms.tmdb.key), tone: 'green' },
     { key: 'streaming', label: 'Streaming', ready: Boolean(forms.streaming.enabled && forms.streaming.url_template), tone: 'green' },
-    { key: 'iptv', label: 'IPTV', ready: Boolean(forms.iptv.configured), tone: 'gold' },
+    { key: 'iptv', label: 'IPTV', ready: iptvProviders.length > 0, tone: 'gold' },
     { key: 'ollama', label: 'Ollama', ready: Boolean(forms.ollama.url && forms.ollama.model), tone: 'violet' },
     { key: 'ai-control', label: 'AI Control', ready: Boolean(forms.aiControl.enabled), tone: 'violet' }
   ];
@@ -1058,14 +1146,32 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           )}
         />
 
-        <IntegrationCard
-          id="settings-iptv"
-          icon={Radio}
-          title="IPTV Provider"
-          accent="gold"
-          status={statuses.iptv}
-          fields={(
-            <>
+        <section id="settings-iptv" className="settings-panel integration-card integration-gold settings-iptv-providers">
+          <div className="settings-iptv-heading">
+            <SettingsPanelHeader icon={Radio} title="IPTV Providers" label="Integration" text={`${iptvProviders.length} configured Xtream provider${iptvProviders.length === 1 ? '' : 's'}, each with isolated data.`} />
+            <button type="button" className="btn btn-secondary" onClick={addIPTVProvider}><CirclePlus size={15} /> Add</button>
+          </div>
+          <div className="settings-provider-manager">
+            <aside className="settings-provider-rail" aria-label="IPTV providers">
+              {iptvProviders.map((provider) => (
+                <button
+                  type="button"
+                  key={provider.provider_id}
+                  className={selectedIPTVProviderId === provider.provider_id && !addingIPTVProvider ? 'is-active' : ''}
+                  onClick={() => selectIPTVProvider(provider.provider_id)}
+                >
+                  <strong>{provider.name}</strong>
+                  <span>{provider.sync?.state === 'running' ? 'Syncing' : provider.configured ? 'Ready' : 'Needs credentials'}</span>
+                  <small>{formatCount(provider.counts?.live)} / {formatCount(provider.counts?.movie)} / {formatCount(provider.counts?.series)}</small>
+                </button>
+              ))}
+              {!iptvProviders.length ? <p>No providers configured.</p> : null}
+            </aside>
+            <div className="settings-provider-editor">
+              <label className="dialog-field">
+                <span>Display name</span>
+                <input value={forms.iptv.name || ''} onChange={(event) => updateField('iptv', 'name', event.target.value)} placeholder="Provider name" />
+              </label>
               <label className="dialog-field">
                 <span>Xtream server URL</span>
                 <input value={forms.iptv.server_url || ''} onChange={(event) => updateField('iptv', 'server_url', event.target.value)} placeholder="https://provider.example:2096" />
@@ -1090,27 +1196,26 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                 />
                 <span>
                   <strong>Allow invalid provider TLS certificate</strong>
-                  <small>Required only when the IPTV server uses a self-signed or expired HTTPS certificate.</small>
+                  <small>Required only when this provider uses a self-signed or expired HTTPS certificate.</small>
                 </span>
               </label>
               <p className="settings-runtime-detail">
                 {forms.iptv.configured
                   ? `${formatCount(forms.iptv.counts.live)} channels · ${formatCount(forms.iptv.counts.movie)} movies · ${formatCount(forms.iptv.counts.series)} series`
-                  : 'One active Xtream provider is supported in Cinema Paradiso 2.8.'}
+                  : addingIPTVProvider ? 'Save & Test authenticates before starting the first sync.' : 'Select a provider or add one.'}
               </p>
               <p className="settings-runtime-detail">
                 Integrated playback: {forms.iptv.ffmpegAvailable ? 'FFmpeg ready' : 'FFmpeg not found on this machine'}
               </p>
-            </>
-          )}
-          actions={(
-            <>
-              <ActionButton loading={saving['iptv-save']} icon={Save} label="Save provider" onClick={saveIPTV} primary />
-              <ActionButton loading={saving['iptv-test']} icon={PlugZap} label="Test saved" onClick={testIPTV} />
-              <ActionButton loading={saving['iptv-sync']} icon={RefreshCcw} label="Sync catalog" onClick={syncIPTV} />
-            </>
-          )}
-        />
+              <SettingsInlineStatus status={statuses.iptv} />
+              <div className="settings-action-grid">
+                <ActionButton loading={saving['iptv-save']} icon={Save} label="Save & Test" onClick={saveIPTV} primary disabled={!forms.iptv.name || !forms.iptv.server_url} />
+                <ActionButton loading={saving['iptv-sync']} icon={RefreshCcw} label="Sync" onClick={syncIPTV} disabled={!selectedIPTVProviderId || addingIPTVProvider} />
+                <ActionButton loading={saving['iptv-remove']} icon={Trash2} label="Remove" onClick={removeIPTV} disabled={!selectedIPTVProviderId || addingIPTVProvider} />
+              </div>
+            </div>
+          </div>
+        </section>
 
         <IntegrationCard
           id="settings-ollama"

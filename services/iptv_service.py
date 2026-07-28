@@ -3,6 +3,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -39,8 +40,11 @@ def _safe_int(value):
 class IPTVService:
     ORPHANED_PLAYBACK_MAX_AGE = 24 * 60 * 60
 
-    def __init__(self, user_data_dir, ffmpeg_path=None):
-        self.root = Path(user_data_dir) / "iptv"
+    def __init__(self, provider_root, provider_id, ffmpeg_path=None):
+        self.provider_id = str(provider_id or "")
+        if not self.provider_id:
+            raise ValueError("An IPTV provider ID is required")
+        self.root = Path(provider_root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.config_path = self.root / "provider.json"
         self.store = IPTVStore(self.root / "iptv.sqlite")
@@ -132,6 +136,15 @@ class IPTVService:
             verify_tls=not bool(config.get("allow_insecure_tls")),
         )
 
+    def _redact(self, value):
+        message = str(value or "")
+        config = self._load_config()
+        for secret in (config.get("username"), config.get("password")):
+            if secret:
+                message = message.replace(str(secret), "[redacted]")
+        message = re.sub(r"(?i)(username|password)=([^&\s]+)", r"\1=[redacted]", message)
+        return message
+
     def provider_key(self):
         config = self._load_config()
         server_url = str(config.get("server_url") or "")
@@ -192,6 +205,7 @@ class IPTVService:
         with self._sync_lock:
             sync = dict(self._sync_state)
         return {
+            "provider_id": self.provider_id,
             **self.public_config(),
             **self.store.status(),
             "sync": sync,
@@ -228,7 +242,7 @@ class IPTVService:
             with self._sync_lock:
                 self._sync_state.update({"state": "complete", "phase": "", "finished_at": time.time()})
         except Exception as error:
-            message = str(error)
+            message = self._redact(error)
             with self._sync_lock:
                 self._sync_state.update({"state": "error", "phase": "", "error": message[:300], "finished_at": time.time()})
 
@@ -364,7 +378,11 @@ class IPTVService:
         session_dir.mkdir(parents=True, exist_ok=False)
         manifest = session_dir / "index.m3u8"
         live = kind == "live"
-        relay_url = f"{str(local_base_url).rstrip('/')}/api/iptv/upstream/{token}"
+        relay_url = (
+            f"{str(local_base_url).rstrip('/')}/api/iptv/providers/"
+            f"{urllib.parse.quote(self.provider_id, safe='')}/upstream/{token}"
+        )
+        config = self._load_config()
         session = {
             "token": token,
             "process": None,
@@ -374,6 +392,7 @@ class IPTVService:
             "title": str(title or ""),
             "created_at": time.time(),
             "source_url": source_url,
+            "allow_insecure_tls": bool(config.get("allow_insecure_tls")),
             "stopping": False,
         }
         with self._session_lock:
@@ -390,9 +409,16 @@ class IPTVService:
         deadline = time.time() + 12
         while time.time() < deadline:
             if manifest.is_file() and manifest.stat().st_size:
-                return {"token": token, "manifest_url": f"/api/iptv/playback/{token}/index.m3u8"}
+                return {
+                    "token": token,
+                    "provider_id": self.provider_id,
+                    "manifest_url": (
+                        f"/api/iptv/providers/{urllib.parse.quote(self.provider_id, safe='')}"
+                        f"/playback/{token}/index.m3u8"
+                    ),
+                }
             if process.poll() is not None:
-                detail = str(session.get("stderr_tail") or "")[-500:]
+                detail = self._redact(str(session.get("stderr_tail") or "")[-500:])
                 self.stop_playback(token)
                 raise RuntimeError(detail or "FFmpeg could not open this IPTV stream")
             time.sleep(0.2)
@@ -447,9 +473,8 @@ class IPTVService:
         if range_header:
             headers["Range"] = str(range_header)
         request = urllib.request.Request(session["source_url"], headers=headers)
-        config = self._load_config()
         context = None
-        if config.get("allow_insecure_tls"):
+        if session.get("allow_insecure_tls"):
             import ssl
             context = ssl._create_unverified_context()
         try:

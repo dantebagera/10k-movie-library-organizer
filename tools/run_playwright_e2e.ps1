@@ -23,6 +23,10 @@ Write-Output "CP_TEST_ROOT=$isolatedRoot"
 
 try {
     $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
+    & $python -m tests.seed_iptv_e2e $isolatedRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not create isolated IPTV provider fixtures."
+    }
     $server = Start-Process `
         -FilePath $python `
         -ArgumentList 'app.py' `

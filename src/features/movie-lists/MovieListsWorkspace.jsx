@@ -4,7 +4,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { CATALOG_GENERATION_CHANGED_EVENT, observeCatalogGeneration } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import ExportCopyDialog from '../../components/ExportCopyDialog.jsx';
@@ -13,6 +13,7 @@ import MetadataCorrectionModal from '../../components/MetadataCorrectionModal.js
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { DiscoverMovieCard, LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
+import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { discoverMoviePayload, listsForDiscoverMovie } from '../../discoverUtils.js';
 import { buildMovieListViewModel, listsForItem, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
@@ -28,7 +29,9 @@ export default function MovieListsWorkspace({
   followed = [],
   onFollow,
   onEditPoster,
-  onOpenDiscoverPerson = () => {}
+  onOpenFileDetails,
+  onOpenDiscoverPerson = () => {},
+  onOpenDiscoverCollection = () => {}
 }) {
   const [libraryItems, setLibraryItems] = useState([]);
   const [lists, setLists] = useState([]);
@@ -41,7 +44,11 @@ export default function MovieListsWorkspace({
   const [expandedKey, setExpandedKey] = useState('');
   const [detailsCache, setDetailsCache] = useState({});
   const [cardProjections, setCardProjections] = useState({});
-  const [collectionCache, setCollectionCache] = useState({});
+  const {
+    clear: clearCollectionCache,
+    getView: getCollectionView,
+    load: loadMovieCollection
+  } = useMovieCollectionCache();
   const [listEditorTarget, setListEditorTarget] = useState(null);
   const [copyMovies, setCopyMovies] = useState(null);
   const [tmdbAddOpen, setTmdbAddOpen] = useState(false);
@@ -58,19 +65,19 @@ export default function MovieListsWorkspace({
   useEffect(() => {
     const clearDetailCaches = () => {
       setDetailsCache(markMovieDetailsCacheStale);
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
     return () => window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   useEffect(() => {
     const clearCurationCaches = () => {
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
     return () => window.removeEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   const selectedList = lists.find((list) => list.id === selectedListId) || lists[0] || null;
   const model = useMemo(() => buildMovieListViewModel({
@@ -259,12 +266,7 @@ export default function MovieListsWorkspace({
         setDetailsCache((state) => ({ ...state, [cacheKey]: details }));
       }
     }
-    const collectionUrl = movieCollectionUrl(details);
-    if (collectionUrl && !collectionCache[details.collection.id]) {
-      fetchCurationJson(collectionUrl)
-        .then((collectionData) => setCollectionCache((state) => ({ ...state, [details.collection.id]: collectionData })))
-        .catch(() => {});
-    }
+    loadMovieCollection(details);
     return details;
   }
 
@@ -541,9 +543,7 @@ export default function MovieListsWorkspace({
                   const cardDetails = projection
                     ? { ...projection, ...(!details?.loading && !details?.error ? details : {}) }
                     : details;
-                  const collection = cardDetails?.collection?.id
-                    ? collectionCache[cardDetails.collection.id] || cardDetails.collection
-                    : {};
+                  const collectionView = getCollectionView(cardDetails);
                   const rowLists = row.ownedItem ? listsForItem(row.ownedItem, lists) : listsForDiscoverMovie(movie, lists, null);
                   const watched = rowLists.some((list) => list.system_type === 'watched');
                   const watchlisted = rowLists.some((list) => list.system_type === 'watchlist');
@@ -554,18 +554,23 @@ export default function MovieListsWorkspace({
                         item={row.ownedItem}
                         expanded={expandedKey === row.identityKey}
                         details={details}
-                        collection={collection}
+                        collection={collectionView.data}
+                        collectionStatus={collectionView.status}
+                        collectionError={collectionView.error}
                         itemLists={rowLists}
                         onToggle={() => toggleMovieListDetails(row)}
                         onPlay={onPlay}
                         onFindTorrent={onFindTorrent}
                         onTrailer={() => openMovieListTrailer(row)}
                         onPersonFilter={(role, person) => onOpenDiscoverPerson(moviePayload(row.ownedItem), role, person)}
+                        onCollectionBrowse={(collection) => onOpenDiscoverCollection(moviePayload(row.ownedItem), collection)}
+                        onCollectionRetry={() => loadMovieCollection(cardDetails, { force: true })}
                         onListFilter={selectListFromCard}
                         onEditLists={() => setListEditorTarget({ item: row.ownedItem })}
                         onRemoveFromList={(listId) => removeMovieFromList(listId, moviePayload(row.ownedItem))}
                         onEditPoster={onEditPoster ? () => onEditPoster(row.ownedItem, movie) : undefined}
                         onCorrectMetadata={() => setMetadataCorrection(row.ownedItem)}
+                        onOpenFileDetails={onOpenFileDetails}
                         watched={watched}
                         watchlisted={watchlisted}
                         onToggleWatched={() => toggleMovieListSystemList('watched', row)}
@@ -583,7 +588,9 @@ export default function MovieListsWorkspace({
                       followed={followed.some((item) => movieKey(item) === movieKey(cardMovie))}
                       expanded={expandedKey === row.identityKey}
                       details={cardDetails}
-                      collection={collection}
+                      collection={collectionView.data}
+                      collectionStatus={collectionView.status}
+                      collectionError={collectionView.error}
                       itemLists={rowLists}
                       watched={watched}
                       watchlisted={watchlisted}
@@ -599,6 +606,8 @@ export default function MovieListsWorkspace({
                       onTrailer={() => openMovieListTrailer(row)}
                       onToggleDetails={() => toggleMovieListDetails(row)}
                       onPersonBrowse={(role, person) => onOpenDiscoverPerson(cardMovie, role, person)}
+                      onCollectionBrowse={(collection) => onOpenDiscoverCollection(cardMovie, collection)}
+                      onCollectionRetry={() => loadMovieCollection(cardDetails, { force: true })}
                       onListBrowse={selectListFromCard}
                       onEditLists={() => setListEditorTarget(movie)}
                       onRemoveFromList={(listId) => removeMovieFromList(listId, movie)}

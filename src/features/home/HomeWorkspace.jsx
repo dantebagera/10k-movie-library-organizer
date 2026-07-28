@@ -6,10 +6,11 @@ import { useState } from 'react';
 import headerCropUrl from '../../assets/header.png';
 import Rating from '../../components/Rating.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
-import { PosterEditButton, PosterStateControls } from '../../components/SharedMovieCards.jsx';
+import { OwnedFileDetailsButton, PosterEditButton, PosterStateControls } from '../../components/SharedMovieCards.jsx';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
 import { cx, formatCount, movieKey, sortFollowedReleases } from '../../utils/appUtils.js';
 import { canonicalOwnedMovie, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
+import { getQualityLabel } from '../../utils/libraryUtils.js';
 import { formatReleaseDateLabel, formatVoteCount, isUnreleasedMovie } from '../../utils/moviePresentation.js';
 
 export default function HomeWorkspace(props) {
@@ -35,7 +36,8 @@ export default function HomeWorkspace(props) {
     onFollow,
     userLists,
     onToggleSystemList,
-    onEditPoster
+    onEditPoster,
+    onOpenFileDetails
   } = props;
   const [releaseDrawerOpen, setReleaseDrawerOpen] = useState(false);
 
@@ -128,6 +130,7 @@ export default function HomeWorkspace(props) {
         onToggleWatched={selectedOwnership ? () => onToggleSystemList('watched', selectedMovie, selectedOwnership) : undefined}
         onToggleWatchlist={selectedMovie ? () => onToggleSystemList('watchlist', selectedMovie, selectedOwnership) : undefined}
         onEditPoster={selectedOwnership ? () => onEditPoster(selectedOwnership, selectedMovie) : undefined}
+        onOpenFileDetails={onOpenFileDetails}
       />
       {releaseDrawerOpen && (
         <FollowedReleasesDrawer
@@ -357,6 +360,7 @@ function SmartMovieCard(props) {
     onSelect, onPlay, onStream, streamingAvailable, streamingLabel, onFindTorrent, onFollow,
     onTrailer, onToggleWatched, onToggleWatchlist, onEditPoster
   } = props;
+  const ownedItem = owned?.canonical_card || owned?.library_item || owned || {};
   const displayMovie = canonicalOwnedMovie(movie, owned);
   const lowQuality = Boolean(owned?.maintenance_upgrade_candidate);
   const unreleased = !owned && isUnreleasedMovie(displayMovie);
@@ -371,7 +375,12 @@ function SmartMovieCard(props) {
       rating={displayMovie.tmdb_rating}
       voteCount={formatVoteCount(displayMovie.tmdb_vote_count)}
       chips={genres}
-      mutedChips={[displayMovie.language, displayMovie.country_flag || displayMovie.country, owned?.resolution, owned?.size_human]}
+      mutedChips={[
+        displayMovie.language,
+        displayMovie.country_flag || displayMovie.country,
+        owned ? getQualityLabel(ownedItem) : '',
+        ownedItem?.size_human || owned?.size_human
+      ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
       ownedBadge={Boolean(owned)}
@@ -398,7 +407,7 @@ function SmartMovieCard(props) {
 function MovieInspector({
   movie, owned, details, followed, watched, watchlisted,
   onClose, onPlay, onStream, streamingAvailable, streamingLabel, onFindTorrent, onFollow,
-  onTrailer, onToggleWatched, onToggleWatchlist, onEditPoster
+  onTrailer, onToggleWatched, onToggleWatchlist, onEditPoster, onOpenFileDetails
 }) {
   if (!movie) {
     return (
@@ -451,6 +460,7 @@ function MovieInspector({
             {releaseDateLabel && <span>Releases {releaseDateLabel}</span>}
             {displayMovie.language && <span>{displayMovie.language}</span>}
             {(displayMovie.country_flag || displayMovie.country) && <span>{displayMovie.country_flag || displayMovie.country}</span>}
+            {owned && <span>{getQualityLabel(ownedItem)}</span>}
           </div>
         </div>
       </div>
@@ -474,6 +484,7 @@ function MovieInspector({
             <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(owned.path)}>
               <Play size={15} /> Play from HDD
             </button>
+            <OwnedFileDetailsButton owned={ownedItem} onOpenFileDetails={onOpenFileDetails} />
             {lowQuality && (
               <button type="button" className="btn btn-secondary" onClick={() => onFindTorrent(displayMovie, true)}>
                 <Wand2 size={15} /> Find upgrade

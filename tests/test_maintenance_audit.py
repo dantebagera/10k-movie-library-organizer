@@ -1,9 +1,17 @@
 import unittest
 
+from services.media_file_facts import FILE_FACTS_VERSION, QUALITY_CLASSIFIER_VERSION
 from services.maintenance_audit import build_maintenance_audit
 
 
 def candidate(path, **record):
+    resolution = record.get("resolution", "1080p")
+    dimensions = {
+        "4K": (3840, 2160),
+        "1080p": (1920, 1080),
+        "720p": (1280, 720),
+        "480p": (854, 480),
+    }.get(resolution, (0, 0))
     raw = {
         "path": path,
         "filename": path.rsplit("/", 1)[-1],
@@ -17,6 +25,24 @@ def candidate(path, **record):
         "identity_year": "1979",
         "tmdb_id": "348",
         "decision_origin": "user_manual",
+        "video_width": dimensions[0],
+        "video_height": dimensions[1],
+        "video_codec": "AVC",
+        "video_profile": "High",
+        "video_bit_depth": 8,
+        "video_bitrate": 5_000_000,
+        "video_frame_rate": 24.0,
+        "duration_ms": 100_000,
+        "audio_codec": "AAC",
+        "audio_channels": 2,
+        "audio_bitrate": 192_000,
+        "filename_quality_claim": resolution,
+        "quality_class": resolution,
+        "quality_source": "measured",
+        "quality_conflict": False,
+        "file_facts_version": FILE_FACTS_VERSION,
+        "classifier_version": QUALITY_CLASSIFIER_VERSION,
+        "probe_status": "ok",
         **record,
     }
     result = {
@@ -147,6 +173,35 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertEqual(audit["upgrades"]["items"], [])
         self.assertEqual(audit["summary"]["verification_gaps"], 2)
 
+    def test_shared_tmdb_identity_is_safe_without_a_plex_snapshot(self):
+        best = candidate(
+            "E:/Movies/Alien.1979.4K.Remux.mkv",
+            resolution="4K",
+            rip_source="Remux",
+            size=400,
+            decision_origin="library_reconcile",
+        )
+        lower = candidate(
+            "E:/Movies/Alien.1979.1080p.WEB-DL.mkv",
+            resolution="1080p",
+            rip_source="WEB-DL",
+            size=100,
+        )
+        lower["plex_json"] = {
+            "plex_title": "Alien",
+            "plex_year": "1979",
+            "tmdb_id": "348",
+        }
+
+        audit = build_maintenance_audit([best, lower])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["files"][0]["verification_status"], "audit_pending")
+        self.assertTrue(group["identity_safe"])
+        self.assertFalse(group["needs_identity_review"])
+        self.assertEqual(group["files"][1]["recommendation"], "recommended")
+        self.assertEqual(audit["summary"]["recommended_removals"], 1)
+
     def test_provider_audit_backlog_is_separate_from_manual_identity_review(self):
         pending = candidate(
             "E:/Movies/Elle.2016.mkv",
@@ -161,6 +216,268 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertEqual(audit["summary"]["automated_identity_checks"], 1)
         self.assertEqual(audit["summary"]["verification_gaps"], 0)
         self.assertEqual(audit["identity"]["verification"], [])
+
+    def test_the_monkey_encode_tradeoff_is_never_an_automatic_removal(self):
+        avc = candidate(
+            "E:/Movies/The.Monkey.2025.1080p.x264.mkv",
+            identity_title="The Monkey",
+            identity_year="2025",
+            tmdb_id="1124620",
+            video_width=1800,
+            video_height=960,
+            video_codec="AVC",
+            video_profile="High@L4.1",
+            video_bit_depth=8,
+            video_bitrate=2_250_404,
+            size=1_720_266_381,
+            quality_nonstandard=True,
+        )
+        hevc = candidate(
+            "E:/Movies/The.Monkey.2025.1080p.x265.10bit.mkv",
+            identity_title="The Monkey",
+            identity_year="2025",
+            tmdb_id="1124620",
+            video_width=1800,
+            video_height=960,
+            video_codec="HEVC",
+            video_profile="Main 10@L4@Main",
+            video_bit_depth=10,
+            video_bitrate=2_000_527,
+            size=1_539_806_886,
+            quality_nonstandard=True,
+        )
+
+        audit = build_maintenance_audit([avc, hevc])
+
+        group = audit["storage"]["groups"][0]
+        self.assertTrue(group["identity_safe"])
+        self.assertEqual(group["recommended_count"], 0)
+        self.assertEqual(group["reclaimable_bytes"], 0)
+        self.assertEqual(
+            {row["verdict"] for row in group["files"]},
+            {"encoding_tradeoff"},
+        )
+        self.assertEqual(
+            {row["role"] for row in group["files"]},
+            {"tradeoff"},
+        )
+        self.assertTrue(all(row["recommendation"] == "review" for row in group["files"]))
+        self.assertTrue(all("cross-codec quality cannot be proven" in row["reason"] for row in group["files"]))
+        self.assertTrue(all("172.1 MB (10.5%)" in row["reason"] for row in group["files"]))
+        self.assertEqual(
+            {row["quality_display"] for row in group["files"]},
+            {"1080-class - 1800 x 960"},
+        )
+
+    def test_lolita_minor_crop_does_not_hide_a_decisive_resolution_winner(self):
+        high = candidate(
+            "E:/Movies/Lolita.1997.1080p.BluRay.x264.YIFY.mp4",
+            identity_title="Lolita",
+            identity_year="1997",
+            tmdb_id="9769",
+            imdb_id="tt0119558",
+            video_width=1920,
+            video_height=1040,
+            video_bitrate=2_041_000,
+            duration_ms=8_260_000,
+            audio_bitrate=93_848,
+            size=2_254_000_000,
+        )
+        low = candidate(
+            "E:/Movies/Lolita.1997.720p.BluRay.x264.YIFY.mp4",
+            identity_title="Lolita",
+            identity_year="1997",
+            tmdb_id="9769",
+            imdb_id="tt0119558",
+            resolution="720p",
+            video_width=1280,
+            video_height=688,
+            video_bitrate=847_000,
+            duration_ms=8_260_000,
+            audio_bitrate=93_848,
+            size=975_000_000,
+        )
+
+        audit = build_maintenance_audit([low, high])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(group["files"][0]["verdict"], "recommended_keep")
+        self.assertEqual(group["files"][1]["verdict"], "recommended_removal")
+        self.assertIn("2.27× fewer pixels", group["files"][1]["reason"])
+        self.assertIn("framing differs by 0.77% (minor crop)", group["files"][1]["reason"])
+
+    def test_vamps_pal_speed_conversion_supports_content_equivalence_not_quality(self):
+        bluray = candidate(
+            "E:/Movies/Vamps.2012.1080p.BRrip.x264.YIFY.mp4",
+            identity_title="Vamps",
+            identity_year="2012",
+            tmdb_id="73935",
+            imdb_id="tt1545106",
+            video_width=1920,
+            video_height=1036,
+            video_frame_rate=23.976,
+            video_codec="AVC",
+            video_profile="High@L4",
+            video_bitrate=2_062_000,
+            duration_ms=5_558_468,
+            audio_codec="AAC",
+            audio_channels=2,
+            audio_bitrate=96_000,
+            size=1_500_000_000,
+        )
+        dvd = candidate(
+            "E:/Movies/Vamps.2012.DVDRip.XviD-PTpOWeR.avi",
+            identity_title="Vamps",
+            identity_year="2012",
+            tmdb_id="73935",
+            imdb_id="tt1545106",
+            resolution="336p",
+            quality_class="336p",
+            video_width=624,
+            video_height=336,
+            video_frame_rate=25.0,
+            video_codec="MPEG-4 Visual",
+            video_profile="Simple@L3",
+            video_bitrate=968_433,
+            duration_ms=5_330_320,
+            audio_codec="MPEG Audio",
+            audio_channels=2,
+            audio_bitrate=128_000,
+            size=739_000_000,
+        )
+
+        audit = build_maintenance_audit([dvd, bluray])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(group["files"][0]["verdict"], "recommended_keep")
+        self.assertEqual(group["files"][1]["verdict"], "recommended_removal")
+        self.assertTrue(group["files"][1]["comparison_uses_frame_rate"])
+        self.assertIn("9.49× fewer pixels", group["files"][1]["reason"])
+        self.assertIn("23.976 to 25 fps speed conversion detected", group["files"][1]["reason"])
+        self.assertIn("estimated frame count matches within 0.01%", group["files"][1]["reason"])
+
+    def test_clear_quality_winner_still_requires_cut_review_when_runtime_does_not_align(self):
+        high = candidate("E:/Movies/Alien.1979.1080p.mkv")
+        low = candidate(
+            "E:/Movies/Alien.1979.720p.different.mkv",
+            resolution="720p",
+            duration_ms=120_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 0)
+        self.assertEqual(group["files"][0]["verdict"], "quality_winner_verify_cut")
+        self.assertEqual(group["files"][1]["verdict"], "lower_quality_verify_cut")
+        self.assertIn("runtime differs", group["files"][1]["reason"])
+
+    def test_better_video_does_not_auto_delete_superior_primary_audio(self):
+        high = candidate("E:/Movies/Alien.1979.1080p.stereo.mkv")
+        low = candidate(
+            "E:/Movies/Alien.1979.720p.5.1.mkv",
+            resolution="720p",
+            audio_channels=6,
+            audio_bitrate=640_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 0)
+        self.assertEqual(group["files"][0]["verdict"], "quality_winner_verify_cut")
+        self.assertEqual(group["files"][1]["verdict"], "unique_features")
+        self.assertIn("2 audio channels versus 6", group["files"][1]["reason"])
+
+    def test_resolution_does_not_erase_source_or_bit_depth_tradeoffs(self):
+        cases = {
+            "source": {
+                "high": {"rip_source": "WEBRip"},
+                "low": {"rip_source": "Blu-ray"},
+                "reason": "lower source tier",
+            },
+            "bit_depth": {
+                "high": {"video_bit_depth": 8},
+                "low": {"video_bit_depth": 10},
+                "reason": "8-bit versus 10-bit",
+            },
+        }
+        for name, values in cases.items():
+            with self.subTest(name=name):
+                high = candidate(
+                    f"E:/Movies/Alien.1979.1080p.{name}.mkv",
+                    **values["high"],
+                )
+                low = candidate(
+                    f"E:/Movies/Alien.1979.720p.{name}.mkv",
+                    resolution="720p",
+                    **values["low"],
+                )
+
+                audit = build_maintenance_audit([high, low])
+
+                group = audit["storage"]["groups"][0]
+                self.assertEqual(group["recommended_count"], 0)
+                candidate_row = next(row for row in group["files"] if row["resolution"] == "720p")
+                self.assertEqual(candidate_row["verdict"], "quality_tradeoff")
+                self.assertIn(values["reason"], candidate_row["reason"])
+
+    def test_multi_file_group_uses_pairwise_dominance_instead_of_one_reference(self):
+        high = candidate("E:/Movies/Alien.1979.4K.mkv", resolution="4K", video_bitrate=12_000_000)
+        middle = candidate("E:/Movies/Alien.1979.1080p.mkv", video_bitrate=5_000_000)
+        low = candidate("E:/Movies/Alien.1979.720p.mkv", resolution="720p", video_bitrate=3_000_000)
+
+        audit = build_maintenance_audit([middle, low, high])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 2)
+        verdicts = {row["filename"]: row["verdict"] for row in group["files"]}
+        self.assertEqual(verdicts["Alien.1979.4K.mkv"], "recommended_keep")
+        self.assertEqual(verdicts["Alien.1979.1080p.mkv"], "recommended_removal")
+        self.assertEqual(verdicts["Alien.1979.720p.mkv"], "recommended_removal")
+
+    def test_duplicate_dominance_matrix_blocks_uncertain_differences(self):
+        base = candidate("E:/Movies/Alien.1979.1080p.reference.mkv")
+        cases = {
+            "missing": {"probe_status": "corrupt"},
+            "conflict": {"quality_conflict": True},
+            "codec": {"video_codec": "HEVC"},
+            "bit_depth": {"video_bit_depth": 10},
+            "duration": {"duration_ms": 120_000},
+            "audio_codec": {"audio_codec": "DTS"},
+            "audio_channels": {"audio_channels": 6},
+            "audio_bitrate": {"audio_bitrate": 384_000},
+            "aspect": {"video_width": 1440, "video_height": 1080},
+            "edition": {"filename": "Alien.1979.Extended.1080p.mkv"},
+        }
+        for name, changes in cases.items():
+            with self.subTest(name=name):
+                other = candidate(f"E:/Movies/Alien.1979.{name}.mkv", **changes)
+                audit = build_maintenance_audit([base, other])
+                group = audit["storage"]["groups"][0]
+                self.assertEqual(group["recommended_count"], 0)
+                self.assertEqual(group["files"][1]["recommendation"], "review")
+
+    def test_strong_lower_dimensions_are_recommended_with_safe_content_evidence(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.mkv",
+            video_bitrate=5_000_000,
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.720p.mkv",
+            resolution="720p",
+            video_bitrate=3_000_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(group["files"][1]["recommendation"], "recommended")
+        self.assertEqual(group["files"][1]["verdict"], "recommended_removal")
+        self.assertIn("2.25× fewer pixels", group["files"][1]["reason"])
 
 
 if __name__ == "__main__":

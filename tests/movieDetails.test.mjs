@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   markMovieDetailsCacheStale,
   mergeCanonicalMovieDetails,
-  mergeTransientMovieLanguage
+  mergeTransientMovieLanguage,
+  movieCollectionCacheKey,
+  movieCollectionView
 } from '../src/api/movieDetails.js';
 
 test('catalog changes retain visible movie details while marking them for refresh', () => {
@@ -89,4 +91,46 @@ test('transient language overlay replaces display fields without mutating canoni
   assert.equal(result.displayDetails.tagline, 'شعار عربي');
   assert.equal(movie.title, 'Fight Club');
   assert.equal(details.tagline, 'English tagline');
+});
+
+test('collection caches keep Library and TMDB payloads separate for the same collection', () => {
+  const libraryDetails = {
+    detail_source: 'library_sql',
+    collection: { id: '7001', name: 'SQL Collection' }
+  };
+  const tmdbDetails = {
+    detail_source: 'tmdb_live',
+    collection: { id: '7001', name: 'SQL Collection' }
+  };
+
+  assert.equal(movieCollectionCacheKey(libraryDetails), 'library:7001');
+  assert.equal(movieCollectionCacheKey(tmdbDetails), 'tmdb:7001');
+  assert.notEqual(movieCollectionCacheKey(libraryDetails), movieCollectionCacheKey(tmdbDetails));
+});
+
+test('partial collection identity remains loading-capable instead of becoming a false zero', () => {
+  const details = {
+    detail_source: 'tmdb_live',
+    collection: { id: '7001', name: 'SQL Collection' }
+  };
+
+  const pendingView = movieCollectionView({}, details);
+  assert.equal(pendingView.status, 'idle');
+  assert.equal(pendingView.data.name, 'SQL Collection');
+  assert.equal(pendingView.data.parts, undefined);
+
+  const loadedView = movieCollectionView({
+    'tmdb:7001': {
+      status: 'loaded',
+      data: {
+        id: '7001',
+        name: 'SQL Collection',
+        parts: [{ tmdb_id: '1' }, { tmdb_id: '2' }]
+      },
+      error: ''
+    }
+  }, details);
+
+  assert.equal(loadedView.status, 'loaded');
+  assert.equal(loadedView.data.parts.length, 2);
 });

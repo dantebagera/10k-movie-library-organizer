@@ -20,6 +20,7 @@ EXPORT_DIALOG = Path(__file__).resolve().parents[1] / "src" / "components" / "Ex
 METADATA_CORRECTION = Path(__file__).resolve().parents[1] / "src" / "components" / "MetadataCorrectionModal.jsx"
 SOURCE_REVIEW_API = Path(__file__).resolve().parents[1] / "src" / "api" / "sourceReview.js"
 SOURCE_REVIEW_DIALOG = Path(__file__).resolve().parents[1] / "src" / "components" / "SourceReviewDialog.jsx"
+LIBRARY_WORKSPACE = Path(__file__).resolve().parents[1] / "src" / "features" / "library" / "LibraryWorkspace.jsx"
 STYLES = Path(__file__).resolve().parents[1] / "src" / "styles.css"
 
 
@@ -44,6 +45,7 @@ class LibraryActionUxTest(unittest.TestCase):
         cls.metadata_correction_source = METADATA_CORRECTION.read_text(encoding="utf-8")
         cls.source_review_api_source = SOURCE_REVIEW_API.read_text(encoding="utf-8")
         cls.source_review_dialog_source = SOURCE_REVIEW_DIALOG.read_text(encoding="utf-8")
+        cls.library_workspace_source = LIBRARY_WORKSPACE.read_text(encoding="utf-8")
 
     def test_library_daily_actions_are_file_scan_and_unmatched_review(self):
         self.assertIn("Rescan Files", self.source)
@@ -53,6 +55,46 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("cp-library-reconciled", self.source)
         self.assertNotIn("Fetch Metadata", self.source)
         self.assertNotIn("need metadata", self.source)
+
+    def test_file_view_expanded_row_presents_physical_file_facts_without_internal_versions(self):
+        file_row_source = self.library_workspace_source[
+            self.library_workspace_source.index("function formatMediaDecimal"):
+        ]
+        for label in (
+            "Physical file facts",
+            "Measured dimensions",
+            "Quality classification",
+            "Video format",
+            "Video bitrate",
+            "Duration",
+            "Frame rate",
+            "Display aspect ratio",
+            "Rotation",
+            "Primary audio",
+            "Probe status",
+            "Quality evidence",
+        ):
+            self.assertIn(label, file_row_source)
+        self.assertIn("file-expanded-quality-conflict", file_row_source)
+        self.assertIn("item.probe_error &&", file_row_source)
+        self.assertNotIn("file_facts_version", file_row_source)
+        self.assertNotIn("classifier_version", file_row_source)
+        self.assertNotIn("probe_size", file_row_source)
+        self.assertNotIn("probe_modified_time", file_row_source)
+
+    def test_file_and_movie_views_are_connected_without_global_return_state(self):
+        self.assertIn("fileDetailsRequest", self.library_workspace_source)
+        self.assertIn("onOpenMovieView={() => openMovieForFile(item)}", self.library_workspace_source)
+        self.assertIn("ariaLabel=\"Library path\"", self.library_workspace_source)
+        self.assertIn("resetLabel=\"Library Home\"", self.library_workspace_source)
+        self.assertIn("file-row-expand", self.library_workspace_source)
+        self.assertNotIn("returnSection", self.library_workspace_source)
+
+    def test_owned_file_details_action_is_shared_and_path_gated(self):
+        self.assertIn("export function OwnedFileDetailsButton", self.shared_cards_source)
+        self.assertIn("if (!ownedItem?.path || !onOpenFileDetails) return null;", self.shared_cards_source)
+        self.assertIn("<OwnedFileDetailsButton", self.shared_cards_source)
+        self.assertIn("onOpenFileDetails={openOwnedFileDetails}", self.source)
 
     def test_library_action_row_does_not_expose_plex_sync(self):
         match = re.search(
@@ -137,8 +179,8 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("metadata_context: 'unmatched'", self.source)
 
     def test_unmatched_tmdb_search_sends_title_and_year_separately(self):
-        self.assertIn("tmdbParams.set('q', query || matchModal.item.filename)", self.source)
-        self.assertIn("tmdbParams.set('year', matchModal.year.trim())", self.source)
+        self.assertIn("q: query", self.source)
+        self.assertIn("params.set('year', normalizedYear)", self.source)
         self.assertNotIn("`${matchModal.title || ''} ${matchModal.year || ''}`", self.source)
 
     def test_plex_search_resolves_missing_keys_and_offers_scan_retry(self):
@@ -214,7 +256,11 @@ class LibraryActionUxTest(unittest.TestCase):
     def test_movie_view_exposes_local_metadata_correction(self):
         self.assertIn("Correct metadata", self.shared_cards_source)
         self.assertIn("MetadataCorrectionModal", self.source)
-        self.assertIn("Reset to provider metadata", self.metadata_correction_source)
+        self.assertIn("Search TMDB", self.metadata_correction_source)
+        self.assertIn("Search Plex", self.metadata_correction_source)
+        self.assertIn("Save display title/year only", self.metadata_correction_source)
+        self.assertIn("Apply {searchProvider === 'plex' ? 'Plex' : 'TMDB'} match", self.metadata_correction_source)
+        self.assertIn("requestPlexLibraryScan", self.metadata_correction_source)
 
     def test_library_and_discover_expose_bulk_add_to_list_selection(self):
         self.assertIn("library-selection-checkbox", self.shared_cards_source)
@@ -336,6 +382,18 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("Catalog-backed maintenance", cleanup_source)
         self.assertIn("const maintenanceTabs", self.source)
         self.assertIn("Select recommended", self.source)
+        self.assertIn("Delete selected (", self.source)
+        self.assertIn("Keep at least one copy in each duplicate group.", cleanup_source)
+        self.assertIn("onPlay(file.path)", self.source)
+        self.assertIn("Recommended keep", self.source)
+        self.assertIn("duplicateVerdictLabel(file)", self.source)
+        self.assertIn("item.reason &&", self.source)
+        self.assertIn("comparison_uses_frame_rate", self.source)
+        self.assertIn("Framing Δ", self.source)
+        self.assertIn("Recommended reclaimable", cleanup_source)
+        self.assertIn("Verdicts separate content equivalence, technical quality, and storage efficiency.", self.source)
+        self.assertNotIn("Plex unmatched", self.cleanup_workspace_source)
+        self.assertNotIn("Plex matched", self.cleanup_workspace_source)
         self.assertIn("MAINTENANCE_PAGE_SIZE = 50", self.source)
         self.assertIn("items={visibleUnmatched}", cleanup_source)
         self.assertIn("if (state.identity_review) setIdentityAudit(state.identity_review)", cleanup_source)

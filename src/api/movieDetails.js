@@ -105,3 +105,26 @@ export function movieCollectionUrl(details) {
   const route = details.detail_source === 'library_sql' ? '/api/library/collection/' : '/api/tmdb/collection?collection_id=';
   return `${route}${encodeURIComponent(collectionId)}`;
 }
+
+export function movieCollectionSource(details) {
+  return details?.detail_source === 'library_sql' ? 'library' : 'tmdb';
+}
+
+export function movieCollectionCacheKey(details) {
+  const collectionId = String(details?.collection?.id || '').trim();
+  if (!collectionId) return '';
+  return `${movieCollectionSource(details)}:${collectionId}`;
+}
+
+export function movieCollectionView(cache = {}, details = null) {
+  const collection = details?.collection || {};
+  const cacheKey = movieCollectionCacheKey(details);
+  const cached = cacheKey ? cache[cacheKey] : null;
+  const hasCompleteInlineData = Array.isArray(collection.parts) || Number.isFinite(collection.owned_count);
+  return {
+    cacheKey,
+    status: cached?.status || (hasCompleteInlineData ? 'loaded' : collection.id ? 'idle' : 'empty'),
+    data: cached?.data || collection,
+    error: cached?.error || ''
+  };
+}

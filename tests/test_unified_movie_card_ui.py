@@ -8,6 +8,9 @@ APP_SOURCE = read_frontend_source()
 SHARED_CARDS_SOURCE = (ROOT / "src" / "components" / "SharedMovieCards.jsx").read_text(encoding="utf-8")
 PRESENTATION_SOURCE = (ROOT / "src" / "utils" / "moviePresentation.js").read_text(encoding="utf-8")
 MOVIE_LISTS_SOURCE = (ROOT / "src" / "features" / "movie-lists" / "MovieListsWorkspace.jsx").read_text(encoding="utf-8")
+AI_CONTROL_SOURCE = (ROOT / "src" / "features" / "ai-control" / "AIControlWorkspace.jsx").read_text(encoding="utf-8")
+DISCOVER_SOURCE = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+COLLECTION_CACHE_SOURCE = (ROOT / "src" / "hooks" / "useMovieCollectionCache.js").read_text(encoding="utf-8")
 APP = APP_SOURCE
 MAIN = (ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
 COMPONENT = ROOT / "src" / "components" / "movie-card" / "MovieCard.jsx"
@@ -220,7 +223,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("max-height: calc(86vh - 118px)", bio_copy_styles)
         self.assertIn("overflow: auto", bio_copy_styles)
 
-    def test_library_people_cards_can_jump_to_discover_person_movies(self):
+    def test_shared_relationship_cards_can_jump_to_discover(self):
         discover_source = APP[
             APP.index("function DiscoverWorkspace({"):
             APP.index("function DiscoverMovieCard", APP.index("function DiscoverWorkspace({"))
@@ -234,12 +237,14 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         ]
         movie_lists_source = MOVIE_LISTS_SOURCE
 
-        self.assertIn("const [discoverPersonRequest, setDiscoverPersonRequest] = useState(null);", APP)
+        self.assertIn("const [discoverRelationshipRequest, setDiscoverRelationshipRequest] = useState(null);", APP)
         self.assertIn("function openPersonInDiscover(movie, role, person)", APP)
+        self.assertIn("function openCollectionInDiscover(movie, collection)", APP)
         self.assertIn("onOpenDiscoverPerson={openPersonInDiscover}", APP)
-        self.assertIn("personRequest={discoverPersonRequest}", APP)
-        self.assertIn("personRequest,", discover_source)
-        self.assertIn("handledPersonRequestRef", discover_source)
+        self.assertIn("onOpenDiscoverCollection={openCollectionInDiscover}", APP)
+        self.assertIn("relationshipRequest={discoverRelationshipRequest}", APP)
+        self.assertIn("relationshipRequest,", discover_source)
+        self.assertIn("handledRelationshipRequestRef", discover_source)
         self.assertIn("function buildPersonMoviesContext(movie, role, person, labelPrefix = '')", discover_source)
         self.assertIn("setActiveTab('explore')", discover_source)
         self.assertIn("loadContextPage('explore', context, { page: 1 })", discover_source)
@@ -247,7 +252,25 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined", library_card_source)
         self.assertIn("onDiscover={onPersonDiscover}", APP)
         self.assertIn("onOpenDiscoverPerson", movie_lists_source)
+        self.assertIn("onOpenDiscoverCollection", movie_lists_source)
         self.assertIn("onPersonBrowse={(role, person) => onOpenDiscoverPerson", movie_lists_source)
+        self.assertIn("onCollectionBrowse={(collection) => onOpenDiscoverCollection", movie_lists_source)
+        self.assertIn("onPersonBrowse={(role, person) => onOpenDiscoverPerson", AI_CONTROL_SOURCE)
+        self.assertIn("onCollectionBrowse={(collection) => onOpenDiscoverCollection", AI_CONTROL_SOURCE)
+        indexer_card_source = DISCOVER_SOURCE[DISCOVER_SOURCE.index("function IndexerMovieCard({"):]
+        self.assertIn("onCollectionBrowse={onCollectionBrowse}", indexer_card_source)
+        self.assertIn("onPersonBrowse={onPersonBrowse}", indexer_card_source)
+
+    def test_collection_loading_is_source_aware_and_never_infers_false_zero(self):
+        self.assertIn("movieCollectionCacheKey", COLLECTION_CACHE_SOURCE)
+        self.assertIn("status: 'loading'", COLLECTION_CACHE_SOURCE)
+        self.assertIn("status: 'error'", COLLECTION_CACHE_SOURCE)
+        self.assertIn("options.force", COLLECTION_CACHE_SOURCE)
+        self.assertIn("'Loading collection...'", SHARED_CARDS_SOURCE)
+        self.assertIn("'Collection details unavailable'", SHARED_CARDS_SOURCE)
+        self.assertIn("'Collection members unavailable'", SHARED_CARDS_SOURCE)
+        self.assertNotIn("(activeCollection.parts || []).length", SHARED_CARDS_SOURCE)
+        self.assertNotIn("discover-collection-static", SHARED_CARDS_SOURCE)
 
     def test_discover_relationship_contexts_preserve_filters_and_block_initial_feed_race(self):
         discover_source = APP[

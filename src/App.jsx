@@ -11,6 +11,8 @@ import {
   Info,
   Library,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
   ShieldCheck,
@@ -130,6 +132,16 @@ const navItems = [
 ];
 
 const APP_VERSION = `v${import.meta.env.VITE_APP_VERSION || '0.0.0'}`;
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'cp.sidebarCollapsed';
+
+function storedSidebarCollapsed() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 
 const fallbackMovies = [
   {
@@ -229,6 +241,7 @@ function ArchiveApp() {
   const [activeSection, setActiveSection] = useState(() => (
     typeof window === 'undefined' ? 'home' : sectionFromPath(window.location.pathname, navItems)
   ));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed);
   const [mountedSections, setMountedSections] = useState(() => new Set([activeSection]));
   const [stats, setStats] = useState(null);
   const [movies, setMovies] = useState([]);
@@ -253,9 +266,10 @@ function ArchiveApp() {
   const [browseQuery, setBrowseQuery] = useState('');
   const [discoverActiveTab, setDiscoverActiveTab] = useState('explore');
   const [discoverSearchRequest, setDiscoverSearchRequest] = useState(0);
-  const [discoverPersonRequest, setDiscoverPersonRequest] = useState(null);
+  const [discoverRelationshipRequest, setDiscoverRelationshipRequest] = useState(null);
   const [cleanupInitialTab, setCleanupInitialTab] = useState('storage');
   const [libraryFilterRequest, setLibraryFilterRequest] = useState(null);
+  const [libraryFileRequest, setLibraryFileRequest] = useState(null);
   const [homeLists, setHomeLists] = useState([]);
   const workspaceRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
@@ -268,6 +282,14 @@ function ArchiveApp() {
       sections.has(activeSection) ? sections : new Set([...sections, activeSection])
     ));
   }, [activeSection]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(sidebarCollapsed));
+    } catch {
+      // The sidebar still works for the current session when storage is unavailable.
+    }
+  }, [sidebarCollapsed]);
 
   useLayoutEffect(() => {
     activeSectionRef.current = activeSection;
@@ -285,6 +307,12 @@ function ArchiveApp() {
 
   const consumeLibraryFilterRequest = useCallback((requestId) => {
     setLibraryFilterRequest((current) => (
+      current?.id === requestId ? null : current
+    ));
+  }, []);
+
+  const consumeLibraryFileRequest = useCallback((requestId) => {
+    setLibraryFileRequest((current) => (
       current?.id === requestId ? null : current
     ));
   }, []);
@@ -558,8 +586,9 @@ function ArchiveApp() {
   function openPersonInDiscover(movie, role, person) {
     if (!person?.id) return;
     setDiscoverActiveTab('explore');
-    setDiscoverPersonRequest((current) => ({
+    setDiscoverRelationshipRequest((current) => ({
       requestId: Number(current?.requestId || 0) + 1,
+      type: 'person',
       source: 'Library',
       movie: {
         title: movie?.title || 'Movie',
@@ -569,6 +598,32 @@ function ArchiveApp() {
       person: {
         id: person.id,
         name: person.name || 'Unknown person'
+      }
+    }));
+    selectSection('discover');
+  }
+
+  function openOwnedFileDetails(owned) {
+    const item = owned?.canonical_card || owned?.library_item || owned;
+    if (!item?.path) return;
+    setLibraryFileRequest({ id: Date.now(), path: item.path, item });
+    selectSection('library');
+  }
+
+  function openCollectionInDiscover(movie, collection) {
+    if (!collection?.id) return;
+    setDiscoverActiveTab('explore');
+    setDiscoverRelationshipRequest((current) => ({
+      requestId: Number(current?.requestId || 0) + 1,
+      type: 'collection',
+      source: 'Collection',
+      movie: {
+        title: movie?.title || 'Movie',
+        year: movie?.year || ''
+      },
+      collection: {
+        id: collection.id,
+        name: collection.name || 'TMDB collection'
       }
     }));
     selectSection('discover');
@@ -717,10 +772,12 @@ function ArchiveApp() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={cx('app-shell', sidebarCollapsed && 'app-shell-sidebar-collapsed')}>
       <Sidebar
         activeSection={activeSection}
+        collapsed={sidebarCollapsed}
         onSelect={selectSection}
+        onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
       />
       <main ref={workspaceRef} className={cx('workspace', activeSection === 'home' && 'workspace-home', activeSection === 'downloads' && 'workspace-downloads')}>
         {activeSection !== 'home' && activeSection !== 'library' && activeSection !== 'movie-lists' && activeSection !== 'cleanup' && activeSection !== 'discover' && activeSection !== 'ai-control' && activeSection !== 'iptv' && activeSection !== 'help' && activeSection !== 'settings' && (
@@ -766,6 +823,7 @@ function ArchiveApp() {
               userLists={homeLists}
               onToggleSystemList={toggleHomeSystemList}
               onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
+              onOpenFileDetails={openOwnedFileDetails}
               />
             </Suspense>
           </div>
@@ -782,8 +840,11 @@ function ArchiveApp() {
                 setQuery={setLibraryQuery}
                 onReviewUnmatched={reviewUnmatchedMetadata}
                 onOpenDiscoverPerson={openPersonInDiscover}
+                onOpenDiscoverCollection={openCollectionInDiscover}
                 filterRequest={libraryFilterRequest}
                 onFilterRequestConsumed={consumeLibraryFilterRequest}
+                fileDetailsRequest={libraryFileRequest}
+                onFileDetailsRequestConsumed={consumeLibraryFileRequest}
               />
             </Suspense>
           </div>
@@ -803,6 +864,8 @@ function ArchiveApp() {
                 onFollow={toggleFollow}
                 onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
                 onOpenDiscoverPerson={openPersonInDiscover}
+                onOpenDiscoverCollection={openCollectionInDiscover}
+                onOpenFileDetails={openOwnedFileDetails}
               />
             </Suspense>
           </div>
@@ -826,9 +889,10 @@ function ArchiveApp() {
                 browseQuery={browseQuery}
                 setBrowseQuery={setBrowseQuery}
                 searchRequest={discoverSearchRequest}
-                personRequest={discoverPersonRequest}
+                relationshipRequest={discoverRelationshipRequest}
                 activeTab={discoverActiveTab}
                 setActiveTab={setDiscoverActiveTab}
+                onOpenFileDetails={openOwnedFileDetails}
               />
             </Suspense>
           </div>
@@ -854,6 +918,9 @@ function ArchiveApp() {
                 onOpenTrailer={openTrailerModal}
                 onFollow={toggleFollow}
                 onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
+                onOpenDiscoverPerson={openPersonInDiscover}
+                onOpenDiscoverCollection={openCollectionInDiscover}
+                onOpenFileDetails={openOwnedFileDetails}
               />
             </Suspense>
           </div>
@@ -935,15 +1002,25 @@ function ArchiveApp() {
   );
 }
 
-function Sidebar({ activeSection, onSelect }) {
+function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
   return (
-    <aside className="sidebar" aria-label="Primary navigation">
+    <aside className={cx('sidebar', collapsed && 'sidebar-collapsed')} aria-label="Primary navigation">
       <div className="brand-lockup">
         <img src={logoUrl} alt="" className="brand-mark" />
         <div>
           <div className="brand-title">Cinema</div>
           <div className="brand-title brand-title-accent">Paradiso</div>
         </div>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+        </button>
       </div>
       <nav className="nav-stack">
         {navItems.map((item) => {
@@ -955,6 +1032,8 @@ function Sidebar({ activeSection, onSelect }) {
                 className={cx('nav-item', active && 'nav-item-active', `accent-${item.accent}`)}
                 onClick={() => onSelect(item.id)}
                 type="button"
+                aria-label={collapsed ? item.label : undefined}
+                title={collapsed ? item.label : undefined}
               >
                 <span className="nav-icon-wrap"><Icon size={20} /></span>
                 <span className="nav-label">
@@ -966,7 +1045,10 @@ function Sidebar({ activeSection, onSelect }) {
           );
         })}
       </nav>
-      <div className="sidebar-footer">
+      <div
+        className="sidebar-footer"
+        title={collapsed ? `Local-first archive · ${APP_VERSION}` : undefined}
+      >
         <div className="sidebar-footer-status">
           <span className="status-dot" />
           <span>Local-first archive</span>

@@ -25,6 +25,7 @@ import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
 import { formatCount } from '../../utils/appUtils.js';
 import IPTVPlayer from './IPTVPlayer.jsx';
 import IPTVListsWorkspace, { IPTVListPickerModal } from './IPTVListsWorkspace.jsx';
+import { shouldAutoSyncIPTVCatalog } from './iptvSyncPolicy.js';
 import './iptv.css';
 
 const TABS = [
@@ -44,7 +45,17 @@ function mediaTitle(item) {
   return year ? name.replace(new RegExp(`\\s*\\(\\s*${year}\\s*\\)\\s*$`), '').trim() || name : name;
 }
 
+function relativeSyncTime(timestamp) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number(timestamp || 0)));
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 export default function IPTVWorkspace({ notify }) {
+  const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState('');
   const [activeTab, setActiveTab] = useState('home');
   const [favoriteKind, setFavoriteKind] = useState('all');
   const [status, setStatus] = useState(null);
@@ -79,27 +90,70 @@ export default function IPTVWorkspace({ notify }) {
   const [listPickerBusy, setListPickerBusy] = useState(false);
   const [listPickerName, setListPickerName] = useState('');
   const playbackRef = useRef(null);
+  const activeProviderRef = useRef('');
+  const categoryIdRef = useRef('');
+  const autoSyncRequestedRef = useRef(new Set());
 
   const browseKind = activeTab === 'favorites' ? favoriteKind : activeTab;
   const isBrowseTab = ['live', 'movie', 'series', 'favorites'].includes(activeTab);
+  categoryIdRef.current = categoryId;
+  activeProviderRef.current = activeProviderId;
+  const activeProvider = providers.find((provider) => provider.provider_id === activeProviderId) || null;
 
   const refreshStatus = useCallback(async () => {
-    const data = await iptvApi.status();
+    if (!activeProviderId) return null;
+    const data = await iptvApi.status(activeProviderId);
+    if (activeProviderRef.current !== activeProviderId) return data;
     setStatus(data);
+    setProviders((state) => state.map((provider) => provider.provider_id === activeProviderId ? { ...provider, ...data } : provider));
     return data;
-  }, []);
+  }, [activeProviderId]);
 
   useEffect(() => {
     let cancelled = false;
-    refreshStatus()
+    iptvApi.providers()
       .then((data) => {
-        if (!cancelled && data.configured) return iptvApi.recent().then((result) => setRecent(result.items || []));
-        return null;
+        if (cancelled) return;
+        const nextProviders = data.providers || [];
+        const selected = nextProviders.some((provider) => provider.provider_id === data.last_selected_provider_id)
+          ? data.last_selected_provider_id
+          : (nextProviders[0]?.provider_id || '');
+        setProviders(nextProviders);
+        setActiveProviderId(selected);
       })
       .catch((requestError) => !cancelled && setError(requestError.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [refreshStatus]);
+  }, []);
+
+  useEffect(() => {
+    if (!activeProviderId) {
+      setStatus(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    refreshStatus()
+      .then(async (data) => {
+        if (cancelled || !data?.configured) return;
+        if (shouldAutoSyncIPTVCatalog(data) && !autoSyncRequestedRef.current.has(activeProviderId)) {
+          autoSyncRequestedRef.current.add(activeProviderId);
+          try {
+            const result = await iptvApi.sync(activeProviderId);
+            if (!cancelled && result.status) setStatus(result.status);
+          } catch (requestError) {
+            if (!cancelled) setError(requestError.message);
+          }
+        }
+        if (!cancelled) {
+          const result = await iptvApi.recent(activeProviderId);
+          if (!cancelled) setRecent(result.items || []);
+        }
+      })
+      .catch((requestError) => !cancelled && setError(requestError.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => { cancelled = true; };
+  }, [activeProviderId, refreshStatus]);
 
   useEffect(() => {
     if (status?.sync?.state !== 'running') return undefined;
@@ -110,6 +164,24 @@ export default function IPTVWorkspace({ notify }) {
   }, [status?.sync?.state, refreshStatus]);
 
   useEffect(() => {
+    if (!status?.configured || !['live', 'movie', 'series'].includes(activeTab)) return undefined;
+    let cancelled = false;
+    iptvApi.categories(activeProviderId, activeTab)
+      .then((result) => {
+        if (cancelled) return;
+        const nextCategories = result.items || [];
+        setCategories((state) => ({ ...state, [activeTab]: nextCategories }));
+        const selectedCategory = categoryIdRef.current;
+        if (selectedCategory && !nextCategories.some((category) => category.category_id === selectedCategory)) {
+          setCategoryId('');
+          setPage(1);
+        }
+      })
+      .catch((requestError) => !cancelled && setError(requestError.message));
+    return () => { cancelled = true; };
+  }, [activeProviderId, activeTab, status?.configured, status?.generation]);
+
+  useEffect(() => {
     if (!status?.configured || !isBrowseTab) return undefined;
     let cancelled = false;
     setLoading(true);
@@ -117,7 +189,7 @@ export default function IPTVWorkspace({ notify }) {
     const timer = window.setTimeout(async () => {
       try {
         if (activeTab === 'favorites') {
-          const result = await iptvApi.favorites({
+          const result = await iptvApi.favorites(activeProviderId, {
             kind: favoriteKind === 'all' ? '' : favoriteKind,
             q: query.trim(),
             page,
@@ -126,11 +198,7 @@ export default function IPTVWorkspace({ notify }) {
           if (!cancelled) setCatalog(result);
           return;
         }
-        if (!categories[browseKind]?.length) {
-          const categoryResult = await iptvApi.categories(browseKind);
-          if (!cancelled) setCategories((state) => ({ ...state, [browseKind]: categoryResult.items || [] }));
-        }
-        const result = await iptvApi.items({
+        const result = await iptvApi.items(activeProviderId, {
           kind: browseKind,
           category_id: categoryId,
           q: query.trim(),
@@ -146,12 +214,12 @@ export default function IPTVWorkspace({ notify }) {
       }
     }, query ? 220 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeTab, browseKind, categoryId, query, page, status?.configured, status?.generation]);
+  }, [activeProviderId, activeTab, browseKind, categoryId, query, page, status?.configured, status?.generation]);
 
   useEffect(() => {
     if (!status?.configured || activeTab !== 'lists') return undefined;
     let cancelled = false;
-    iptvApi.lists()
+    iptvApi.lists(activeProviderId)
       .then((result) => {
         if (cancelled) return;
         const nextLists = result.items || [];
@@ -160,7 +228,7 @@ export default function IPTVWorkspace({ notify }) {
       })
       .catch((requestError) => !cancelled && setError(requestError.message));
     return () => { cancelled = true; };
-  }, [activeTab, status?.configured, status?.generation, listRefresh]);
+  }, [activeProviderId, activeTab, status?.configured, status?.generation, listRefresh]);
 
   useEffect(() => {
     const selected = lists.find((list) => list.list_id === selectedListId);
@@ -175,7 +243,7 @@ export default function IPTVWorkspace({ notify }) {
     let cancelled = false;
     setListLoading(true);
     const timer = window.setTimeout(() => {
-      iptvApi.listItems(selectedListId, {
+      iptvApi.listItems(activeProviderId, selectedListId, {
         kind: listKind === 'all' ? '' : listKind,
         q: listQuery.trim(),
         page: listPage,
@@ -186,10 +254,10 @@ export default function IPTVWorkspace({ notify }) {
         .finally(() => !cancelled && setListLoading(false));
     }, listQuery ? 220 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeTab, status?.configured, selectedListId, listKind, listQuery, listPage, listRefresh]);
+  }, [activeProviderId, activeTab, status?.configured, selectedListId, listKind, listQuery, listPage, listRefresh]);
 
   useEffect(() => () => {
-    if (playbackRef.current?.token) iptvApi.stopPlayback(playbackRef.current.token).catch(() => {});
+    if (playbackRef.current?.token) iptvApi.stopPlayback(playbackRef.current.provider_id, playbackRef.current.token).catch(() => {});
   }, []);
 
   function selectTab(tab) {
@@ -201,10 +269,48 @@ export default function IPTVWorkspace({ notify }) {
     setDetail(null);
   }
 
+  function resetProviderState() {
+    setStatus(null);
+    setCategories({ live: [], movie: [], series: [] });
+    setCategoryId('');
+    setQuery('');
+    setPage(1);
+    setCatalog(EMPTY_PAGE);
+    setRecent([]);
+    setSelectedId('');
+    setDetail(null);
+    setDetailLoading(false);
+    setSelectedSeason(1);
+    setSelectedLive(null);
+    setEpg([]);
+    setPlayback(null);
+    playbackRef.current = null;
+    setLists([]);
+    setSelectedListId('');
+    setListCatalog(EMPTY_PAGE);
+    setListQuery('');
+    setListKind('all');
+    setListPage(1);
+    setListPickerItem(null);
+    setListPickerLists([]);
+    setError('');
+  }
+
+  async function switchProvider(providerId) {
+    if (!providerId || providerId === activeProviderId) return;
+    const previousPlayback = playbackRef.current;
+    resetProviderState();
+    if (previousPlayback?.token) {
+      await iptvApi.stopPlayback(previousPlayback.provider_id || activeProviderId, previousPlayback.token).catch(() => {});
+    }
+    setActiveProviderId(providerId);
+    iptvApi.selectProvider(providerId).catch((requestError) => setError(requestError.message));
+  }
+
   async function syncCatalog() {
     setError('');
     try {
-      await iptvApi.sync();
+      await iptvApi.sync(activeProviderId);
       await refreshStatus();
       notify?.('IPTV catalog sync started');
     } catch (requestError) {
@@ -215,7 +321,7 @@ export default function IPTVWorkspace({ notify }) {
   async function toggleFavorite(item) {
     const next = !item.favorite;
     try {
-      await iptvApi.favorite(item.kind, item.item_id, next);
+      await iptvApi.favorite(activeProviderId, item.kind, item.item_id, next);
       setCatalog((state) => {
         const matches = (row) => row.kind === item.kind && row.item_id === item.item_id;
         if (activeTab === 'favorites' && !next) {
@@ -236,7 +342,7 @@ export default function IPTVWorkspace({ notify }) {
     const name = newListName.trim();
     if (!name) return;
     try {
-      const created = await iptvApi.createList(name);
+      const created = await iptvApi.createList(activeProviderId, name);
       setNewListName('');
       setSelectedListId(created.list_id);
       setListRefresh((value) => value + 1);
@@ -250,7 +356,7 @@ export default function IPTVWorkspace({ notify }) {
     const name = renameListName.trim();
     if (!selectedListId || !name) return;
     try {
-      const renamed = await iptvApi.renameList(selectedListId, name);
+      const renamed = await iptvApi.renameList(activeProviderId, selectedListId, name);
       setRenameListName(renamed.name);
       setListRefresh((value) => value + 1);
       notify?.(`IPTV list renamed: ${renamed.name}`);
@@ -263,7 +369,7 @@ export default function IPTVWorkspace({ notify }) {
     const selected = lists.find((list) => list.list_id === selectedListId);
     if (!selected || !window.confirm(`Delete IPTV list "${selected.name}"? Saved media will not be removed from the provider.`)) return;
     try {
-      await iptvApi.deleteList(selectedListId);
+      await iptvApi.deleteList(activeProviderId, selectedListId);
       setSelectedListId('');
       setListRefresh((value) => value + 1);
       notify?.('IPTV list deleted');
@@ -274,7 +380,7 @@ export default function IPTVWorkspace({ notify }) {
 
   async function removeIPTVListItem(item) {
     try {
-      await iptvApi.setListItem(selectedListId, item.kind, item.item_id, false);
+      await iptvApi.setListItem(activeProviderId, selectedListId, item.kind, item.item_id, false);
       setListRefresh((value) => value + 1);
       notify?.('Removed from IPTV list');
     } catch (requestError) {
@@ -284,7 +390,7 @@ export default function IPTVWorkspace({ notify }) {
 
   async function moveIPTVListItem(item, direction) {
     try {
-      await iptvApi.moveListItem(selectedListId, item.kind, item.item_id, direction);
+      await iptvApi.moveListItem(activeProviderId, selectedListId, item.kind, item.item_id, direction);
       setListRefresh((value) => value + 1);
     } catch (requestError) {
       setError(requestError.message);
@@ -297,7 +403,7 @@ export default function IPTVWorkspace({ notify }) {
     setListPickerName('');
     setListPickerBusy(true);
     try {
-      const result = await iptvApi.lists({ kind: item.kind, item_id: item.item_id });
+      const result = await iptvApi.lists(activeProviderId, { kind: item.kind, item_id: item.item_id });
       setListPickerLists(result.items || []);
     } catch (requestError) {
       setError(requestError.message);
@@ -311,7 +417,7 @@ export default function IPTVWorkspace({ notify }) {
     setListPickerBusy(true);
     try {
       const included = !list.included;
-      await iptvApi.setListItem(list.list_id, listPickerItem.kind, listPickerItem.item_id, included);
+      await iptvApi.setListItem(activeProviderId, list.list_id, listPickerItem.kind, listPickerItem.item_id, included);
       setListPickerLists((state) => state.map((row) => row.list_id === list.list_id ? { ...row, included, item_count: Math.max(0, row.item_count + (included ? 1 : -1)) } : row));
       setListRefresh((value) => value + 1);
       notify?.(included ? `Added to ${list.name}` : `Removed from ${list.name}`);
@@ -327,8 +433,8 @@ export default function IPTVWorkspace({ notify }) {
     if (!name || !listPickerItem) return;
     setListPickerBusy(true);
     try {
-      const created = await iptvApi.createList(name);
-      await iptvApi.setListItem(created.list_id, listPickerItem.kind, listPickerItem.item_id, true);
+      const created = await iptvApi.createList(activeProviderId, name);
+      await iptvApi.setListItem(activeProviderId, created.list_id, listPickerItem.kind, listPickerItem.item_id, true);
       setListPickerLists((state) => [...state, { ...created, included: true, item_count: 1 }]);
       setListPickerName('');
       setListRefresh((value) => value + 1);
@@ -341,18 +447,20 @@ export default function IPTVWorkspace({ notify }) {
   }
 
   async function loadDetail(item) {
+    const requestedProviderId = activeProviderId;
     setSelectedId(item.item_id);
     setDetailLoading(true);
     setError('');
     try {
-      const result = await iptvApi.detail(item.kind, item.item_id);
+      const result = await iptvApi.detail(requestedProviderId, item.kind, item.item_id);
+      if (activeProviderRef.current !== requestedProviderId) return;
       setDetail(result);
       const seasonNumbers = [...new Set((result.episodes || []).map((episode) => episode.season))].sort((a, b) => a - b);
       setSelectedSeason(seasonNumbers[0] || 1);
     } catch (requestError) {
-      setError(requestError.message);
+      if (activeProviderRef.current === requestedProviderId) setError(requestError.message);
     } finally {
-      setDetailLoading(false);
+      if (activeProviderRef.current === requestedProviderId) setDetailLoading(false);
     }
   }
 
@@ -389,18 +497,24 @@ export default function IPTVWorkspace({ notify }) {
   }
 
   async function playItem(item, options = {}) {
+    const requestedProviderId = activeProviderId;
     setPlaybackLoading(true);
     setError('');
     try {
-      if (playbackRef.current?.token) await iptvApi.stopPlayback(playbackRef.current.token).catch(() => {});
-      const result = await iptvApi.startPlayback({
+      if (playbackRef.current?.token) await iptvApi.stopPlayback(playbackRef.current.provider_id, playbackRef.current.token).catch(() => {});
+      const result = await iptvApi.startPlayback(requestedProviderId, {
         kind: options.kind || item.kind,
         item_id: options.itemId || item.item_id,
         extension: options.extension || item.container_extension,
         title: options.title || item.name || item.title
       });
+      if (activeProviderRef.current !== requestedProviderId) {
+        await iptvApi.stopPlayback(requestedProviderId, result.token).catch(() => {});
+        return;
+      }
       const next = {
         ...result,
+        provider_id: requestedProviderId,
         kind: options.kind || item.kind,
         item_id: options.itemId || item.item_id,
         title: options.title || item.name || item.title,
@@ -410,9 +524,9 @@ export default function IPTVWorkspace({ notify }) {
       playbackRef.current = next;
       setPlayback(next);
     } catch (requestError) {
-      setError(requestError.message);
+      if (activeProviderRef.current === requestedProviderId) setError(requestError.message);
     } finally {
-      setPlaybackLoading(false);
+      if (activeProviderRef.current === requestedProviderId) setPlaybackLoading(false);
     }
   }
 
@@ -420,13 +534,20 @@ export default function IPTVWorkspace({ notify }) {
     const current = playbackRef.current;
     playbackRef.current = null;
     setPlayback(null);
-    if (current?.token) await iptvApi.stopPlayback(current.token).catch(() => {});
+    if (current?.token) await iptvApi.stopPlayback(current.provider_id, current.token).catch(() => {});
   }
 
   async function selectChannel(channel) {
     setSelectedLive(channel);
     setEpg([]);
-    iptvApi.epg(channel.item_id).then((result) => setEpg(result.items || [])).catch(() => setEpg([]));
+    const requestedProviderId = activeProviderId;
+    iptvApi.epg(requestedProviderId, channel.item_id)
+      .then((result) => {
+        if (activeProviderRef.current === requestedProviderId) setEpg(result.items || []);
+      })
+      .catch(() => {
+        if (activeProviderRef.current === requestedProviderId) setEpg([]);
+      });
     await playItem(channel);
   }
 
@@ -436,12 +557,19 @@ export default function IPTVWorkspace({ notify }) {
     <section className="iptv-workspace">
       <header className="iptv-header">
         <div>
-          <p className="screen-kicker">Provider television</p>
           <h1>IPTV</h1>
-          <p>Your provider catalog, kept separate from the Cinema Paradiso archive.</p>
+          <p className="screen-kicker">Provider television</p>
+          <p>{status?.last_sync ? `Updated ${relativeSyncTime(status.last_sync)}` : 'Provider catalog kept separate from the Cinema Paradiso archive.'}</p>
         </div>
         <div className="iptv-header-status">
-          <span className={status?.configured ? 'is-ready' : ''}><ServerCog size={15} /> {status?.configured ? 'Provider ready' : 'Not configured'}</span>
+          {providers.length ? (
+            <label className="iptv-provider-select">
+              <ServerCog size={15} />
+              <select aria-label="Active IPTV provider" value={activeProviderId} onChange={(event) => switchProvider(event.target.value)}>
+                {providers.map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{provider.name}</option>)}
+              </select>
+            </label>
+          ) : <span><ServerCog size={15} /> No providers</span>}
           {status?.configured ? (
             <button type="button" className="icon-button" onClick={syncCatalog} disabled={status?.sync?.state === 'running'} aria-label="Sync IPTV catalog" title="Sync catalog">
               <RefreshCcw size={17} className={status?.sync?.state === 'running' ? 'spin' : ''} />
@@ -459,12 +587,12 @@ export default function IPTVWorkspace({ notify }) {
       </nav>
 
       {error ? <div className="iptv-error"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss error"><X size={16} /></button></div> : null}
-      {!status?.configured ? <IPTVSetupRequired /> : null}
+      {!activeProviderId ? <IPTVSetupRequired /> : null}
       {status?.configured && status?.sync?.state === 'running' ? <SyncBanner status={status.sync} /> : null}
       {status?.configured && status?.sync?.state === 'error' ? <div className="iptv-error"><span>{status.sync.error}</span></div> : null}
 
       {status?.configured && activeTab === 'home' ? (
-        <IPTVHome status={status} recent={recent} onBrowse={selectTab} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
+        <IPTVHome providerId={activeProviderId} status={status} recent={recent} onBrowse={selectTab} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
       ) : null}
       {status?.configured && isBrowseTab ? (
         <>
@@ -482,6 +610,7 @@ export default function IPTVWorkspace({ notify }) {
           />
           {activeTab === 'favorites' ? (
             <FavoritesView
+              providerId={activeProviderId}
               catalog={catalog}
               selectedId={selectedId}
               detail={detail}
@@ -497,6 +626,7 @@ export default function IPTVWorkspace({ notify }) {
             />
           ) : browseKind === 'live' ? (
             <LiveView
+              providerId={activeProviderId}
               categories={categories.live || []}
               categoryId={categoryId}
               onCategory={(value) => { setCategoryId(value); setPage(1); }}
@@ -511,9 +641,9 @@ export default function IPTVWorkspace({ notify }) {
               onClosePlayback={closePlayback}
             />
           ) : browseKind === 'movie' ? (
-            <MovieView catalog={catalog} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
+            <MovieView providerId={activeProviderId} catalog={catalog} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
           ) : (
-            <SeriesView catalog={catalog} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={setSelectedSeason} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
+            <SeriesView providerId={activeProviderId} catalog={catalog} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={setSelectedSeason} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
           )}
           <Pagination page={catalog.page || page} pageSize={catalog.page_size || 30} total={catalog.total || 0} onPage={setPage} />
         </>
@@ -521,6 +651,7 @@ export default function IPTVWorkspace({ notify }) {
 
       {status?.configured && activeTab === 'lists' ? (
         <IPTVListsWorkspace
+          providerId={activeProviderId}
           lists={lists}
           selectedListId={selectedListId}
           catalog={listCatalog}
@@ -580,7 +711,7 @@ function SyncBanner({ status }) {
   return <div className="iptv-sync"><Loader2 className="spin" size={16} /><strong>{status.phase || 'Syncing IPTV catalog'}</strong><span>The current catalog remains usable until the replacement is complete.</span></div>;
 }
 
-function IPTVHome({ status, recent, onBrowse, onPlay, onFavorite, onAddToList }) {
+function IPTVHome({ providerId, status, recent, onBrowse, onPlay, onFavorite, onAddToList }) {
   const counts = status.counts || {};
   return (
     <div className="iptv-home">
@@ -593,7 +724,7 @@ function IPTVHome({ status, recent, onBrowse, onPlay, onFavorite, onAddToList })
         <header><div><p className="screen-kicker">Continue watching</p><h2>Recent IPTV</h2></div><Clock3 size={20} /></header>
         {recent.length ? (
           <div className="iptv-recent-row">
-            {recent.map((item) => <PosterTile key={`${item.kind}-${item.item_id}`} item={item} onClick={() => item.kind === 'movie' ? onPlay(item) : onBrowse(item.kind)} onFavorite={onFavorite} onAddToList={onAddToList} />)}
+            {recent.map((item) => <PosterTile providerId={providerId} key={`${item.kind}-${item.item_id}`} item={item} onClick={() => item.kind === 'movie' ? onPlay(item) : onBrowse(item.kind)} onFavorite={onFavorite} onAddToList={onAddToList} />)}
           </div>
         ) : <div className="iptv-empty"><ListVideo size={28} /><span>Played movies and series will appear here.</span></div>}
       </section>
@@ -626,7 +757,7 @@ function BrowseToolbar({ kind, categories, categoryId, onCategory, query, onQuer
   );
 }
 
-function LiveView({ categories, categoryId, onCategory, catalog, selected, epg, playback, loading, onSelect, onFavorite, onAddToList, onClosePlayback }) {
+function LiveView({ providerId, categories, categoryId, onCategory, catalog, selected, epg, playback, loading, onSelect, onFavorite, onAddToList, onClosePlayback }) {
   return (
     <div className="iptv-live-layout">
       <aside className="iptv-category-rail">
@@ -637,7 +768,7 @@ function LiveView({ categories, categoryId, onCategory, catalog, selected, epg, 
         {catalog.items.map((channel) => (
           <button type="button" key={channel.item_id} className={selected?.item_id === channel.item_id ? 'is-active' : ''} onClick={() => onSelect(channel)}>
             <span className="iptv-channel-number">{channel.channel_num || '–'}</span>
-            <span className="iptv-channel-logo"><ProviderImage src={channel.image_url ? iptvImage('live', channel.item_id) : ''} alt="" fallback={Radio} /></span>
+            <span className="iptv-channel-logo"><ProviderImage src={channel.image_url ? iptvImage(providerId, 'live', channel.item_id) : ''} alt="" fallback={Radio} /></span>
             <span className="iptv-channel-name" dir="auto">{channel.name}</span>
             <span className="iptv-live-mark">Live</span>
             <span className="iptv-row-favorite" role="button" tabIndex="0" onClick={(event) => { event.stopPropagation(); onFavorite(channel); }} aria-label={`${channel.favorite ? 'Remove' : 'Add'} favorite`}><Heart size={15} fill={channel.favorite ? 'currentColor' : 'none'} /></span>
@@ -654,7 +785,7 @@ function LiveView({ categories, categoryId, onCategory, catalog, selected, epg, 
   );
 }
 
-function MovieView({ catalog, selectedId, detail, detailLoading, onToggle, onPlay, onFavorite, onAddToList }) {
+function MovieView({ providerId, catalog, selectedId, detail, detailLoading, onToggle, onPlay, onFavorite, onAddToList }) {
   return (
     <div className="iptv-movie-grid">
       {catalog.items.map((movie) => {
@@ -666,7 +797,7 @@ function MovieView({ catalog, selectedId, detail, detailLoading, onToggle, onPla
             key={movie.item_id}
             title={mediaTitle(movie)}
             year={movie.year}
-            posterUrl={movie.image_url ? iptvImage('movie', movie.item_id) : ''}
+            posterUrl={movie.image_url ? iptvImage(providerId, 'movie', movie.item_id) : ''}
             rating={movie.rating ? Number(movie.rating).toFixed(1) : ''}
             chips={genres}
             mutedChips={movie.container_extension ? [movie.container_extension.toUpperCase()] : []}
@@ -693,19 +824,19 @@ function MovieView({ catalog, selectedId, detail, detailLoading, onToggle, onPla
   );
 }
 
-function SeriesView({ catalog, detail, detailLoading, selectedId, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList }) {
+function SeriesView({ providerId, catalog, detail, detailLoading, selectedId, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList }) {
   const seasonNumbers = useMemo(() => [...new Set((detail?.episodes || []).map((episode) => episode.season))].sort((a, b) => a - b), [detail]);
   return (
     <>
       <div className="iptv-poster-grid">
-        {catalog.items.map((series) => <PosterTile key={series.item_id} item={series} active={selectedId === series.item_id} onClick={() => onToggle(series)} onFavorite={onFavorite} onAddToList={onAddToList} />)}
+        {catalog.items.map((series) => <PosterTile providerId={providerId} key={series.item_id} item={series} active={selectedId === series.item_id} onClick={() => onToggle(series)} onFavorite={onFavorite} onAddToList={onAddToList} />)}
       </div>
       {selectedId ? (
         <section className="iptv-series-detail">
           {detailLoading || !detail ? <div className="iptv-detail-loading"><Loader2 className="spin" size={18} /> Loading seasons...</div> : (
             <>
               <div className="iptv-series-summary">
-                <div className="iptv-series-backdrop"><ProviderImage src={detail.backdrop_url ? iptvImage('series', detail.item_id, true) : iptvImage('series', detail.item_id)} fallbackSrc={iptvImage('series', detail.item_id)} alt={`${detail.name} artwork`} fallback={Tv} /></div>
+                <div className="iptv-series-backdrop"><ProviderImage src={detail.backdrop_url ? iptvImage(providerId, 'series', detail.item_id, true) : iptvImage(providerId, 'series', detail.item_id)} fallbackSrc={iptvImage(providerId, 'series', detail.item_id)} alt={`${detail.name} artwork`} fallback={Tv} /></div>
                 <div><p className="screen-kicker">Series details</p><h2 dir="auto">{detail.name}</h2><div className="iptv-series-meta">{detail.year ? <span>{String(detail.year).slice(0, 4)}</span> : null}{detail.rating ? <span><Star size={14} fill="currentColor" /> {detail.rating}</span> : null}{detail.genre ? <span dir="auto">{detail.genre}</span> : null}</div><p dir="auto">{detail.plot || 'No plot supplied by the provider.'}</p><div className="iptv-card-actions"><button type="button" className="btn btn-secondary" onClick={() => onFavorite(detail)}><Heart size={15} fill={detail.favorite ? 'currentColor' : 'none'} /> {detail.favorite ? 'Favorited' : 'Favorite'}</button><button type="button" className="btn btn-secondary" onClick={() => onAddToList(detail)}><ListPlus size={15} /> Add to list</button></div></div>
               </div>
               <div className="iptv-season-toolbar"><strong>Episodes</strong><div className="iptv-segmented">{seasonNumbers.map((season) => <button type="button" key={season} className={selectedSeason === season ? 'is-active' : ''} onClick={() => onSeason(season)}>Season {season}</button>)}</div></div>
@@ -719,10 +850,10 @@ function SeriesView({ catalog, detail, detailLoading, selectedId, selectedSeason
   );
 }
 
-function PosterTile({ item, active, onClick, onFavorite, onAddToList }) {
+function PosterTile({ providerId, item, active, onClick, onFavorite, onAddToList }) {
   return (
     <article className={`iptv-poster-tile ${active ? 'is-active' : ''}`} onClick={onClick} tabIndex="0" onKeyDown={(event) => { if (event.key === 'Enter') onClick(); }}>
-      <div><ProviderImage src={item.image_url ? iptvImage(item.kind, item.item_id) : ''} alt={`${item.name} poster`} fallback={Clapperboard} /><div className="iptv-poster-actions"><FavoriteButton item={item} onFavorite={onFavorite} /><ListActionButton item={item} onAddToList={onAddToList} /></div></div>
+      <div><ProviderImage src={item.image_url ? iptvImage(providerId, item.kind, item.item_id) : ''} alt={`${item.name} poster`} fallback={Clapperboard} /><div className="iptv-poster-actions"><FavoriteButton item={item} onFavorite={onFavorite} /><ListActionButton item={item} onAddToList={onAddToList} /></div></div>
       <strong dir="auto">{mediaTitle(item)}</strong>
       <span>{item.year || (item.kind === 'live' ? 'Live channel' : 'Provider title')}</span>
     </article>
@@ -758,7 +889,7 @@ function ListActionButton({ item, onAddToList, className = '' }) {
   );
 }
 
-function FavoritesView({ catalog, selectedId, detail, detailLoading, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList, onOpenChannel, loading }) {
+function FavoritesView({ providerId, catalog, selectedId, detail, detailLoading, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList, onOpenChannel, loading }) {
   const channels = catalog.items.filter((item) => item.kind === 'live');
   const movies = catalog.items.filter((item) => item.kind === 'movie');
   const series = catalog.items.filter((item) => item.kind === 'series');
@@ -774,7 +905,7 @@ function FavoritesView({ catalog, selectedId, detail, detailLoading, selectedSea
             {channels.map((channel) => (
               <article key={channel.item_id}>
                 <button type="button" className="iptv-favorite-channel-main" onClick={() => onOpenChannel(channel)}>
-                  <span className="iptv-channel-logo"><ProviderImage src={channel.image_url ? iptvImage('live', channel.item_id) : ''} alt="" fallback={Radio} /></span>
+                  <span className="iptv-channel-logo"><ProviderImage src={channel.image_url ? iptvImage(providerId, 'live', channel.item_id) : ''} alt="" fallback={Radio} /></span>
                   <strong dir="auto">{channel.name}</strong>
                   <Play size={17} fill="currentColor" />
                 </button>
@@ -787,13 +918,13 @@ function FavoritesView({ catalog, selectedId, detail, detailLoading, selectedSea
       {movies.length ? (
         <section className="iptv-favorite-section">
           <header><Film size={18} /><h2>Movies</h2><span>{formatCount(movies.length)}</span></header>
-          <MovieView catalog={{ ...catalog, items: movies }} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
+          <MovieView providerId={providerId} catalog={{ ...catalog, items: movies }} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
         </section>
       ) : null}
       {series.length ? (
         <section className="iptv-favorite-section">
           <header><Tv size={18} /><h2>Series</h2><span>{formatCount(series.length)}</span></header>
-          <SeriesView catalog={{ ...catalog, items: series }} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={onSeason} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
+          <SeriesView providerId={providerId} catalog={{ ...catalog, items: series }} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={onSeason} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
         </section>
       ) : null}
     </div>

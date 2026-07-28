@@ -15,64 +15,101 @@ def _iter_upstream_chunks(upstream, chunk_size=64 * 1024):
         upstream.close()
 
 
-def register_iptv_routes(app, service_provider):
-    def current_service():
-        return service_provider() if callable(service_provider) else service_provider
+def register_iptv_routes(app, manager_provider):
+    def current_manager():
+        return manager_provider() if callable(manager_provider) else manager_provider
 
-    @app.route("/api/iptv/config", methods=["GET", "POST", "DELETE"])
-    def iptv_config():
-        service = current_service()
-        if request.method == "GET":
-            return jsonify(service.public_config())
-        if request.method == "DELETE":
-            return jsonify({"success": True, **service.save_config("", clear=True)})
+    def service(provider_id):
+        return current_manager().service(provider_id)
+
+    def error_response(error, provider_id="", status=400):
+        if isinstance(error, KeyError):
+            status = 404
+        message = current_manager().redacted_error(error, provider_id).strip("'")
+        return jsonify({"error": message}), status
+
+    @app.get("/api/iptv/providers")
+    def iptv_providers():
+        try:
+            return jsonify(current_manager().list_providers())
+        except RuntimeError as error:
+            return error_response(error, status=500)
+
+    @app.post("/api/iptv/providers")
+    def iptv_provider_create():
         data = request.get_json(silent=True) or {}
         try:
-            saved = service.save_config(
+            provider = current_manager().create_provider(
+                data.get("name"),
                 data.get("server_url"),
                 data.get("username"),
                 data.get("password"),
-                data.get("allow_insecure_tls"),
+                data.get("allow_insecure_tls", False),
             )
-            return jsonify({"success": True, **saved})
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify(provider), 201
+        except (ValueError, RuntimeError) as error:
+            return error_response(error)
 
-    @app.post("/api/iptv/test")
-    def iptv_test():
-        service = current_service()
+    @app.route("/api/iptv/providers/<provider_id>", methods=["GET", "PATCH", "DELETE"])
+    def iptv_provider_detail(provider_id):
+        manager = current_manager()
         try:
-            return jsonify(service.test_connection())
-        except (ValueError, XtreamError) as error:
-            return jsonify({"error": str(error)}), 400
+            if request.method == "GET":
+                return jsonify(manager.get_provider(provider_id))
+            data = request.get_json(silent=True) or {}
+            if request.method == "DELETE":
+                return jsonify(manager.remove_provider(provider_id, data.get("confirm_name")))
+            return jsonify(manager.update_provider(
+                provider_id,
+                name=data.get("name"),
+                server_url=data.get("server_url"),
+                username=data.get("username"),
+                password=data.get("password"),
+                allow_insecure_tls=data.get("allow_insecure_tls"),
+            ))
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
 
-    @app.post("/api/iptv/sync")
-    def iptv_sync():
-        service = current_service()
+    @app.post("/api/iptv/providers/selection")
+    def iptv_provider_selection():
+        data = request.get_json(silent=True) or {}
         try:
-            started = service.start_sync()
-            return jsonify({"accepted": started, "status": service.status()})
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify(current_manager().set_selection(data.get("provider_id")))
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, str(data.get("provider_id") or ""))
 
-    @app.get("/api/iptv/status")
-    def iptv_status():
-        service = current_service()
-        return jsonify(service.status())
-
-    @app.get("/api/iptv/categories")
-    def iptv_categories():
-        service = current_service()
+    @app.post("/api/iptv/providers/<provider_id>/test")
+    def iptv_provider_test(provider_id):
         try:
-            return jsonify({"items": service.store.categories(request.args.get("kind", "live"))})
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify(current_manager().test_provider(provider_id))
+        except (KeyError, ValueError, RuntimeError, XtreamError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/items")
-    def iptv_items():
-        service = current_service()
+    @app.post("/api/iptv/providers/<provider_id>/sync")
+    def iptv_provider_sync(provider_id):
         try:
-            return jsonify(service.list_items(
+            return jsonify(current_manager().start_sync(provider_id))
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/status")
+    def iptv_provider_status(provider_id):
+        try:
+            return jsonify(current_manager().get_provider(provider_id))
+        except (KeyError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/categories")
+    def iptv_categories(provider_id):
+        try:
+            return jsonify({"items": service(provider_id).store.categories(request.args.get("kind", "live"))})
+        except (KeyError, ValueError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/items")
+    def iptv_items(provider_id):
+        try:
+            return jsonify(service(provider_id).list_items(
                 request.args.get("kind", "live"),
                 category_id=request.args.get("category_id", ""),
                 query=request.args.get("q", ""),
@@ -80,174 +117,166 @@ def register_iptv_routes(app, service_provider):
                 page_size=request.args.get("page_size", 30),
                 favorites_only=request.args.get("favorites", "").lower() in {"1", "true", "yes"},
             ))
-        except (TypeError, ValueError) as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, TypeError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/favorites")
-    def iptv_favorites():
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/favorites")
+    def iptv_favorites(provider_id):
         try:
-            return jsonify(service.list_favorites(
+            return jsonify(service(provider_id).list_favorites(
                 kind=request.args.get("kind", ""),
                 query=request.args.get("q", ""),
                 page=request.args.get("page", 1),
                 page_size=request.args.get("page_size", 60),
             ))
-        except (TypeError, ValueError) as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, TypeError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/items/<kind>/<item_id>")
-    def iptv_item_detail(kind, item_id):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/items/<kind>/<item_id>")
+    def iptv_item_detail(provider_id, kind, item_id):
         try:
-            return jsonify(service.detail(kind, item_id))
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
-        except (ValueError, XtreamError) as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify(service(provider_id).detail(kind, item_id))
+        except (KeyError, ValueError, XtreamError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/epg/<stream_id>")
-    def iptv_epg(stream_id):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/epg/<stream_id>")
+    def iptv_epg(provider_id, stream_id):
         try:
-            return jsonify({"items": service.epg(stream_id, request.args.get("limit", 4))})
-        except (ValueError, XtreamError) as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify({"items": service(provider_id).epg(stream_id, request.args.get("limit", 4))})
+        except (KeyError, ValueError, XtreamError) as error:
+            return error_response(error, provider_id)
 
-    @app.post("/api/iptv/favorites/<kind>/<item_id>")
-    def iptv_favorite(kind, item_id):
-        service = current_service()
+    @app.post("/api/iptv/providers/<provider_id>/favorites/<kind>/<item_id>")
+    def iptv_favorite(provider_id, kind, item_id):
         data = request.get_json(silent=True) or {}
         try:
-            favorite = service.set_favorite(kind, item_id, bool(data.get("favorite", True)))
+            favorite = service(provider_id).set_favorite(kind, item_id, bool(data.get("favorite", True)))
             return jsonify({"success": True, "favorite": favorite})
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
+        except (KeyError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.route("/api/iptv/lists", methods=["GET", "POST"])
-    def iptv_lists():
-        service = current_service()
+    @app.route("/api/iptv/providers/<provider_id>/lists", methods=["GET", "POST"])
+    def iptv_lists(provider_id):
+        provider_service = None
         try:
+            provider_service = service(provider_id)
             if request.method == "POST":
                 data = request.get_json(silent=True) or {}
-                return jsonify(service.create_list(data.get("name", ""))), 201
-            return jsonify({"items": service.lists(
+                return jsonify(provider_service.create_list(data.get("name", ""))), 201
+            return jsonify({"items": provider_service.lists(
                 kind=request.args.get("kind", ""),
                 item_id=request.args.get("item_id", ""),
                 include_system=request.args.get("include_system", "").lower() in {"1", "true", "yes"},
             )})
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.route("/api/iptv/lists/<list_id>", methods=["PATCH", "DELETE"])
-    def iptv_list_detail(list_id):
-        service = current_service()
+    @app.route("/api/iptv/providers/<provider_id>/lists/<list_id>", methods=["PATCH", "DELETE"])
+    def iptv_list_detail(provider_id, list_id):
         try:
+            provider_service = service(provider_id)
             if request.method == "DELETE":
-                return jsonify({"success": service.delete_list(list_id)})
+                return jsonify({"success": provider_service.delete_list(list_id)})
             data = request.get_json(silent=True) or {}
-            return jsonify(service.rename_list(list_id, data.get("name", "")))
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify(provider_service.rename_list(list_id, data.get("name", "")))
+        except (KeyError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/lists/<list_id>/items")
-    def iptv_list_items(list_id):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/lists/<list_id>/items")
+    def iptv_list_items(provider_id, list_id):
         try:
-            return jsonify(service.list_entries(
+            return jsonify(service(provider_id).list_entries(
                 list_id,
                 kind=request.args.get("kind", ""),
                 query=request.args.get("q", ""),
                 page=request.args.get("page", 1),
                 page_size=request.args.get("page_size", 60),
             ))
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
-        except (TypeError, ValueError) as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, TypeError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.route("/api/iptv/lists/<list_id>/items/<kind>/<item_id>", methods=["POST", "DELETE", "PATCH"])
-    def iptv_list_item(list_id, kind, item_id):
-        service = current_service()
+    @app.route(
+        "/api/iptv/providers/<provider_id>/lists/<list_id>/items/<kind>/<item_id>",
+        methods=["POST", "DELETE", "PATCH"],
+    )
+    def iptv_list_item(provider_id, list_id, kind, item_id):
         data = request.get_json(silent=True) or {}
         try:
+            provider_service = service(provider_id)
             if request.method == "PATCH":
-                changed = service.move_list_item(list_id, kind, item_id, data.get("direction"))
+                changed = provider_service.move_list_item(list_id, kind, item_id, data.get("direction"))
             else:
-                changed = service.set_list_item(list_id, kind, item_id, request.method == "POST")
+                changed = provider_service.set_list_item(list_id, kind, item_id, request.method == "POST")
             return jsonify({"success": True, "changed": bool(changed)})
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.post("/api/iptv/history/<kind>/<item_id>")
-    def iptv_history(kind, item_id):
-        service = current_service()
+    @app.post("/api/iptv/providers/<provider_id>/history/<kind>/<item_id>")
+    def iptv_history(provider_id, kind, item_id):
         data = request.get_json(silent=True) or {}
         try:
-            service.store.update_history(kind, item_id, data.get("position_seconds"), data.get("duration_seconds"), data.get("completed"))
+            service(provider_id).store.update_history(
+                kind,
+                item_id,
+                data.get("position_seconds"),
+                data.get("duration_seconds"),
+                data.get("completed"),
+            )
             return jsonify({"success": True})
         except (KeyError, TypeError, ValueError) as error:
-            return jsonify({"error": str(error).strip("'")}), 400
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/recent")
-    def iptv_recent():
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/recent")
+    def iptv_recent(provider_id):
         try:
-            return jsonify({"items": service.recent(request.args.get("limit", 12))})
-        except (TypeError, ValueError) as error:
-            return jsonify({"error": str(error)}), 400
+            return jsonify({"items": service(provider_id).recent(request.args.get("limit", 12))})
+        except (KeyError, TypeError, ValueError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/image/<kind>/<item_id>")
-    def iptv_image(kind, item_id):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/image/<kind>/<item_id>")
+    def iptv_image(provider_id, kind, item_id):
         try:
-            path = service.cached_image(kind, item_id, backdrop=request.args.get("backdrop") == "1")
+            path = service(provider_id).cached_image(
+                kind,
+                item_id,
+                backdrop=request.args.get("backdrop") == "1",
+            )
             return send_file(path, max_age=86400, conditional=True)
-        except (FileNotFoundError, ValueError):
+        except (KeyError, FileNotFoundError, ValueError):
             return "", 404
 
-    @app.post("/api/iptv/playback")
-    def iptv_playback_start():
-        service = current_service()
+    @app.post("/api/iptv/providers/<provider_id>/playback")
+    def iptv_playback_start(provider_id):
         data = request.get_json(silent=True) or {}
         try:
             port = request.environ.get("SERVER_PORT") or "5000"
             local_base_url = f"http://127.0.0.1:{port}"
-            return jsonify(service.start_playback(
+            return jsonify(service(provider_id).start_playback(
                 data.get("kind"),
                 data.get("item_id"),
                 data.get("extension"),
                 data.get("title"),
                 local_base_url=local_base_url,
             ))
-        except KeyError as error:
-            return jsonify({"error": str(error).strip("'")}), 404
-        except (ValueError, RuntimeError, XtreamError) as error:
-            return jsonify({"error": str(error)}), 400
+        except (KeyError, ValueError, RuntimeError, XtreamError) as error:
+            return error_response(error, provider_id)
 
-    @app.get("/api/iptv/playback/<token>/<filename>")
-    def iptv_playback_file(token, filename):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/playback/<token>/<filename>")
+    def iptv_playback_file(provider_id, token, filename):
         try:
-            path = service.playback_file(token, filename)
+            path = service(provider_id).playback_file(token, filename)
             response = send_file(path, conditional=False)
             response.headers["Cache-Control"] = "no-store" if filename.endswith(".m3u8") else "public, max-age=60"
             return response
-        except FileNotFoundError:
+        except (KeyError, FileNotFoundError):
             return "", 404
 
-    @app.get("/api/iptv/upstream/<token>")
-    def iptv_playback_upstream(token):
-        service = current_service()
+    @app.get("/api/iptv/providers/<provider_id>/upstream/<token>")
+    def iptv_playback_upstream(provider_id, token):
         try:
-            upstream = service.open_upstream(token, request.headers.get("Range", ""))
-        except FileNotFoundError:
+            upstream = service(provider_id).open_upstream(token, request.headers.get("Range", ""))
+        except (KeyError, FileNotFoundError):
             return "", 404
-
         headers = {}
         for name in ("Content-Length", "Content-Range", "Accept-Ranges"):
             value = upstream.headers.get(name)
@@ -261,7 +290,9 @@ def register_iptv_routes(app, service_provider):
             direct_passthrough=True,
         )
 
-    @app.delete("/api/iptv/playback/<token>")
-    def iptv_playback_stop(token):
-        service = current_service()
-        return jsonify({"success": service.stop_playback(token)})
+    @app.delete("/api/iptv/providers/<provider_id>/playback/<token>")
+    def iptv_playback_stop(provider_id, token):
+        try:
+            return jsonify({"success": service(provider_id).stop_playback(token)})
+        except KeyError as error:
+            return error_response(error, provider_id)

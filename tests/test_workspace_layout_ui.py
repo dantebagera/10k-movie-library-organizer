@@ -4,6 +4,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+APP = (ROOT / "src" / "App.jsx").read_text(encoding="utf-8")
 STYLES = (ROOT / "src" / "styles.css").read_text(encoding="utf-8")
 IPTV_STYLES = (ROOT / "src" / "features" / "iptv" / "iptv.css").read_text(encoding="utf-8")
 
@@ -21,7 +22,11 @@ def selector_rule(source, selector):
 
 class WorkspaceLayoutUiTest(unittest.TestCase):
     def test_production_workspaces_share_discover_content_width(self):
-        self.assertIn("--workspace-content-max-width: 1640px;", STYLES)
+        self.assertIn("--workspace-content-base-max-width: 1640px;", STYLES)
+        self.assertIn(
+            "--workspace-content-max-width: var(--workspace-content-base-max-width);",
+            STYLES,
+        )
 
         selectors = [
             ".downloads-workspace",
@@ -51,6 +56,32 @@ class WorkspaceLayoutUiTest(unittest.TestCase):
         workspace = selector_rule(STYLES, ".workspace")
         self.assertIn("padding: 24px;", workspace)
         self.assertIn("scrollbar-gutter: stable;", workspace)
+
+    def test_desktop_sidebar_collapses_without_changing_workspace_padding(self):
+        self.assertIn("--sidebar-width: 280px;", STYLES)
+        self.assertIn("--sidebar-collapsed-width: 84px;", STYLES)
+        self.assertIn(
+            "grid-template-columns: var(--sidebar-width) minmax(0, 1fr);",
+            selector_rule(STYLES, ".app-shell"),
+        )
+        self.assertIn(
+            ".app-shell-sidebar-collapsed {\n"
+            "    --workspace-content-max-width: calc(",
+            STYLES,
+        )
+        self.assertIn(
+            "+ var(--sidebar-width)\n"
+            "      - var(--sidebar-collapsed-width)",
+            STYLES,
+        )
+        self.assertIn(
+            "    grid-template-columns: var(--sidebar-collapsed-width) minmax(0, 1fr);",
+            STYLES,
+        )
+        self.assertIn("SIDEBAR_COLLAPSED_STORAGE_KEY", APP)
+        self.assertIn("aria-expanded={!collapsed}", APP)
+        self.assertIn("collapsed={sidebarCollapsed}", APP)
+        self.assertIn("padding: 24px;", selector_rule(STYLES, ".workspace"))
 
 
 if __name__ == "__main__":

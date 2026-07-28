@@ -6,7 +6,9 @@ import {
   buildLibraryPeopleIndex,
   buildLibraryViewModel,
   buildMovieListViewModel,
+  getCompactQualityLabel,
   getMovieIdentity,
+  getQualityFactsLabel,
   getQualityLabel,
   getTmdbCacheKey,
   getLocaleTag,
@@ -75,6 +77,19 @@ test('movie list view model keeps owned and missing movies together with upgrade
   const missing = buildMovieListViewModel({ libraryItems, list, query: 'pulp', statusFilter: 'missing' });
   assert.equal(missing.rows.length, 1);
   assert.equal(missing.rows[0].title, 'Pulp Fiction');
+});
+
+test('compact movie-view quality keeps only the class and source', () => {
+  assert.equal(
+    getCompactQualityLabel({
+      quality_class: '1080p',
+      resolution: '1080-class - 1904 x 800',
+      rip_source: 'Blu-ray'
+    }),
+    '1080 · Blu-ray'
+  );
+  assert.equal(getCompactQualityLabel({ resolution: '2160p' }), '2160');
+  assert.equal(getCompactQualityLabel({ rip_source: 'WEB-DL' }), 'WEB-DL');
 });
 
 test('ownership fallback requires a year and never crosses conflicting Plex identities', () => {
@@ -203,6 +218,22 @@ test('getTmdbCacheKey preserves canonical id, item id, then identity fallback pr
 
 test('display labels preserve current quality and root fallbacks', () => {
   assert.equal(getQualityLabel({ resolution: '1080p', rip_source: 'BluRay' }), '1080p BluRay');
+  assert.equal(
+    getQualityLabel({
+      quality_display: '1080-class - 1800 x 960',
+      quality_class: '1080p',
+      resolution: '720p',
+      rip_source: 'WEB-DL'
+    }),
+    '1080-class - 1800 x 960 WEB-DL'
+  );
+  assert.equal(
+    getQualityFactsLabel({
+      quality_display: 'Measured 954 x 576 - filename claims 1080p',
+      resolution: '1080p'
+    }),
+    'Measured 954 x 576 - filename claims 1080p'
+  );
   assert.equal(getQualityLabel({ resolution: 'Unknown', rip_source: 'WEB-DL' }), 'WEB-DL');
   assert.equal(getQualityLabel({ resolution: 'Unknown', rip_source: 'Unknown' }), 'Unknown quality');
   assert.equal(rootLabel('E:\\Movies\\'), 'Root: Movies');

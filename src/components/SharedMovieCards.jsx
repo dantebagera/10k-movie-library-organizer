@@ -1,6 +1,6 @@
 import {
   AlertTriangle, Bell, Bookmark, BookOpen, Check, Clapperboard, ExternalLink, Film, Loader2,
-  MonitorPlay, Pencil, Play, RefreshCcw, Search, Sparkles, Trash2, Wand2, X
+  FileText, MonitorPlay, Pencil, Play, RefreshCcw, Search, Sparkles, Trash2, Wand2, X
 } from 'lucide-react';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -11,7 +11,7 @@ import { MovieLanguageToggle, useTransientMovieLanguage } from './MovieLanguageT
 import { UnifiedMovieCard } from './movie-card/MovieCard.jsx';
 import { cx, formatCount } from '../utils/appUtils.js';
 import {
-  getLocaleTag, getMovieIdentity, getQualityLabel, getRolePeople
+  getCompactQualityLabel, getLocaleTag, getMovieIdentity, getQualityLabel, getRolePeople
 } from '../utils/libraryUtils.js';
 import {
   formatReleaseDateLabel, formatVoteCount, isUnreleasedMovie
@@ -32,6 +32,16 @@ export function PosterEditButton({ title, onEdit }) {
       }}
     >
       <Pencil size={17} />
+    </button>
+  );
+}
+
+export function OwnedFileDetailsButton({ owned, onOpenFileDetails }) {
+  const ownedItem = owned?.canonical_card || owned?.library_item || owned;
+  if (!ownedItem?.path || !onOpenFileDetails) return null;
+  return (
+    <button type="button" className="btn btn-secondary" onClick={() => onOpenFileDetails(ownedItem)}>
+      <FileText size={15} /> File details
     </button>
   );
 }
@@ -87,6 +97,8 @@ export function DiscoverMovieCard({
   expanded,
   details,
   collection,
+  collectionStatus,
+  collectionError,
   itemLists,
   onPlay,
   onStream,
@@ -98,10 +110,12 @@ export function DiscoverMovieCard({
   onToggleDetails,
   onPersonBrowse,
   onCollectionBrowse,
+  onCollectionRetry,
   onListBrowse,
   onEditLists,
   onRemoveFromList,
   onEditPoster,
+  onOpenFileDetails,
   watched,
   watchlisted,
   onToggleWatched,
@@ -146,8 +160,8 @@ export function DiscoverMovieCard({
           label: expanded ? displayDetails?.certification || displayMovie.certification : '',
           tone: 'certification'
         },
-        owned?.resolution,
-        owned?.size_human
+        owned ? getQualityLabel(ownedItem) : '',
+        ownedItem?.size_human || owned?.size_human
       ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
@@ -188,8 +202,11 @@ export function DiscoverMovieCard({
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
+          collectionStatus={collectionStatus}
+          collectionError={collectionError}
           itemLists={itemLists}
           onCollectionBrowse={onCollectionBrowse}
+          onCollectionRetry={onCollectionRetry}
           onListBrowse={onListBrowse}
           onEditLists={onEditLists}
           onRemoveFromList={onRemoveFromList}
@@ -217,6 +234,7 @@ export function DiscoverMovieCard({
                 <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(owned.path)}>
                   <Play size={15} /> Play
                 </button>
+                <OwnedFileDetailsButton owned={ownedItem} onOpenFileDetails={onOpenFileDetails} />
                 {lowQuality && (
                   <button type="button" className="btn btn-secondary" onClick={() => onFindTorrent(displayMovie, true)}>
                     <Wand2 size={15} /> Find upgrade
@@ -329,8 +347,11 @@ export function MovieExpandedCuration({
   movie,
   details,
   collection,
+  collectionStatus = 'empty',
+  collectionError = '',
   itemLists = [],
   onCollectionBrowse,
+  onCollectionRetry,
   onListBrowse,
   onEditLists,
   onRemoveFromList,
@@ -341,34 +362,53 @@ export function MovieExpandedCuration({
   const activeCollection = collection?.id ? collection : details?.collection || {};
   const canBrowseCollection = Boolean(onCollectionBrowse);
   const canBrowseLists = Boolean(onListBrowse);
-  const collectionDetail = Number.isFinite(activeCollection.owned_count)
-    ? `${formatCount(activeCollection.owned_count)} owned${activeCollection.unresolved_count ? `, ${formatCount(activeCollection.unresolved_count)} need identity review` : ''}`
-    : `${formatCount((activeCollection.parts || []).length)} movies, ${activeCollection.source || 'TMDB'} collection`;
+  const collectionTotal = Array.isArray(activeCollection.parts) ? activeCollection.parts.length : null;
+  const collectionOwned = Number.isFinite(activeCollection.owned_count) ? activeCollection.owned_count : null;
+  const collectionDetail = ['idle', 'loading'].includes(collectionStatus)
+    ? 'Loading collection...'
+    : collectionStatus === 'error'
+      ? 'Collection details unavailable'
+      : collectionTotal !== null && collectionTotal > 0 && collectionOwned !== null
+        ? `${formatCount(collectionTotal)} movies • ${formatCount(collectionOwned)} owned`
+        : collectionTotal !== null && collectionTotal > 0
+          ? `${formatCount(collectionTotal)} movies`
+          : collectionOwned !== null
+            ? `${formatCount(collectionOwned)} owned`
+            : 'Collection members unavailable';
 
   return (
     <aside className="movie-expanded-curation" aria-label="Collection and lists">
       {activeCollection?.id && (
         <div className="collection-panel">
           {canBrowseCollection ? (
-            <button type="button" className="collection-main-action" onClick={() => onCollectionBrowse(activeCollection)}>
+            <button
+              type="button"
+              className="collection-main-action"
+              onClick={() => onCollectionBrowse(activeCollection)}
+              aria-busy={collectionStatus === 'loading'}
+            >
               <Clapperboard size={17} />
               <span>
                 <strong dir="auto">{activeCollection.name}</strong>
                 <small>{collectionDetail}</small>
               </span>
             </button>
-          ) : (
-            <div className="collection-main-action discover-collection-static">
-              <Clapperboard size={17} />
-              <span>
-                <strong dir="auto">{activeCollection.name}</strong>
-                <small>{collectionDetail}</small>
-              </span>
-            </div>
-          )}
-          {onEditCollection ? (
+          ) : null}
+          {(collectionStatus === 'error' && onCollectionRetry) || onEditCollection ? (
             <div className="collection-actions">
-              <button type="button" className="mini-action" onClick={() => onEditCollection(activeCollection)}>Edit</button>
+              {collectionStatus === 'error' && onCollectionRetry ? (
+                <button
+                  type="button"
+                  className="mini-action"
+                  onClick={onCollectionRetry}
+                  title={collectionError || 'Retry loading collection details'}
+                >
+                  <RefreshCcw size={13} /> Retry
+                </button>
+              ) : null}
+              {onEditCollection ? (
+                <button type="button" className="mini-action" onClick={() => onEditCollection(activeCollection)}>Edit</button>
+              ) : null}
               {activeCollection.is_edited && onResetCollection ? (
                 <button type="button" className="mini-action mini-action-danger" onClick={() => onResetCollection(activeCollection)}>
                   <RefreshCcw size={13} /> Reset
@@ -620,6 +660,8 @@ export function LibraryMovieCard({
   expanded,
   details,
   collection,
+  collectionStatus,
+  collectionError,
   itemLists,
   onToggle,
   onPlay,
@@ -627,7 +669,8 @@ export function LibraryMovieCard({
   onTrailer,
   onPersonFilter,
   onPersonDiscover,
-  onCollectionFilter,
+  onCollectionBrowse,
+  onCollectionRetry,
   onEditCollection,
   onResetCollection,
   onListFilter,
@@ -635,11 +678,13 @@ export function LibraryMovieCard({
   onRemoveFromList,
   onEditPoster,
   onCorrectMetadata,
+  onOpenFileDetails,
   watched,
   watchlisted,
   onToggleWatched,
   onToggleWatchlist,
   showOwnedBadge = true,
+  conciseFileFacts = false,
   selected,
   onSelect
 }) {
@@ -700,8 +745,8 @@ export function LibraryMovieCard({
           label: expanded ? displayDetails?.certification || displayMovie.certification : '',
           tone: 'certification'
         },
-        getQualityLabel(item),
-        item.size_human
+        conciseFileFacts ? getCompactQualityLabel(item) : getQualityLabel(item),
+        conciseFileFacts ? '' : item.size_human
       ]}
       statusLabel={lowQuality ? 'Upgrade candidate' : ''}
       statusTone={lowQuality ? 'warning' : 'neutral'}
@@ -743,8 +788,11 @@ export function LibraryMovieCard({
           movie={displayMovie}
           details={displayDetails}
           collection={displayCollection}
+          collectionStatus={collectionStatus}
+          collectionError={collectionError}
           itemLists={itemLists}
-          onCollectionBrowse={onCollectionFilter}
+          onCollectionBrowse={onCollectionBrowse}
+          onCollectionRetry={onCollectionRetry}
           onListBrowse={onListFilter}
           onEditLists={onEditLists}
           onRemoveFromList={onRemoveFromList}
@@ -779,6 +827,7 @@ export function LibraryMovieCard({
             <button type="button" className="btn btn-secondary" onClick={onCorrectMetadata}>
               <Pencil size={15} /> Correct metadata
             </button>
+            <OwnedFileDetailsButton owned={item} onOpenFileDetails={onOpenFileDetails} />
             {lowQuality && (
               <button type="button" className="btn btn-upgrade" onClick={() => onFindTorrent(movieForSearch, true)}>
                 <Wand2 size={15} /> Find upgrade

@@ -194,7 +194,7 @@ class IPTVStoreTests(unittest.TestCase):
 class IPTVServiceConfigTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.service = IPTVService(self.temporary.name)
+        self.service = IPTVService(self.temporary.name, "test-provider")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -217,6 +217,21 @@ class IPTVServiceConfigTests(unittest.TestCase):
         self.assertTrue(public["allow_insecure_tls"])
         self.assertFalse(self.service.client().verify_tls)
 
+    def test_playback_session_keeps_its_provider_tls_choice_after_config_edit(self):
+        self.service.save_config("https://provider.example", "sample-user", "sample-password", allow_insecure_tls=True)
+        self.service._sessions["token"] = {
+            "source_url": "https://provider.example/live",
+            "allow_insecure_tls": True,
+        }
+        self.service.save_config("https://provider.example", "", "", allow_insecure_tls=False)
+        response = MagicMock()
+        try:
+            with patch("services.iptv_service.urllib.request.urlopen", return_value=response) as urlopen:
+                self.assertIs(self.service.open_upstream("token"), response)
+            self.assertIsNotNone(urlopen.call_args.kwargs["context"])
+        finally:
+            self.service._sessions.pop("token", None)
+
     def test_blank_secret_fields_preserve_saved_credentials(self):
         self.service.save_config("https://provider.example", "sample-user", "sample-password")
         self.service.save_config("https://other.example", "", "")
@@ -233,6 +248,27 @@ class IPTVServiceConfigTests(unittest.TestCase):
 
         self.assertNotEqual(first, self.service.provider_key())
         self.assertNotIn("first-user", first)
+
+    def test_sync_errors_and_status_never_expose_credentials(self):
+        self.service.save_config("https://provider.example", "sample-user", "sample-password")
+        with patch.object(
+            self.service,
+            "client",
+            side_effect=XtreamError("username=sample-user&password=sample-password"),
+        ):
+            self.service._sync_worker()
+
+        payload = json.dumps(self.service.status())
+        self.assertNotIn("sample-user", payload)
+        self.assertNotIn("sample-password", payload)
+        self.assertIn("[redacted]", payload)
+
+    def test_running_sync_cannot_be_started_twice(self):
+        self.service.save_config("https://provider.example", "sample-user", "sample-password")
+        with patch("services.iptv_service.threading.Thread") as thread_class:
+            self.assertTrue(self.service.start_sync())
+            self.assertFalse(self.service.start_sync())
+        thread_class.return_value.start.assert_called_once_with()
 
     def test_image_proxy_rejects_provider_supplied_private_network_url(self):
         self.service.save_config("https://provider.example", "sample-user", "sample-password")
@@ -253,7 +289,7 @@ class IPTVServiceConfigTests(unittest.TestCase):
         old = time.time() - self.service.ORPHANED_PLAYBACK_MAX_AGE - 60
         os.utime(stale, (old, old))
 
-        replacement = IPTVService(self.temporary.name)
+        replacement = IPTVService(self.temporary.name, "test-provider")
         try:
             self.assertTrue(recent.is_dir())
             self.assertFalse(stale.exists())
@@ -337,30 +373,23 @@ class IPTVAppDataBindingTests(unittest.TestCase):
 
         original_user_data = app._user_data_dir
         original_cache_dir = app._tmdb_cache_dir
-        original_service = app._iptv_service
+        original_manager = app._iptv_provider_manager
         original_tmdb_cache_dir = app._TMDB_CACHE_DIR
         original_library_cache_file = app._TMDB_LIBRARY_CACHE_FILE
         original_collection_cache_file = app._TMDB_COLLECTION_CACHE_FILE
         original_library_cache = app._tmdb_library_cache
         original_collection_cache = app._tmdb_collection_cache
         with tempfile.TemporaryDirectory() as user_tmp, tempfile.TemporaryDirectory() as cache_tmp:
-            provider_dir = Path(user_tmp) / "iptv"
-            provider_dir.mkdir(parents=True)
-            (provider_dir / "provider.json").write_text(json.dumps({
-                "server_url": "https://provider.example",
-                "username": "rebound-user",
-                "password": "rebound-password",
-            }), encoding="utf-8")
             try:
                 with patch.object(app, "_save_config", return_value=None):
                     changed = app.app.test_client().post("/api/app-data/config", json={
                         "user_data_dir": user_tmp,
                         "tmdb_cache_dir": cache_tmp,
                     })
-                bound_root = Path(app._iptv_service.root)
-                public = app.app.test_client().get("/api/iptv/config").get_json()
+                bound_root = Path(app._iptv_provider_manager.root)
+                public = app.app.test_client().get("/api/iptv/providers").get_json()
             finally:
-                app._iptv_service.close()
+                app._iptv_provider_manager.close()
                 app._user_data_dir = original_user_data
                 app._tmdb_cache_dir = original_cache_dir
                 app._TMDB_CACHE_DIR = original_tmdb_cache_dir
@@ -368,12 +397,11 @@ class IPTVAppDataBindingTests(unittest.TestCase):
                 app._TMDB_COLLECTION_CACHE_FILE = original_collection_cache_file
                 app._tmdb_library_cache = original_library_cache
                 app._tmdb_collection_cache = original_collection_cache
-                app._iptv_service = original_service
+                app._iptv_provider_manager = original_manager
 
         self.assertEqual(changed.status_code, 200)
         self.assertEqual(bound_root, Path(user_tmp) / "iptv")
-        self.assertTrue(public["configured"])
-        self.assertTrue(public["has_username"])
+        self.assertEqual(public["providers"], [])
 
 
 if __name__ == "__main__":

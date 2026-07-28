@@ -108,7 +108,7 @@ export default function IPTVPlayer({ playback, compact = false, onClose }) {
     const timer = window.setInterval(() => {
       const video = videoRef.current;
       if (!video || !Number.isFinite(video.currentTime)) return;
-      iptvApi.history(playback.historyKind || playback.kind, playback.historyId || playback.item_id, {
+      iptvApi.history(playback.provider_id, playback.historyKind || playback.kind, playback.historyId || playback.item_id, {
         position_seconds: video.currentTime,
         duration_seconds: Number.isFinite(video.duration) ? video.duration : 0,
         completed: Number.isFinite(video.duration) && video.duration > 0 && video.currentTime / video.duration > 0.92

@@ -17,6 +17,28 @@ const parityLibraryItem = {
   filename: 'Render.Parity.Movie.2024.mkv',
   title: 'Render Parity Movie (2024)',
   resolution: '1080p',
+  quality_class: '1080p',
+  quality_display: '1080-class - 1800 x 960',
+  rip_source: 'Blu-ray',
+  video_width: 1800,
+  video_height: 960,
+  video_codec: 'HEVC',
+  video_profile: 'Main 10@L4',
+  video_bit_depth: 10,
+  video_bitrate: 18400000,
+  video_frame_rate: 23.976,
+  duration_ms: 7080000,
+  display_aspect_ratio: 1.875,
+  rotation_degrees: 0,
+  audio_codec: 'AAC',
+  audio_channels: 6,
+  audio_bitrate: 384000,
+  filename_quality_claim: '720p',
+  quality_source: 'measured_conflict',
+  quality_conflict: true,
+  quality_nonstandard: true,
+  probe_status: 'ok',
+  probed_at: 1785196800,
   size: 100,
   size_human: '100 B',
   metadata_status: 'accepted',
@@ -56,24 +78,49 @@ const parityDeferredDetails = {
   }
 };
 
-async function mockCardParityApis(page) {
+const parityCollectionParts = [
+  parityMovie,
+  {
+    ...parityMovie,
+    tmdb_id: '43',
+    imdb_id: 'tt0000043',
+    title: 'Missing Collection Part',
+    year: '2025'
+  },
+  {
+    ...parityMovie,
+    tmdb_id: '44',
+    imdb_id: 'tt0000044',
+    title: 'Another Missing Collection Part',
+    year: '2026'
+  }
+];
+
+async function mockCardParityApis(page, options = {}) {
   await page.route('**/api/library?view=cards*', async (route) => {
     await route.fulfill({ json: { items: [parityLibraryItem], count: 1, catalog_generation: 1 } });
   });
   await page.route('**/api/library/check', async (route) => {
+    const requested = route.request().postDataJSON()?.movies || [];
     await route.fulfill({ json: {
-      results: [{
-        found: true,
-        path: parityLibraryItem.path,
-        resolution: parityLibraryItem.resolution,
-        size_human: parityLibraryItem.size_human,
-        tmdb_id: parityMovie.tmdb_id,
-        imdb_id: parityMovie.imdb_id,
-        title: parityMovie.title,
-        year: parityMovie.year,
-        canonical_card: parityLibraryItem,
-        library_item: parityLibraryItem
-      }]
+      results: requested.map((movie) => String(movie.tmdb_id || '') === parityMovie.tmdb_id ? {
+          found: true,
+          path: parityLibraryItem.path,
+          resolution: parityLibraryItem.resolution,
+          size_human: parityLibraryItem.size_human,
+          tmdb_id: parityMovie.tmdb_id,
+          imdb_id: parityMovie.imdb_id,
+          title: parityMovie.title,
+          year: parityMovie.year,
+          canonical_card: parityLibraryItem,
+          library_item: parityLibraryItem
+        } : {
+          found: false,
+          tmdb_id: movie.tmdb_id || '',
+          imdb_id: movie.imdb_id || '',
+          title: movie.title || '',
+          year: movie.year || ''
+        })
       , catalog_generation: 1
     } });
   });
@@ -82,6 +129,34 @@ async function mockCardParityApis(page) {
   });
   await page.route('**/api/tmdb/discover**', async (route) => {
     await route.fulfill({ json: { results: [parityMovie], page: 1, total_pages: 1, total_results: 1 } });
+  });
+  await page.route('**/api/library/collection/7001**', async (route) => {
+    if (options.libraryCollectionGate) await options.libraryCollectionGate;
+    await route.fulfill({ json: {
+      id: '7001',
+      name: 'SQL Collection',
+      source: 'TMDB + Library',
+      parts: parityCollectionParts,
+      owned_count: 1,
+      owned_paths: [parityLibraryItem.path],
+      unresolved_count: 0
+    } });
+  });
+  await page.route('**/api/tmdb/collection**', async (route) => {
+    await route.fulfill({ json: {
+      id: '7001',
+      name: 'SQL Collection',
+      source: 'TMDB',
+      parts: parityCollectionParts
+    } });
+  });
+  await page.route('**/api/tmdb/person_movies**', async (route) => {
+    await route.fulfill({ json: {
+      results: [parityCollectionParts[1]],
+      page: 1,
+      total_pages: 1,
+      total_results: 1
+    } });
   });
 }
 
@@ -111,6 +186,48 @@ for (const [path, role, name] of workspaces) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+test('desktop sidebar collapses persistently while workspace margins stay fixed', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
+
+  const sidebar = page.getByRole('complementary', { name: 'Primary navigation' });
+  const workspace = page.locator('.workspace');
+  const pageContent = page.locator('.library-workspace');
+  const collapseButton = page.getByRole('button', { name: 'Collapse sidebar' });
+
+  await expect(sidebar).toHaveCSS('width', '280px');
+  const expandedWorkspaceWidth = await workspace.evaluate((element) => element.getBoundingClientRect().width);
+  const expandedContentWidth = await pageContent.evaluate((element) => element.getBoundingClientRect().width);
+  const expandedPadding = await workspace.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.paddingLeft, style.paddingRight];
+  });
+  expect(expandedPadding).toEqual(['24px', '24px']);
+
+  await collapseButton.click();
+  await expect(sidebar).toHaveCSS('width', '84px');
+  await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: 'Library' })).toHaveAttribute('title', 'Library');
+
+  const collapsedWorkspaceWidth = await workspace.evaluate((element) => element.getBoundingClientRect().width);
+  const collapsedContentWidth = await pageContent.evaluate((element) => element.getBoundingClientRect().width);
+  const collapsedPadding = await workspace.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return [style.paddingLeft, style.paddingRight];
+  });
+  expect(collapsedWorkspaceWidth - expandedWorkspaceWidth).toBeGreaterThanOrEqual(190);
+  expect(collapsedContentWidth - expandedContentWidth).toBeGreaterThanOrEqual(190);
+  expect(collapsedPadding).toEqual(['24px', '24px']);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('true');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '84px');
+  await page.getByRole('button', { name: 'Expand sidebar' }).click();
+  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '280px');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('false');
+});
 
 test('Downloads shows qBittorrent without migration-only review records', async ({ page }) => {
   await page.goto('/downloads', { waitUntil: 'domcontentloaded' });
@@ -175,14 +292,40 @@ test('Settings selects a free Ollama cloud model and tests that exact model', as
 });
 
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
+  await mockCardParityApis(page);
+  await page.route('**/api/library?view=files', async (route) => {
+    await route.fulfill({ json: { items: [parityLibraryItem], count: 1, catalog_generation: 1 } });
+  });
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
 
   await page.getByRole('button', { name: 'File View' }).click();
   await expect(page.getByRole('heading', { name: 'File View' })).toBeVisible();
+  const fileRow = page.locator('.library-file-row').filter({ hasText: parityLibraryItem.filename });
+  await fileRow.getByRole('button', { name: `Expand file details for ${parityLibraryItem.filename}` }).click();
+  const fileFacts = page.locator('.file-expanded-panel');
+  await expect(fileFacts.getByText('Physical file facts')).toBeVisible();
+  await expect(fileFacts.getByText('1800 × 960', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('HEVC · Main 10@L4 · 10-bit', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('18.4 Mbps', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('1h 58m 0s', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('23.976 fps', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('1.875:1', { exact: true })).toBeVisible();
+  await expect(fileFacts.getByText('AAC · 6 channels · 384 kbps', { exact: true })).toBeVisible();
+  await expect(fileFacts.locator('.file-expanded-quality-conflict')).toHaveCount(1);
+  await expect(fileFacts.getByText('Conflict: filename claims 720p; measured 1800 × 960 classify as 1080p.', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Movie View' }).click();
+  await fileRow.getByRole('button', { name: 'Movie View' }).click();
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
+  await expect(page.getByLabel('Library path')).toContainText(`${parityMovie.title} (${parityMovie.year})`);
+  const focusedCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await expect(focusedCard).toHaveClass(/library-movie-card-expanded/);
+  await page.getByLabel('Library path').getByRole('button', { name: 'Back' }).click();
+  await expect(page.getByLabel('Library path')).toHaveCount(0);
+  await focusedCard.click();
+  await focusedCard.getByRole('button', { name: 'File details' }).click();
+  await expect(page.getByRole('heading', { name: 'File View' })).toBeVisible();
+  await expect(page.locator('.library-file-row-expanded')).toContainText(parityLibraryItem.path);
 });
 
 test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
@@ -832,6 +975,42 @@ test('Discover collection navigation wins over an older in-flight list request',
 
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(page.getByText(rootMovie.title, { exact: true })).toBeVisible();
+});
+
+test('Library collection never shows a false zero and opens the full collection in Discover with one click', async ({ page }) => {
+  let releaseLibraryCollection;
+  const libraryCollectionGate = new Promise((resolve) => {
+    releaseLibraryCollection = resolve;
+  });
+  await mockCardParityApis(page, { libraryCollectionGate });
+  await page.route('**/api/library/details**', (route) => route.fulfill({
+    json: { item: parityDeferredDetails, catalog_generation: 1 }
+  }));
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  const libraryCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await libraryCard.getByRole('heading', { name: parityMovie.title }).click();
+
+  const collectionButton = libraryCard.getByRole('button', { name: /SQL Collection/ });
+  await expect(collectionButton).toContainText('Loading collection...');
+  await expect(libraryCard.getByText('0 movies', { exact: false })).toHaveCount(0);
+
+  await collectionButton.click();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Discovery path').getByText(`${parityMovie.title} > SQL Collection`, { exact: true })).toBeVisible();
+  for (const movie of parityCollectionParts) {
+    await expect(page.getByRole('heading', { name: movie.title, exact: true })).toBeVisible();
+  }
+  await expect(page.locator('.discover-movie-card').filter({ hasText: parityMovie.title }).getByText('Owned', { exact: true })).toBeVisible();
+  const missingCollectionCard = page.locator('.discover-movie-card').filter({
+    has: page.getByRole('heading', { name: parityCollectionParts[1].title, exact: true })
+  });
+  await expect(missingCollectionCard.getByText('Not in library', { exact: true })).toBeVisible();
+
+  releaseLibraryCollection();
+  await page.getByRole('button', { name: 'Library', exact: true }).click();
+  await expect(libraryCard.getByRole('button', { name: /SQL Collection/ })).toContainText('3 movies • 1 owned');
+  await expect(libraryCard.getByText('0 movies', { exact: false })).toHaveCount(0);
 });
 
 test('Keyword modes surface their authoritative SQL and TMDB errors', async ({ page }) => {
@@ -1491,8 +1670,46 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
           title: 'Project Hail Mary (2026)',
           recommended_count: 1,
           files: [
-            { path: keepPath, filename: 'Project.Hail.Mary.2026.1080p.mkv', role: 'keep', recommendation: 'keep', resolution: '1080p', size_human: '4.0 GB' },
-            { path: candidatePath, filename: 'Project.Hail.Mary.2026.720p.mkv', role: 'candidate', recommendation: 'recommended', resolution: '720p', size_human: '2.0 GB' },
+            {
+              path: keepPath,
+              filename: 'Project.Hail.Mary.2026.1080p.mkv',
+              role: 'keep',
+              recommendation: 'keep',
+              verdict: 'recommended_keep',
+              verdict_label: 'Recommended keep',
+              verdict_tone: 'success',
+              reason: 'Recommended keep — 2.25× the pixels of the 720p copy; identical runtime.',
+              resolution: '1080p',
+              quality_class: '1080p',
+              quality_display: '1080-class - 1800 x 960',
+              video_width: 1800,
+              video_height: 960,
+              video_codec: 'HEVC',
+              video_bit_depth: 10,
+              audio_codec: 'AAC',
+              audio_channels: 2,
+              size_human: '4.0 GB'
+            },
+            {
+              path: candidatePath,
+              filename: 'Project.Hail.Mary.2026.720p.mkv',
+              role: 'candidate',
+              recommendation: 'recommended',
+              verdict: 'recommended_removal',
+              verdict_label: 'Recommended removal',
+              verdict_tone: 'danger',
+              reason: 'Recommended removal — 2.25× fewer pixels; identical runtime.',
+              resolution: '720p',
+              quality_class: '720p',
+              quality_display: '720p',
+              video_width: 1280,
+              video_height: 720,
+              video_codec: 'HEVC',
+              video_bit_depth: 10,
+              audio_codec: 'AAC',
+              audio_channels: 2,
+              size_human: '2.0 GB'
+            },
           ]
         }],
         pagination: { total: 1, page: 1, total_pages: 1, page_start: 1, page_end: 1 }
@@ -1531,9 +1748,32 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
 
   await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
   const candidateRow = page.locator('.cleanup-file-row').filter({ hasText: 'Project.Hail.Mary.2026.720p.mkv' });
-  await candidateRow.getByRole('button', { name: 'Delete' }).click();
+  const keepRow = page.locator('.cleanup-file-row').filter({ hasText: 'Project.Hail.Mary.2026.1080p.mkv' });
+  const candidateCheckbox = candidateRow.getByRole('checkbox', { name: 'Select' });
+  const keepCheckbox = keepRow.getByRole('checkbox', { name: 'Select' });
+  await expect(candidateRow.getByText('Recommended removal', { exact: true })).toHaveClass(/chip-warning/);
+  await expect(candidateRow).toContainText('2.25× fewer pixels');
+  await expect(keepRow).toContainText('1080-class - 1800 x 960');
+  await expect(keepRow).toContainText('HEVC');
+  await expect(keepRow).toContainText('10-bit');
+  await expect(candidateRow.getByRole('button', { name: 'Play file' })).toBeVisible();
+  await expect(keepRow.getByRole('button', { name: 'Play file' })).toBeVisible();
+  await expect(keepCheckbox).toBeEnabled();
 
-  const dialog = page.getByRole('dialog', { name: /Move Project\.Hail\.Mary\.2026\.720p\.mkv to Recycle Bin/ });
+  await page.getByRole('button', { name: 'Select recommended' }).click();
+  await expect(candidateCheckbox).toBeChecked();
+  await keepCheckbox.click();
+  await expect(keepCheckbox).not.toBeChecked();
+  await expect(page.getByText('Keep at least one copy in each duplicate group.')).toBeVisible();
+
+  await candidateCheckbox.uncheck();
+  await keepCheckbox.check();
+  await expect(keepCheckbox).toBeChecked();
+  await page.getByRole('button', { name: 'Clear' }).click();
+  await page.getByRole('button', { name: 'Select recommended' }).click();
+  await page.getByRole('button', { name: 'Delete selected (1)' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Move 1 selected file to Recycle Bin?' });
   await expect(dialog).toContainText('1 complete movie folder will move to the Recycle Bin');
   await expect(dialog).toContainText('including 4 sidecar files');
   await expect(dialog).toContainText(folderTarget);
@@ -1543,6 +1783,98 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
   expect(executedRequest.paths).toEqual([candidatePath]);
   expect(executedRequest.folder_targets).toEqual([folderTarget]);
   await expect(page.getByText('1 movie file moved to Recycle Bin, including 1 complete folder')).toBeVisible();
+});
+
+test('Maintenance explains quality, content, and frame-rate evidence without using fps as a quality score', async ({ page }) => {
+  await page.route('**/api/maintenance/audit?*', async (route) => {
+    await route.fulfill({ json: {
+      summary: {
+        duplicate_groups: 1,
+        extra_copies: 1,
+        reclaimable_human: '705.0 MB',
+        recommended_removals: 1,
+        unmatched_files: 0,
+        upgrade_candidates: 0,
+      },
+      storage: {
+        groups: [{
+          title: 'Vamps (2012)',
+          recommended_count: 1,
+          comparison_scope: 'Measured video and primary audio',
+          files: [
+            {
+              path: 'E:\\Movies\\Vamps.2012.1080p.mp4',
+              filename: 'Vamps.2012.1080p.mp4',
+              role: 'keep',
+              recommendation: 'keep',
+              verdict: 'recommended_keep',
+              verdict_label: 'Recommended keep',
+              verdict_tone: 'success',
+              reason: 'Recommended keep — 9.49× the pixels; 23.976 to 25 fps speed conversion detected; estimated frame count matches within 0.01%.',
+              resolution: '1080p',
+              quality_class: '1080p',
+              quality_display: '1080-class - 1920 x 1036',
+              video_width: 1920,
+              video_height: 1036,
+              video_codec: 'AVC',
+              video_bit_depth: 8,
+              video_bitrate: 2062000,
+              video_frame_rate: 23.976,
+              duration_ms: 5558468,
+              audio_codec: 'AAC',
+              audio_channels: 2,
+              comparison_uses_frame_rate: true,
+              comparison_uses_aspect_ratio: true,
+              aspect_delta_percent: 0.21,
+              rip_source: 'BDRip',
+              size_human: '1.4 GB',
+            },
+            {
+              path: 'E:\\Movies\\Vamps.2012.DVDRip.avi',
+              filename: 'Vamps.2012.DVDRip.avi',
+              role: 'candidate',
+              recommendation: 'recommended',
+              verdict: 'recommended_removal',
+              verdict_label: 'Recommended removal',
+              verdict_tone: 'danger',
+              reason: 'Recommended removal — 9.49× fewer pixels; 23.976 to 25 fps speed conversion detected; estimated frame count matches within 0.01%.',
+              resolution: '336p',
+              quality_class: '336p',
+              quality_display: '336-class - 624 x 336',
+              video_width: 624,
+              video_height: 336,
+              video_codec: 'MPEG-4 Visual',
+              video_bit_depth: 8,
+              video_bitrate: 968433,
+              video_frame_rate: 25,
+              duration_ms: 5330320,
+              audio_codec: 'MPEG Audio',
+              audio_channels: 2,
+              comparison_uses_frame_rate: true,
+              comparison_uses_aspect_ratio: true,
+              aspect_delta_percent: 0.21,
+              rip_source: 'DVDRip',
+              size_human: '705.0 MB',
+            },
+          ],
+        }],
+        pagination: { total: 1, page: 1, total_pages: 1, page_start: 1, page_end: 1 },
+      },
+      identity: { items: [], pagination: { total: 0, page: 1, total_pages: 1 } },
+    } });
+  });
+
+  await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
+  const blurayRow = page.locator('.cleanup-file-row').filter({ hasText: 'Vamps.2012.1080p.mp4' });
+  const dvdRow = page.locator('.cleanup-file-row').filter({ hasText: 'Vamps.2012.DVDRip.avi' });
+
+  await expect(blurayRow.getByText('Recommended keep', { exact: true })).toBeVisible();
+  await expect(dvdRow.getByText('Recommended removal', { exact: true })).toBeVisible();
+  await expect(dvdRow).toContainText('9.49× fewer pixels');
+  await expect(dvdRow).toContainText('speed conversion detected');
+  await expect(blurayRow).toContainText('23.976 fps');
+  await expect(dvdRow).toContainText('25 fps');
+  await expect(dvdRow).toContainText('Framing Δ 0.21%');
 });
 
 test('Maintenance upgrade summary opens the authoritative Library filter', async ({ page }) => {
@@ -1598,15 +1930,29 @@ test('Maintenance upgrade summary opens the authoritative Library filter', async
 
 test('every stateful workspace preserves its page state after sidebar navigation', async ({ page }) => {
   await mockCardParityApis(page);
-  await page.route('**/api/iptv/status', (route) => route.fulfill({ json: {
+  await page.route('**/api/iptv/providers', (route) => route.fulfill({ json: {
+    providers: [{
+      provider_id: 'provider-a',
+      name: 'Provider A',
+      configured: true,
+      generation: 1,
+      counts: { live: 0, movie: 0, series: 0 },
+      sync: { state: 'idle' }
+    }],
+    last_selected_provider_id: 'provider-a',
+    count: 1
+  } }));
+  await page.route('**/api/iptv/providers/provider-a/status', (route) => route.fulfill({ json: {
+    provider_id: 'provider-a',
+    name: 'Provider A',
     configured: true,
     generation: 1,
     counts: { live: 0, movie: 0, series: 0 },
     sync: { state: 'idle' }
   } }));
-  await page.route('**/api/iptv/recent**', (route) => route.fulfill({ json: { items: [] } }));
-  await page.route('**/api/iptv/categories**', (route) => route.fulfill({ json: { items: [] } }));
-  await page.route('**/api/iptv/items**', (route) => route.fulfill({ json: { items: [], total: 0, page: 1, page_size: 30 } }));
+  await page.route('**/api/iptv/providers/provider-a/recent**', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('**/api/iptv/providers/provider-a/categories**', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('**/api/iptv/providers/provider-a/items**', (route) => route.fulfill({ json: { items: [], total: 0, page: 1, page_size: 30 } }));
 
   const openSection = (name) => page.getByRole('button', { name: name === 'AI Control' ? /AI Control/ : name, exact: name !== 'AI Control' }).click();
 
@@ -1665,6 +2011,76 @@ test('every stateful workspace preserves its page state after sidebar navigation
   await expect(downloadsFrame).toHaveAttribute('data-state-token', 'preserved');
 });
 
+test('IPTV providers keep same IDs isolated, stop playback on switch, and remove only the selected provider', async ({ page }) => {
+  const registry = await page.request.get('/api/iptv/providers');
+  expect(registry.ok()).toBeTruthy();
+  const registryPayload = await registry.json();
+  const first = registryPayload.providers.find((provider) => provider.name === 'Provider One');
+  const second = registryPayload.providers.find((provider) => provider.name === 'Provider Two');
+  expect(first).toBeTruthy();
+  expect(second).toBeTruthy();
+
+  await page.route(`**/api/iptv/providers/${first.provider_id}/items?*`, async (route) => {
+    const requestUrl = new URL(route.request().url());
+    if (requestUrl.searchParams.get('kind') === 'movie') {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    }
+    await route.continue();
+  });
+
+  const stoppedPlayback = [];
+  await page.route(/\/api\/iptv\/providers\/([^/]+)\/playback$/, async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const providerId = route.request().url().match(/providers\/([^/]+)\/playback$/)[1];
+    await route.fulfill({ json: {
+      token: 'fixture-playback-token',
+      provider_id: providerId,
+      manifest_url: `/api/iptv/providers/${providerId}/playback/fixture-playback-token/index.m3u8`
+    } });
+  });
+  await page.route(/\/api\/iptv\/providers\/([^/]+)\/playback\/fixture-playback-token$/, async (route) => {
+    stoppedPlayback.push(route.request().url());
+    await route.fulfill({ json: { success: true } });
+  });
+
+  await page.goto('/iptv', { waitUntil: 'domcontentloaded' });
+  const selector = page.getByLabel('Active IPTV provider');
+  await expect(selector).toHaveValue(first.provider_id);
+  await page.getByRole('button', { name: 'Movies', exact: true }).click();
+  await selector.selectOption(second.provider_id);
+  await expect(page.getByText('Second Movie', { exact: true })).toBeVisible();
+  await page.waitForTimeout(800);
+  await expect(page.getByText('First Movie', { exact: true })).toHaveCount(0);
+
+  await selector.selectOption(first.provider_id);
+  await page.getByRole('button', { name: 'Live TV', exact: true }).click();
+  await page.locator('.iptv-channel-list > button').filter({ hasText: 'First Channel' }).click();
+  await expect.poll(() => stoppedPlayback.length).toBe(0);
+  await selector.selectOption(second.provider_id);
+  await expect.poll(() => stoppedPlayback.some((url) => url.includes(first.provider_id))).toBeTruthy();
+  await expect(page.getByText('Second Channel', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const secondRailButton = page.locator('.settings-provider-rail button').filter({ hasText: 'Provider Two' });
+  await expect(secondRailButton).toBeVisible();
+  await secondRailButton.click();
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('prompt');
+    await dialog.accept('Provider Two');
+  });
+  await page.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(secondRailButton).toHaveCount(0);
+  await expect(page.locator('.settings-provider-rail button').filter({ hasText: 'Provider One' })).toBeVisible();
+
+  const afterRemoval = await page.request.get('/api/iptv/providers');
+  const afterPayload = await afterRemoval.json();
+  expect(afterPayload.providers.map((provider) => provider.name)).toEqual(['Provider One']);
+  const favorites = await page.request.get(`/api/iptv/providers/${first.provider_id}/favorites`);
+  expect((await favorites.json()).total).toBe(1);
+  const lists = await page.request.get(`/api/iptv/providers/${first.provider_id}/lists`);
+  expect((await lists.json()).items.map((list) => list.name)).toEqual(['First fixture list']);
+});
+
 test('Library, Discover-owned, and Movie List cards render one canonical movie contract', async ({ page }) => {
   await mockCardParityApis(page);
   let tmdbDetailsRequests = 0;
@@ -1703,6 +2119,9 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   const libraryCard = page.locator('.library-movie-card').first();
   await expect(libraryCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(libraryCard).toContainText(parityMovie.year);
+  await expect(libraryCard).toContainText('1080 · Blu-ray');
+  await expect(libraryCard).not.toContainText('100 B');
+  await expect(libraryCard).not.toContainText('1080-class - 1800 x 960');
   const libraryRequestsBeforeExpand = tmdbDetailsRequests;
   await libraryCard.click();
   await expect(libraryCard).toContainText(parityMovie.plot);
@@ -1717,6 +2136,7 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
     `https://www.imdb.com/title/${parityMovie.imdb_id}/`
   );
   await expect(libraryCard.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  await expect(libraryCard.getByRole('button', { name: 'File details', exact: true })).toBeVisible();
   await expect(libraryCard.getByRole('button', { name: 'Follow', exact: true })).toHaveCount(0);
   expect(tmdbDetailsRequests).toBe(libraryRequestsBeforeExpand);
   await libraryCard.locator('.movie-language-toggle').click();
@@ -1738,6 +2158,7 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   const discoverCard = page.locator('.discover-movie-card').filter({ hasText: parityMovie.title });
   await expect(discoverCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(discoverCard).toContainText(parityMovie.year);
+  await expect(discoverCard).toContainText('1080-class - 1800 x 960');
   await expect(discoverCard.getByText('Owned', { exact: true })).toBeVisible();
   const discoverRequestsBeforeExpand = tmdbDetailsRequests;
   await discoverCard.click();
@@ -1746,6 +2167,7 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await expect(discoverCard).toContainText('SQL Cast Member');
   await expect(discoverCard).toContainText('SQL Collection');
   await expect(discoverCard.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  await expect(discoverCard.getByRole('button', { name: 'File details', exact: true })).toBeVisible();
   await expect(discoverCard.getByRole('button', { name: 'Follow', exact: true })).toHaveCount(0);
   expect(tmdbDetailsRequests).toBe(discoverRequestsBeforeExpand);
 
@@ -1753,6 +2175,7 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   const listCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
   await expect(listCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(listCard).toContainText(parityMovie.year);
+  await expect(listCard).toContainText('1080-class - 1800 x 960');
   const listRequestsBeforeExpand = tmdbDetailsRequests;
   await listCard.click();
   await expect(listCard).toContainText(parityMovie.plot);
@@ -1760,12 +2183,15 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await expect(listCard).toContainText('SQL Cast Member');
   await expect(listCard).toContainText('SQL Collection');
   await expect(listCard.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+  await expect(listCard.getByRole('button', { name: 'File details', exact: true })).toBeVisible();
   await expect(listCard.getByRole('button', { name: 'Follow', exact: true })).toHaveCount(0);
   expect(tmdbDetailsRequests).toBe(listRequestsBeforeExpand);
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.inspector')).toContainText(parityMovie.plot);
   await expect(page.locator('.inspector')).toContainText('SQL Cast Member');
+  await expect(page.locator('.inspector')).toContainText('1080-class - 1800 x 960');
+  await expect(page.locator('.inspector').getByRole('button', { name: 'File details', exact: true })).toBeVisible();
 
   await page.route('**/api/ai-control/preview', async (route) => {
     await route.fulfill({ json: {
@@ -1783,10 +2209,25 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await page.getByPlaceholder('Tell CP what to find, list, download, or delete...').fill('Find my parity movie');
   await page.getByRole('button', { name: 'Preview command' }).click();
   const aiCard = page.locator('.discover-movie-card').filter({ hasText: parityMovie.title });
+  await expect(aiCard).toContainText('1080-class - 1800 x 960');
   await aiCard.click();
   await expect(aiCard).toContainText('SQL Director');
   await expect(aiCard).toContainText('SQL Cast Member');
   await expect(aiCard).toContainText('SQL Collection');
+  await expect(aiCard.getByRole('button', { name: /SQL Collection/ })).toBeVisible();
+  await expect(aiCard.locator('.person-credit-browse').filter({ hasText: 'SQL Cast Member' })).toHaveAttribute('role', 'button');
+
+  await aiCard.getByRole('button', { name: /SQL Collection/ }).click();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Discovery path').getByText(`${parityMovie.title} > SQL Collection`, { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: parityCollectionParts[1].title, exact: true })).toBeVisible();
+
+  await page.getByRole('complementary', { name: 'Primary navigation' }).getByRole('button', { name: /AI Control/ }).click();
+  const restoredAiCard = page.locator('.workspace-panel:visible .discover-movie-card').filter({ hasText: parityMovie.title });
+  await restoredAiCard.locator('.person-credit-browse').filter({ hasText: 'SQL Cast Member' }).click();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Discovery path').getByText(/Actor: SQL Cast Member/, { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: parityCollectionParts[1].title, exact: true })).toBeVisible();
 
   expect(libraryDetailsRequests).toBeGreaterThanOrEqual(5);
   expect(tmdbDetailsRequests).toBe(0);
@@ -1857,6 +2298,90 @@ test('AI Control cards start fully selected, preserve custom selection across pa
   expect(executePayload.selected_keys).not.toContain('item-21');
   expect(executePayload.reviewed_downloads).toEqual([]);
   await expect(page.getByRole('heading', { name: 'Downloads submitted' })).toBeVisible();
+});
+
+test('Library metadata correction searches TMDB and Plex while keeping display edits separate', async ({ page }) => {
+  await mockCardParityApis(page);
+  await page.route('**/api/library/details**', (route) => route.fulfill({ json: {
+    item: parityDeferredDetails,
+    catalog_generation: 1
+  } }));
+  await page.route('**/api/metadata/override?path=*', (route) => route.fulfill({ json: {
+    identity: { tmdb_id: parityMovie.tmdb_id, title: parityMovie.title, year: parityMovie.year },
+    provider: { ...parityMovie, accepted: true },
+    effective: { ...parityMovie, accepted: true },
+    override: {},
+    display_provider: 'tmdb',
+    providers: {
+      tmdb: { available: true, label: 'TMDB' },
+      plex: { available: true, label: 'Plex snapshot' },
+      filename: { available: true, label: 'Filename only' }
+    }
+  } }));
+  await page.route('**/api/tmdb/search?*', (route) => route.fulfill({ json: {
+    results: [{
+      tmdb_id: '1091',
+      title: 'Correct TMDB Movie',
+      year: '1982',
+      tmdb_rating: '8.1',
+      tmdb_vote_count: 22000,
+      plot: 'The exact TMDB identity.'
+    }]
+  } }));
+
+  let plexSearch = null;
+  let plexApply = null;
+  await page.route('**/api/plex/match-search?*', (route) => {
+    plexSearch = new URL(route.request().url());
+    return route.fulfill({ json: {
+      rating_key: 'plex-rating-42',
+      results: [{
+        guid: 'plex://movie/correct',
+        name: 'Correct Plex Movie',
+        year: '1982',
+        summary: 'The exact Plex identity.',
+        rank: 1
+      }]
+    } });
+  });
+  await page.route('**/api/plex/match-apply', async (route) => {
+    plexApply = await route.request().postDataJSON();
+    await route.fulfill({ json: { success: true, match: { provider: 'plex' } } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  const libraryCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await libraryCard.click();
+  await libraryCard.getByRole('button', { name: 'Correct metadata' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Correct movie metadata' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText(`Current accepted match · TMDB`)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Search TMDB' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Search Plex' })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Save display title/year only' })).toBeVisible();
+
+  await dialog.getByLabel('Search or display title').fill('Correct Movie');
+  await dialog.getByLabel('Year').fill('1982');
+  await dialog.getByRole('button', { name: 'Search TMDB' }).click();
+  await expect(dialog.getByText('Correct TMDB Movie', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Apply TMDB match' })).toBeEnabled();
+
+  await dialog.getByRole('button', { name: 'Search Plex' }).click();
+  await expect(dialog.getByText('Correct Plex Movie', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Apply Plex match' })).toBeEnabled();
+  expect(plexSearch.searchParams.get('title')).toBe('Correct Movie');
+  expect(plexSearch.searchParams.get('year')).toBe('1982');
+
+  await dialog.getByRole('button', { name: 'Apply Plex match' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(plexApply).toMatchObject({
+    path: parityLibraryItem.path,
+    rating_key: 'plex-rating-42',
+    guid: 'plex://movie/correct',
+    name: 'Correct Plex Movie',
+    year: '1982'
+  });
 });
 
 test('curation generation refresh keeps an expanded Discover card open', async ({ page }) => {

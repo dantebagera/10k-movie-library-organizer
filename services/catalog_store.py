@@ -15,10 +15,48 @@ from services.canonical_catalog import (
     normalize_keyword_name,
 )
 from services.movie_identity import normalize_movie_title, ownership_keys
+from services.media_file_facts import (
+    FILE_FACTS_VERSION,
+    QUALITY_CLASSIFIER_VERSION,
+    quality_display,
+)
 from services.smart_match import parse_release_filename
 
 
-CATALOG_SCHEMA_VERSION = 8
+CATALOG_SCHEMA_VERSION = 9
+
+MEDIA_FILE_V8_COLUMNS = [
+    "path_key", "path", "filename", "library_root", "size", "added_time",
+    "modified_time", "resolution", "rip_source", "parsed_title", "parsed_year",
+    "identity_status", "identity_title", "identity_year", "identity_source",
+    "identity_revision", "identity_decision_version",
+    "identity_evidence_fingerprint", "tmdb_id", "imdb_id", "plex_guid",
+    "plex_rating_key", "display_provider", "metadata_status", "metadata_source",
+    "metadata_accepted", "enrichment_status", "ingest_status", "manual_lock",
+    "manual_locked", "raw_json",
+]
+
+MEDIA_FILE_FACT_COLUMNS = [
+    "video_width", "video_height", "video_codec", "video_profile",
+    "video_bit_depth", "video_bitrate", "video_frame_rate", "duration_ms",
+    "display_aspect_ratio", "rotation_degrees", "audio_codec",
+    "audio_channels", "audio_bitrate", "filename_quality_claim",
+    "quality_class", "quality_source", "quality_conflict",
+    "quality_nonstandard", "file_facts_version", "classifier_version",
+    "probe_status", "probed_at", "probe_error", "probe_size",
+    "probe_modified_time",
+]
+
+MEDIA_FILE_MEASUREMENT_COLUMNS = [
+    "video_width", "video_height", "video_codec", "video_profile",
+    "video_bit_depth", "video_bitrate", "video_frame_rate", "duration_ms",
+    "display_aspect_ratio", "rotation_degrees", "audio_codec",
+    "audio_channels", "audio_bitrate", "filename_quality_claim",
+    "quality_class", "quality_conflict", "quality_nonstandard",
+    "file_facts_version", "classifier_version",
+]
+
+MEDIA_FILE_V9_COLUMNS = MEDIA_FILE_V8_COLUMNS + MEDIA_FILE_FACT_COLUMNS
 
 
 class CatalogError(RuntimeError):
@@ -227,6 +265,80 @@ class CatalogStore:
     def _validate_v8_schema(self, connection, *, require_version=True):
         if require_version and self._catalog_schema_version(connection) != 8:
             raise CatalogError("Catalogue schema version is not 8")
+        media_columns = self._table_columns(connection, "media_files")
+        if media_columns != MEDIA_FILE_V8_COLUMNS:
+            partial = sorted(set(media_columns) & set(MEDIA_FILE_FACT_COLUMNS))
+            detail = f": {', '.join(partial)}" if partial else ""
+            raise CatalogError(
+                "Version 8 media_files schema does not match the approved source"
+                + detail
+            )
+        expected_credit_columns = [
+            "snapshot_key", "credit_type", "position", "person_key",
+            "credited_name", "character", "profile_url", "job",
+        ]
+        if self._table_columns(connection, "movie_credits") != expected_credit_columns:
+            raise CatalogError("Version 8 movie_credits schema is incomplete")
+        if self._table_columns(connection, "keywords") != [
+            "keyword_key", "tmdb_id", "name", "normalized_name",
+        ]:
+            raise CatalogError("Version 8 keywords schema is incomplete")
+        if self._table_columns(connection, "movie_keywords") != [
+            "snapshot_key", "position", "keyword_key",
+        ]:
+            raise CatalogError("Version 8 movie_keywords schema is incomplete")
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='movie_credits'"
+        ).fetchone()
+        if not table_sql or "'writer'" not in str(table_sql[0] or "").lower():
+            raise CatalogError("Version 8 movie_credits constraint does not allow writers")
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required_indexes = {
+            "idx_media_files_quality",
+            "idx_movie_credits_person",
+            "idx_keywords_tmdb",
+            "idx_keywords_normalized_name",
+            "idx_movie_keywords_keyword",
+        }
+        if not required_indexes.issubset(indexes):
+            raise CatalogError(
+                "Version 8 search indexes are incomplete: "
+                + ", ".join(sorted(required_indexes - indexes))
+            )
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='movie_credits_v8_new'"
+        ).fetchone():
+            raise CatalogError("Version 8 catalogue contains a partial movie_credits table")
+        if connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='idx_media_files_facts_stale'"
+        ).fetchone():
+            raise CatalogError("Version 8 catalogue contains a partial file-facts index")
+
+    def _validate_v9_schema(self, connection, *, require_version=True):
+        if require_version and self._catalog_schema_version(connection) != 9:
+            raise CatalogError("Catalogue schema version is not 9")
+        if self._table_columns(connection, "media_files") != MEDIA_FILE_V9_COLUMNS:
+            raise CatalogError("Version 9 media_files schema is incomplete")
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {"idx_media_files_quality", "idx_media_files_facts_stale"}
+        if not required.issubset(indexes):
+            raise CatalogError(
+                "Version 9 file-facts indexes are incomplete: "
+                + ", ".join(sorted(required - indexes))
+            )
+        self._validate_v8_schema_relations(connection)
+
+    def _validate_v8_schema_relations(self, connection):
         expected_credit_columns = [
             "snapshot_key", "credit_type", "position", "person_key",
             "credited_name", "character", "profile_url", "job",
@@ -267,6 +379,83 @@ class CatalogStore:
             "SELECT 1 FROM sqlite_master WHERE name='movie_credits_v8_new'"
         ).fetchone():
             raise CatalogError("Version 8 catalogue contains a partial movie_credits table")
+
+    def _migrate_v8_to_v9(self, connection):
+        if self._catalog_schema_version(connection) != 8:
+            raise CatalogError("Version 8 to 9 migration received the wrong source version")
+        self._validate_v8_schema(connection)
+        before = self._logical_digest(connection, "media_files", MEDIA_FILE_V8_COLUMNS)
+        self._migration_checkpoint("before_v9_schema_changes")
+        additions = (
+            ("video_width", "INTEGER NOT NULL DEFAULT 0"),
+            ("video_height", "INTEGER NOT NULL DEFAULT 0"),
+            ("video_codec", "TEXT NOT NULL DEFAULT ''"),
+            ("video_profile", "TEXT NOT NULL DEFAULT ''"),
+            ("video_bit_depth", "INTEGER NOT NULL DEFAULT 0"),
+            ("video_bitrate", "INTEGER NOT NULL DEFAULT 0"),
+            ("video_frame_rate", "REAL NOT NULL DEFAULT 0"),
+            ("duration_ms", "INTEGER NOT NULL DEFAULT 0"),
+            ("display_aspect_ratio", "REAL NOT NULL DEFAULT 0"),
+            ("rotation_degrees", "REAL NOT NULL DEFAULT 0"),
+            ("audio_codec", "TEXT NOT NULL DEFAULT ''"),
+            ("audio_channels", "REAL NOT NULL DEFAULT 0"),
+            ("audio_bitrate", "INTEGER NOT NULL DEFAULT 0"),
+            ("filename_quality_claim", "TEXT NOT NULL DEFAULT ''"),
+            ("quality_class", "TEXT NOT NULL DEFAULT ''"),
+            ("quality_source", "TEXT NOT NULL DEFAULT 'legacy_unprobed'"),
+            ("quality_conflict", "INTEGER NOT NULL DEFAULT 0"),
+            ("quality_nonstandard", "INTEGER NOT NULL DEFAULT 0"),
+            ("file_facts_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("classifier_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("probe_status", "TEXT NOT NULL DEFAULT 'unprobed'"),
+            ("probed_at", "REAL NOT NULL DEFAULT 0"),
+            ("probe_error", "TEXT NOT NULL DEFAULT ''"),
+            ("probe_size", "INTEGER NOT NULL DEFAULT 0"),
+            ("probe_modified_time", "REAL NOT NULL DEFAULT 0"),
+        )
+        for index, (column, definition) in enumerate(additions):
+            connection.execute(
+                f'ALTER TABLE media_files ADD COLUMN "{column}" {definition}'
+            )
+            if index == 0:
+                self._migration_checkpoint("during_v9_column_creation")
+        self._migration_checkpoint("before_v9_index_creation")
+        connection.execute("DROP INDEX idx_media_files_quality")
+        connection.execute(
+            "CREATE INDEX idx_media_files_quality "
+            "ON media_files(quality_class, resolution, rip_source)"
+        )
+        connection.execute(
+            "CREATE INDEX idx_media_files_facts_stale "
+            "ON media_files(probe_status, file_facts_version, classifier_version, path_key)"
+        )
+        self._migration_checkpoint("before_v9_schema_version_update")
+        connection.execute(
+            "UPDATE catalog_meta SET value='9' WHERE key='schema_version'"
+        )
+        self._migration_checkpoint("during_v9_final_validation")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or foreign_keys:
+            raise CatalogError(
+                f"Version 9 final integrity failed: integrity={integrity}, "
+                f"foreign_keys={len(foreign_keys)}"
+            )
+        self._validate_v9_schema(connection)
+        after = self._logical_digest(connection, "media_files", MEDIA_FILE_V8_COLUMNS)
+        if after != before:
+            raise CatalogError("Version 9 migration changed pre-existing media file data")
+        return {
+            "from_version": 8,
+            "to_version": 9,
+            "media_files_digest_before": before,
+            "media_files_digest_after": after,
+            "unprobed_rows": int(connection.execute(
+                "SELECT COUNT(*) FROM media_files WHERE probe_status='unprobed'"
+            ).fetchone()[0]),
+            "integrity_check": integrity,
+            "foreign_key_violations": len(foreign_keys),
+        }
 
     def _migrate_v6_to_v7(self, connection):
         if self._catalog_schema_version(connection) != 6:
@@ -372,7 +561,7 @@ class CatalogStore:
 
     def initialize(self):
         self.last_migration_report = None
-        migration_report = None
+        migration_reports = []
         with self.transaction() as connection:
             starting_schema = self._catalog_schema_version(connection)
             if starting_schema is not None:
@@ -380,13 +569,16 @@ class CatalogStore:
                     self._migrate_v6_to_v7(connection)
                     starting_schema = 7
                 if starting_schema == 7:
-                    migration_report = self._migrate_v7_to_v8(connection)
+                    migration_reports.append(self._migrate_v7_to_v8(connection))
                     starting_schema = 8
-                elif starting_schema != 8:
+                if starting_schema == 8:
+                    migration_reports.append(self._migrate_v8_to_v9(connection))
+                    starting_schema = 9
+                elif starting_schema != 9:
                     raise CatalogError(
-                        f"Unsupported catalogue schema version {starting_schema}; expected 6, 7, or 8"
+                        f"Unsupported catalogue schema version {starting_schema}; expected 6, 7, 8, or 9"
                     )
-                self._validate_v8_schema(connection)
+                self._validate_v9_schema(connection)
 
             _execute_schema(connection, """
                 CREATE TABLE IF NOT EXISTS catalog_meta (
@@ -430,7 +622,32 @@ class CatalogStore:
                     ingest_status TEXT NOT NULL DEFAULT '',
                     manual_lock INTEGER NOT NULL DEFAULT 0,
                     manual_locked INTEGER NOT NULL DEFAULT 0,
-                    raw_json TEXT NOT NULL
+                    raw_json TEXT NOT NULL,
+                    video_width INTEGER NOT NULL DEFAULT 0,
+                    video_height INTEGER NOT NULL DEFAULT 0,
+                    video_codec TEXT NOT NULL DEFAULT '',
+                    video_profile TEXT NOT NULL DEFAULT '',
+                    video_bit_depth INTEGER NOT NULL DEFAULT 0,
+                    video_bitrate INTEGER NOT NULL DEFAULT 0,
+                    video_frame_rate REAL NOT NULL DEFAULT 0,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    display_aspect_ratio REAL NOT NULL DEFAULT 0,
+                    rotation_degrees REAL NOT NULL DEFAULT 0,
+                    audio_codec TEXT NOT NULL DEFAULT '',
+                    audio_channels REAL NOT NULL DEFAULT 0,
+                    audio_bitrate INTEGER NOT NULL DEFAULT 0,
+                    filename_quality_claim TEXT NOT NULL DEFAULT '',
+                    quality_class TEXT NOT NULL DEFAULT '',
+                    quality_source TEXT NOT NULL DEFAULT 'legacy_unprobed',
+                    quality_conflict INTEGER NOT NULL DEFAULT 0,
+                    quality_nonstandard INTEGER NOT NULL DEFAULT 0,
+                    file_facts_version INTEGER NOT NULL DEFAULT 0,
+                    classifier_version INTEGER NOT NULL DEFAULT 0,
+                    probe_status TEXT NOT NULL DEFAULT 'unprobed',
+                    probed_at REAL NOT NULL DEFAULT 0,
+                    probe_error TEXT NOT NULL DEFAULT '',
+                    probe_size INTEGER NOT NULL DEFAULT 0,
+                    probe_modified_time REAL NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS media_identity_keys (
@@ -539,7 +756,9 @@ class CatalogStore:
                 CREATE INDEX IF NOT EXISTS idx_media_files_plex_guid ON media_files(plex_guid);
                 CREATE INDEX IF NOT EXISTS idx_media_files_title_year ON media_files(identity_title, identity_year);
                 CREATE INDEX IF NOT EXISTS idx_media_files_status ON media_files(identity_status, metadata_status);
-                CREATE INDEX IF NOT EXISTS idx_media_files_quality ON media_files(resolution, rip_source);
+                CREATE INDEX IF NOT EXISTS idx_media_files_quality ON media_files(quality_class, resolution, rip_source);
+                CREATE INDEX IF NOT EXISTS idx_media_files_facts_stale
+                    ON media_files(probe_status, file_facts_version, classifier_version, path_key);
                 CREATE INDEX IF NOT EXISTS idx_media_files_added ON media_files(added_time DESC);
                 CREATE INDEX IF NOT EXISTS idx_media_identity_key ON media_identity_keys(identity_key);
                 CREATE INDEX IF NOT EXISTS idx_list_items_identity ON list_items(identity_key);
@@ -606,8 +825,16 @@ class CatalogStore:
                     "INSERT INTO catalog_meta(key, value) VALUES('schema_version', ?)",
                     (str(CATALOG_SCHEMA_VERSION),),
                 )
-                self._validate_v8_schema(connection)
-        self.last_migration_report = migration_report
+                self._validate_v9_schema(connection)
+        if migration_reports:
+            report = {
+                **migration_reports[0],
+                **migration_reports[-1],
+                "from_version": migration_reports[0]["from_version"],
+                "to_version": migration_reports[-1]["to_version"],
+                "steps": migration_reports,
+            }
+            self.last_migration_report = report
 
     @staticmethod
     def _initialize_asset_schema(connection):
@@ -729,11 +956,14 @@ class CatalogStore:
     @staticmethod
     def _media_file_values(path_key, record):
         record = record if isinstance(record, dict) else {}
+        facts_version = int(_number(record.get("file_facts_version")))
+        quality_class = _text(record.get("quality_class"))
+        resolution = quality_class if facts_version > 0 and quality_class else _text(record.get("resolution"))
         return (
                 _text(path_key), _text(record.get("path") or path_key), _text(record.get("filename")),
                 _text(record.get("library_root")), int(_number(record.get("size"))),
                 _number(record.get("added_time")), _number(record.get("modified_time")),
-                _text(record.get("resolution")), _text(record.get("rip_source")),
+                resolution, _text(record.get("rip_source")),
                 _text(record.get("parsed_title")), _text(record.get("parsed_year")),
                 _text(record.get("identity_status")), _text(record.get("identity_title") or record.get("accepted_title")),
                 _text(record.get("identity_year") or record.get("accepted_year")), _text(record.get("identity_source")),
@@ -744,13 +974,30 @@ class CatalogStore:
                 _text(record.get("metadata_source")), _bool(record.get("metadata_accepted")),
                 _text(record.get("enrichment_status")), _text(record.get("ingest_status")),
                 _bool(record.get("manual_lock")), _bool(record.get("manual_locked")), _json_text(record),
+                int(_number(record.get("video_width"))), int(_number(record.get("video_height"))),
+                _text(record.get("video_codec")), _text(record.get("video_profile")),
+                int(_number(record.get("video_bit_depth"))), int(_number(record.get("video_bitrate"))),
+                _number(record.get("video_frame_rate")), int(_number(record.get("duration_ms"))),
+                _number(record.get("display_aspect_ratio")), _number(record.get("rotation_degrees")),
+                _text(record.get("audio_codec")), _number(record.get("audio_channels")),
+                int(_number(record.get("audio_bitrate"))), _text(record.get("filename_quality_claim")),
+                quality_class, _text(record.get("quality_source") or "legacy_unprobed"),
+                _bool(record.get("quality_conflict")), _bool(record.get("quality_nonstandard")),
+                facts_version, int(_number(record.get("classifier_version"))),
+                _text(record.get("probe_status") or "unprobed"), _number(record.get("probed_at")),
+                _text(record.get("probe_error"))[:80], int(_number(record.get("probe_size"))),
+                _number(record.get("probe_modified_time")),
         )
 
     @classmethod
     def _upsert_media_file(cls, connection, path_key, record):
         values = cls._media_file_values(path_key, record)
         placeholders = ",".join("?" for _ in values)
-        connection.execute(f"INSERT OR REPLACE INTO media_files VALUES ({placeholders})", values)
+        columns = ",".join(MEDIA_FILE_V9_COLUMNS)
+        connection.execute(
+            f"INSERT OR REPLACE INTO media_files({columns}) VALUES ({placeholders})",
+            values,
+        )
 
     @classmethod
     def _import_media_files(cls, connection, document):
@@ -1511,92 +1758,6 @@ class CatalogStore:
             finally:
                 connection.close()
 
-    def maintenance_upgrade_candidates(self):
-        """Return only low-quality accepted rows that can still be upgrade candidates."""
-        connection = self.connect()
-        try:
-            rows = connection.execute("""
-                SELECT mf.*, pf.raw_json AS plex_json,
-                       mm.raw_json AS manual_json, tm.raw_json AS tmdb_json
-                FROM media_files mf
-                JOIN canonical_movie_files cmf ON cmf.path_key=mf.path_key
-                LEFT JOIN plex_files pf ON pf.path_key=mf.path_key
-                LEFT JOIN manual_matches mm ON mm.path_key=mf.path_key
-                LEFT JOIN tmdb_movies tm ON tm.tmdb_id=mf.tmdb_id
-                WHERE (mf.identity_status='accepted' OR mf.metadata_accepted=1)
-                  AND NOT(LOWER(mf.resolution) LIKE '%1080%'
-                          OR LOWER(mf.resolution) LIKE '%2160%'
-                          OR LOWER(mf.resolution) LIKE '%4k%')
-                  AND NOT EXISTS(
-                      SELECT 1 FROM canonical_movie_files other
-                      JOIN media_files om ON om.path_key=other.path_key
-                      WHERE other.movie_key=cmf.movie_key
-                        AND (LOWER(om.resolution) LIKE '%1080%'
-                             OR LOWER(om.resolution) LIKE '%2160%'
-                             OR LOWER(om.resolution) LIKE '%4k%')
-                  )
-            """).fetchall()
-            result = []
-            for row in rows:
-                item = dict(row)
-                for column in ("raw_json", "plex_json", "manual_json", "tmdb_json"):
-                    item[column] = json.loads(item[column]) if item.get(column) else {}
-                result.append(item)
-            return result
-        finally:
-            connection.close()
-
-    def maintenance_storage_statistics(self):
-        """Project duplicate counts and reclaimable bytes from normalized catalog rows."""
-        connection = self.connect()
-        try:
-            rows = [dict(row) for row in connection.execute("""
-                SELECT cmf.movie_key, mf.path_key, mf.parsed_title, mf.parsed_year,
-                       mf.resolution, mf.rip_source, mf.size,
-                       CASE WHEN pf.path_key IS NULL THEN 0 ELSE 1 END AS plex_matched
-                FROM canonical_movie_files cmf
-                JOIN media_files mf ON mf.path_key=cmf.path_key
-                LEFT JOIN plex_files pf ON pf.path_key=mf.path_key
-                ORDER BY cmf.movie_key, mf.path_key
-            """).fetchall()]
-        finally:
-            connection.close()
-        groups = {}
-        for row in rows:
-            groups.setdefault(row["movie_key"], []).append(row)
-        resolution_rank = {"4K": 4, "1080p": 3, "720p": 2, "480p": 1, "Unknown": 0}
-        rip_rank = {
-            "BD Remux": 9, "Remux": 8, "Blu-ray": 7, "BDRip": 6,
-            "WEB-DL": 5, "WEBRip": 4, "HDRip": 3, "HDTV": 2,
-            "DVDRip": 1, "DVDScr": 0, "CAMRip": -1, "HDCAM": -2, "Unknown": -3,
-        }
-        duplicate_groups = []
-        for files in groups.values():
-            buckets = [files]
-            if len(files) > 4 and any(row["plex_matched"] for row in files):
-                by_parsed = {}
-                for row in files:
-                    title = _text(row["parsed_title"]).lower()
-                    if title:
-                        by_parsed.setdefault((title, _text(row["parsed_year"])), []).append(row)
-                buckets = list(by_parsed.values())
-            for bucket in buckets:
-                if len(bucket) < 2:
-                    continue
-                ranked = sorted(bucket, key=lambda row: (
-                    resolution_rank.get(_text(row["resolution"]) or "Unknown", 0),
-                    rip_rank.get(_text(row["rip_source"]) or "Unknown", -3),
-                    int(row["size"] or 0),
-                ), reverse=True)
-                duplicate_groups.append(ranked)
-        return {
-            "duplicate_groups": len(duplicate_groups),
-            "extra_copies": sum(len(group) - 1 for group in duplicate_groups),
-            "reclaimable_bytes": sum(
-                sum(int(row["size"] or 0) for row in group[1:]) for group in duplicate_groups
-            ),
-        }
-
     def candidates_for_paths(self, path_keys):
         connection = self.connect()
         try:
@@ -1618,7 +1779,17 @@ class CatalogStore:
                        mf.tmdb_id, mf.imdb_id, mf.plex_guid, mf.plex_rating_key,
                        mf.display_provider, mf.metadata_status, mf.metadata_source,
                        mf.metadata_accepted, mf.enrichment_status, mf.ingest_status,
-                       mf.manual_lock, mf.manual_locked
+                       mf.manual_lock, mf.manual_locked,
+                       mf.video_width, mf.video_height, mf.video_codec,
+                       mf.video_profile, mf.video_bit_depth, mf.video_bitrate,
+                       mf.video_frame_rate, mf.duration_ms,
+                       mf.display_aspect_ratio, mf.rotation_degrees,
+                       mf.audio_codec, mf.audio_channels, mf.audio_bitrate,
+                       mf.filename_quality_claim, mf.quality_class,
+                       mf.quality_source, mf.quality_conflict,
+                       mf.quality_nonstandard, mf.file_facts_version,
+                       mf.classifier_version, mf.probe_status, mf.probed_at,
+                       mf.probe_error, mf.probe_size, mf.probe_modified_time
                 FROM media_files mf
                 ORDER BY mf.added_time DESC, cp_sort_key(mf.identity_title), mf.path_key
             """).fetchall()]
@@ -1642,6 +1813,16 @@ class CatalogStore:
                        mf.resolution, mf.rip_source, mf.parsed_title, mf.parsed_year,
                        mf.tmdb_id, mf.imdb_id, mf.identity_title, mf.identity_year,
                        mf.metadata_status, mf.metadata_accepted,
+                       mf.video_width, mf.video_height, mf.video_codec,
+                       mf.video_profile, mf.video_bit_depth, mf.video_bitrate,
+                       mf.video_frame_rate, mf.duration_ms,
+                       mf.display_aspect_ratio, mf.rotation_degrees,
+                       mf.audio_codec, mf.audio_channels, mf.audio_bitrate,
+                       mf.filename_quality_claim, mf.quality_class,
+                       mf.quality_source, mf.quality_conflict,
+                       mf.quality_nonstandard, mf.file_facts_version,
+                       mf.classifier_version, mf.probe_status, mf.probed_at,
+                       mf.probe_error, mf.probe_size, mf.probe_modified_time,
                        pf.plex_title, pf.plex_year
                 FROM media_files mf
                 LEFT JOIN plex_files pf ON pf.path_key=mf.path_key
@@ -1649,6 +1830,178 @@ class CatalogStore:
             """).fetchall()]
         finally:
             connection.close()
+
+    def file_facts_backfill_candidates(self, limit=8, *, retry_failed=False):
+        """Return one bounded batch of stale SQL rows without touching files."""
+        limit = min(max(int(limit or 8), 1), 100)
+        retry_clause = (
+            " OR probe_status NOT IN ('ok', 'unprobed')"
+            if retry_failed else ""
+        )
+        connection = self.connect()
+        try:
+            rows = connection.execute(f"""
+                SELECT path_key, path, filename, library_root, size, modified_time,
+                       probe_status, file_facts_version, classifier_version,
+                       probe_size, probe_modified_time
+                FROM media_files
+                WHERE file_facts_version < ?
+                   OR classifier_version < ?
+                   OR probe_status='unprobed'
+                   OR (
+                       probe_status='ok'
+                       AND (
+                           probe_size<>size
+                           OR ABS(probe_modified_time-modified_time)>0.001
+                       )
+                   )
+                   {retry_clause}
+                ORDER BY
+                    CASE
+                        WHEN quality_conflict=1 THEN 0
+                        WHEN probe_status='unprobed' THEN 1
+                        ELSE 2
+                    END,
+                    path_key
+                LIMIT ?
+            """, (FILE_FACTS_VERSION, QUALITY_CLASSIFIER_VERSION, limit)).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+
+    def file_facts_backfill_remaining(self, *, retry_failed=False):
+        retry_clause = (
+            " OR probe_status NOT IN ('ok', 'unprobed')"
+            if retry_failed else ""
+        )
+        connection = self.connect()
+        try:
+            return int(connection.execute(f"""
+                SELECT COUNT(*) FROM media_files
+                WHERE file_facts_version < ?
+                   OR classifier_version < ?
+                   OR probe_status='unprobed'
+                   OR (
+                       probe_status='ok'
+                       AND (
+                           probe_size<>size
+                           OR ABS(probe_modified_time-modified_time)>0.001
+                       )
+                   )
+                   {retry_clause}
+            """, (FILE_FACTS_VERSION, QUALITY_CLASSIFIER_VERSION)).fetchone()[0])
+        finally:
+            connection.close()
+
+    @staticmethod
+    def apply_file_facts_batch(connection, updates):
+        """Atomically apply complete fact objects; return changed/rejected counts."""
+        changed = 0
+        rejected = 0
+        fields = [
+            *MEDIA_FILE_FACT_COLUMNS,
+            "resolution",
+            "raw_json",
+        ]
+        assignments = ", ".join(f"{field}=?" for field in fields)
+        for update in updates or []:
+            path_key = _text(update.get("path_key"))
+            row = connection.execute(
+                "SELECT * FROM media_files WHERE path_key=?",
+                (path_key,),
+            ).fetchone()
+            if not row:
+                rejected += 1
+                continue
+            expected_size = int(_number(update.get("expected_size")))
+            expected_modified = _number(update.get("expected_modified_time"))
+            if (
+                int(row["size"] or 0) != expected_size
+                or abs(float(row["modified_time"] or 0) - expected_modified) > 0.001
+            ):
+                rejected += 1
+                continue
+            facts = dict(update.get("facts") or {})
+            incoming_status = _text(facts.get("probe_status"))
+            same_stored_file = (
+                _text(row["probe_status"]) == "ok"
+                and int(row["probe_size"] or 0) == int(row["size"] or 0)
+                and abs(
+                    float(row["probe_modified_time"] or 0)
+                    - float(row["modified_time"] or 0)
+                ) <= 0.001
+            )
+            same_failed_probe_file = (
+                int(_number(facts.get("probe_size"))) == int(row["size"] or 0)
+                and abs(
+                    _number(facts.get("probe_modified_time"))
+                    - float(row["modified_time"] or 0)
+                ) <= 0.001
+            )
+            if (
+                incoming_status
+                and incoming_status != "ok"
+                and same_stored_file
+                and same_failed_probe_file
+            ):
+                failure_state = {
+                    field: facts.get(field)
+                    for field in (
+                        "probe_status", "probed_at", "probe_error",
+                        "probe_size", "probe_modified_time",
+                    )
+                }
+                facts.update({
+                    field: row[field]
+                    for field in MEDIA_FILE_MEASUREMENT_COLUMNS
+                })
+                facts.update(failure_state)
+                facts["quality_source"] = "last_measured_probe_failed"
+            raw = json.loads(row["raw_json"]) if row["raw_json"] else {}
+            raw.update(facts)
+            raw["resolution"] = _text(facts.get("quality_class")) or "Unknown"
+            raw["quality_display"] = quality_display(facts)
+            values = []
+            for field in MEDIA_FILE_FACT_COLUMNS:
+                value = facts.get(field)
+                if field in {
+                    "video_width", "video_height", "video_bit_depth",
+                    "video_bitrate", "duration_ms", "audio_bitrate",
+                    "file_facts_version", "classifier_version", "probe_size",
+                }:
+                    value = int(_number(value))
+                elif field in {
+                    "video_frame_rate", "display_aspect_ratio",
+                    "rotation_degrees", "audio_channels", "probed_at",
+                    "probe_modified_time",
+                }:
+                    value = _number(value)
+                elif field in {"quality_conflict", "quality_nonstandard"}:
+                    value = _bool(value)
+                else:
+                    value = _text(value)
+                if field == "probe_error":
+                    value = value[:80]
+                values.append(value)
+            values.extend([
+                _text(facts.get("quality_class")) or "Unknown",
+                _json_text(raw),
+                path_key,
+            ])
+            current = [row[field] for field in fields[:-1]]
+            proposed = values[:-2]
+            normalized_raw = _json_text(raw)
+            current_raw = _json_text(
+                json.loads(row["raw_json"]) if row["raw_json"] else {}
+            )
+            if current == proposed and current_raw == normalized_raw:
+                continue
+            cursor = connection.execute(
+                f"UPDATE media_files SET {assignments} WHERE path_key=?",
+                values,
+            )
+            changed += int(cursor.rowcount or 0)
+        return {"changed": changed, "rejected": rejected}
 
     def audit_library_candidates(self):
         """Decode source evidence only for explicit parity, identity, and rollback audits."""
@@ -1666,6 +2019,91 @@ class CatalogStore:
             return self._decode_media_rows(connection, rows, include_identity_keys=False)
         finally:
             connection.close()
+
+    def maintenance_candidates(self):
+        """Project maintenance evidence from normalized SQL columns only."""
+        connection = self.connect()
+        try:
+            rows = connection.execute("""
+                SELECT mf.*,
+                       pf.path AS normalized_plex_path,
+                       pf.plex_title AS normalized_plex_title,
+                       pf.plex_year AS normalized_plex_year,
+                       pf.tmdb_id AS normalized_plex_tmdb_id,
+                       pf.imdb_id AS normalized_plex_imdb_id,
+                       pf.plex_guid AS normalized_plex_guid,
+                       pf.rating_key AS normalized_plex_rating_key,
+                       mm.provider AS normalized_manual_provider,
+                       mm.source AS normalized_manual_source,
+                       mm.tmdb_id AS normalized_manual_tmdb_id,
+                       mm.imdb_id AS normalized_manual_imdb_id,
+                       mm.plex_guid AS normalized_manual_plex_guid,
+                       mm.title AS normalized_manual_title,
+                       mm.year AS normalized_manual_year,
+                       mm.accepted AS normalized_manual_accepted,
+                       tm.tmdb_id AS normalized_tmdb_id,
+                       tm.imdb_id AS normalized_tmdb_imdb_id,
+                       tm.title AS normalized_tmdb_title,
+                       tm.year AS normalized_tmdb_year,
+                       tm.release_date AS normalized_tmdb_release_date
+                FROM media_files mf
+                LEFT JOIN plex_files pf ON pf.path_key = mf.path_key
+                LEFT JOIN manual_matches mm ON mm.path_key = mf.path_key
+                LEFT JOIN tmdb_movies tm ON tm.tmdb_id = mf.tmdb_id
+                ORDER BY mf.added_time DESC, mf.identity_title COLLATE NOCASE
+            """).fetchall()
+        finally:
+            connection.close()
+
+        candidates = []
+        for source in rows:
+            item = dict(source)
+            item.pop("raw_json", None)
+            normalized = {
+                key: value
+                for key, value in item.items()
+                if not key.startswith("normalized_")
+            }
+            plex = {}
+            if item.get("normalized_plex_path"):
+                plex = {
+                    "path": item.get("normalized_plex_path"),
+                    "plex_title": item.get("normalized_plex_title"),
+                    "plex_year": item.get("normalized_plex_year"),
+                    "tmdb_id": item.get("normalized_plex_tmdb_id"),
+                    "imdb_id": item.get("normalized_plex_imdb_id"),
+                    "plex_guid": item.get("normalized_plex_guid"),
+                    "rating_key": item.get("normalized_plex_rating_key"),
+                }
+            manual = {}
+            if item.get("normalized_manual_provider"):
+                manual = {
+                    "provider": item.get("normalized_manual_provider"),
+                    "source": item.get("normalized_manual_source"),
+                    "tmdb_id": item.get("normalized_manual_tmdb_id"),
+                    "imdb_id": item.get("normalized_manual_imdb_id"),
+                    "plex_guid": item.get("normalized_manual_plex_guid"),
+                    "title": item.get("normalized_manual_title"),
+                    "year": item.get("normalized_manual_year"),
+                    "accepted": bool(item.get("normalized_manual_accepted")),
+                }
+            tmdb = {}
+            if item.get("normalized_tmdb_id"):
+                tmdb = {
+                    "tmdb_id": item.get("normalized_tmdb_id"),
+                    "imdb_id": item.get("normalized_tmdb_imdb_id"),
+                    "title": item.get("normalized_tmdb_title"),
+                    "year": item.get("normalized_tmdb_year"),
+                    "release_date": item.get("normalized_tmdb_release_date"),
+                }
+            candidates.append({
+                **normalized,
+                "raw_json": dict(normalized),
+                "plex_json": plex,
+                "manual_json": manual,
+                "tmdb_json": tmdb,
+            })
+        return candidates
 
     def _decode_media_rows(self, connection, rows, include_identity_keys):
         identity_keys_by_path = {}

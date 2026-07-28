@@ -2,7 +2,7 @@ import { AlertTriangle, Bot, Check, CirclePlus, Loader2, Search, Sparkles, X } f
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks } from '../../api/library.js';
-import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieCollectionUrl, movieDetailsCacheKey } from '../../api/movieDetails.js';
+import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, clearUserListsCache, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
 import DiscoverResultGrid from '../../components/DiscoverResultGrid.jsx';
@@ -11,6 +11,7 @@ import ListEditorModal from '../../components/ListEditorModal.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { DiscoverMovieCard } from '../../components/SharedMovieCards.jsx';
+import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
 import { movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
@@ -40,7 +41,10 @@ export default function AIControlWorkspace({
   onFindTorrent,
   onOpenTrailer,
   onFollow,
-  onEditPoster
+  onEditPoster,
+  onOpenFileDetails,
+  onOpenDiscoverPerson = () => {},
+  onOpenDiscoverCollection = () => {}
 }) {
   const [prompt, setPrompt] = useState('');
   const [aiControlPlan, setAiControlPlan] = useState(null);
@@ -207,6 +211,9 @@ export default function AIControlWorkspace({
         onOpenTrailer={onOpenTrailer}
         onFollow={onFollow}
         onEditPoster={onEditPoster}
+        onOpenFileDetails={onOpenFileDetails}
+        onOpenDiscoverPerson={onOpenDiscoverPerson}
+        onOpenDiscoverCollection={onOpenDiscoverCollection}
       />
     </section>
   );
@@ -226,7 +233,10 @@ function AIControlResult({
   onFindTorrent,
   onOpenTrailer,
   onFollow,
-  onEditPoster
+  onEditPoster,
+  onOpenFileDetails,
+  onOpenDiscoverPerson,
+  onOpenDiscoverCollection
 }) {
   const plan = aiControlPlan;
   const [currentPage, setCurrentPage] = useState(1);
@@ -399,6 +409,9 @@ function AIControlResult({
           onOpenTrailer={onOpenTrailer}
           onFollow={onFollow}
           onEditPoster={onEditPoster}
+          onOpenFileDetails={onOpenFileDetails}
+          onOpenDiscoverPerson={onOpenDiscoverPerson}
+          onOpenDiscoverCollection={onOpenDiscoverCollection}
         />
       ) : null}
       {blocked.length > 0 && <p className="settings-empty-note">{formatCount(blocked.length)} result{blocked.length === 1 ? '' : 's'} could not be included in the selectable plan.</p>}
@@ -456,12 +469,19 @@ function AIControlCardResults({
   onFindTorrent,
   onOpenTrailer,
   onFollow,
-  onEditPoster
+  onEditPoster,
+  onOpenFileDetails,
+  onOpenDiscoverPerson,
+  onOpenDiscoverCollection
 }) {
   const [ownership, setOwnership] = useState(() => buildAiControlOwnershipMap(rows));
   const [userLists, setUserLists] = useState([]);
   const [detailsCache, setDetailsCache] = useState({});
-  const [collectionCache, setCollectionCache] = useState({});
+  const {
+    clear: clearCollectionCache,
+    getView: getCollectionView,
+    load: loadMovieCollection
+  } = useMovieCollectionCache();
   const [expandedMovieKey, setExpandedMovieKey] = useState('');
   const [listEditorTarget, setListEditorTarget] = useState(null);
   const ownershipRequestSeq = useRef(0);
@@ -473,19 +493,19 @@ function AIControlCardResults({
   useEffect(() => {
     const clearDetailCaches = () => {
       setDetailsCache(markMovieDetailsCacheStale);
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
     return () => window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, clearDetailCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   useEffect(() => {
     const clearCurationCaches = () => {
-      setCollectionCache({});
+      clearCollectionCache();
     };
     window.addEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
     return () => window.removeEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
-  }, []);
+  }, [clearCollectionCache]);
 
   const loadUserLists = useCallback(async (options = {}) => {
     try {
@@ -539,12 +559,7 @@ function AIControlCardResults({
         setDetailsCache((state) => ({ ...state, [cacheKey]: details }));
       }
     }
-    const collectionUrl = movieCollectionUrl(details);
-    if (collectionUrl && !collectionCache[details.collection.id]) {
-      fetchCurationJson(collectionUrl)
-        .then((collectionData) => setCollectionCache((state) => ({ ...state, [details.collection.id]: collectionData })))
-        .catch(() => {});
-    }
+    loadMovieCollection(details);
     return details;
   }
 
@@ -653,7 +668,7 @@ function AIControlCardResults({
         {movies.map((movie, index) => {
           const owned = ownedMovieFor(movie, ownership) || (movie.path ? movie : null);
           const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
-          const collection = details?.collection?.id ? collectionCache[details.collection.id] || details.collection : {};
+          const collectionView = getCollectionView(details);
           const movieWithDetails = details ? { ...movie, plot: movie.plot || details.plot || '', release_date: movie.release_date || details.release_date || '' } : movie;
           return (
             <DiscoverMovieCard
@@ -663,7 +678,9 @@ function AIControlCardResults({
               followed={followed.some((item) => movieKey(item) === movieKey(movie))}
               expanded={expandedMovieKey === movieKey(movie)}
               details={details}
-              collection={collection}
+              collection={collectionView.data}
+              collectionStatus={collectionView.status}
+              collectionError={collectionView.error}
               itemLists={listsForDiscoverMovie(movie, userLists, owned)}
               watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
               watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
@@ -679,9 +696,13 @@ function AIControlCardResults({
               onFollow={onFollow}
               onTrailer={openAiControlTrailer}
               onToggleDetails={() => toggleAiControlDetails(movie, owned)}
+              onPersonBrowse={(role, person) => onOpenDiscoverPerson(movieWithDetails, role, person)}
+              onCollectionBrowse={(collection) => onOpenDiscoverCollection(movieWithDetails, collection)}
+              onCollectionRetry={() => loadMovieCollection(details, { force: true })}
               onEditLists={() => setListEditorTarget(discoverMoviePayload(movie, owned))}
               onRemoveFromList={(listId) => removeAiControlMovieFromList(listId, discoverMoviePayload(movie, owned))}
               onEditPoster={owned?.path ? () => onEditPoster?.(owned, movie) : undefined}
+              onOpenFileDetails={onOpenFileDetails}
             />
           );
         })}

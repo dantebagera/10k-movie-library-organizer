@@ -20,6 +20,13 @@ export function isLowQuality(resolution) {
   return resolutionRank(resolution) < 3;
 }
 
+export function getCompactQualityLabel(item) {
+  const rawQuality = String(item?.quality_class || item?.resolution || '').trim();
+  const quality = rawQuality.replace(/^(\d{3,4})p$/i, '$1');
+  const source = String(item?.rip_source || '').trim();
+  return [quality, source].filter(Boolean).join(' · ');
+}
+
 export function matchesLibraryResolutionFilter(resolution, filter) {
   const rank = resolutionRank(resolution);
   if (filter === 'all') return true;
@@ -542,8 +549,14 @@ export function getLocaleTag(item) {
   return country || language || '';
 }
 
+export function getQualityFactsLabel(item) {
+  const quality = item?.quality_display || item?.quality_class || item?.resolution;
+  return quality && quality !== 'Unknown' ? quality : 'Unknown quality';
+}
+
 export function getQualityLabel(item) {
-  return [item?.resolution, item?.rip_source].filter((part) => part && part !== 'Unknown').join(' ') || 'Unknown quality';
+  const quality = item?.quality_display || item?.quality_class || item?.resolution;
+  return [quality, item?.rip_source].filter((part) => part && part !== 'Unknown').join(' ') || 'Unknown quality';
 }
 
 export function rootLabel(path) {

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import app
+from services.media_file_facts import MediaFileFacts
 
 
 class LibraryReconcileTest(unittest.TestCase):
@@ -28,6 +29,66 @@ class LibraryReconcileTest(unittest.TestCase):
         app._movies_dir = movies_dir
         app._user_data_dir = data_dir
         app._tmdb_key = "tmdb-key"
+
+    def test_stable_new_file_is_probed_once_and_persists_complete_facts(self):
+        with tempfile.TemporaryDirectory() as movies_tmp, tempfile.TemporaryDirectory() as data_tmp:
+            movie = Path(movies_tmp) / "The.Monkey.2025.1080p.x265.10bit.mkv"
+            movie.write_bytes(b"movie")
+            self.configure(movies_tmp, data_tmp)
+            store = app.AppMetadataStore(Path(data_tmp))
+            measured = MediaFileFacts(
+                video_width=1800,
+                video_height=960,
+                video_codec="HEVC",
+                video_profile="Main 10",
+                video_bit_depth=10,
+                video_bitrate=2_000_527,
+                duration_ms=5_780_917,
+                audio_codec="AAC",
+                audio_channels=2,
+                audio_bitrate=132_300,
+                filename_quality_claim="1080p",
+                quality_class="1080p",
+                quality_source="measured",
+                quality_nonstandard=True,
+                probe_status="ok",
+                probe_size=movie.stat().st_size,
+                probe_modified_time=movie.stat().st_mtime,
+            )
+            candidate = {
+                "tmdb_id": "1124620",
+                "title": "The Monkey",
+                "year": "2025",
+                "match_source": "auto_tmdb",
+            }
+
+            with patch("app._file_copy_is_stable", return_value=True), patch(
+                "app.probe_media_file",
+                return_value=measured,
+            ) as probe, patch(
+                "app._resolve_tmdb_identity",
+                return_value=app._identity_resolution(
+                    "accepted",
+                    candidate,
+                    {"status": "accepted", "outcome": "accepted"},
+                    source="auto_tmdb",
+                ),
+            ):
+                outcome = app._reconcile_library_path(
+                    str(movie),
+                    "tmdb",
+                    store=store,
+                )
+            record = store.snapshot()["files"][store._key(movie)]
+
+        self.assertEqual(outcome, "matched")
+        probe.assert_called_once_with(str(movie))
+        self.assertEqual((record["video_width"], record["video_height"]), (1800, 960))
+        self.assertEqual(record["video_codec"], "HEVC")
+        self.assertEqual(record["video_bit_depth"], 10)
+        self.assertEqual(record["quality_class"], "1080p")
+        self.assertEqual(record["resolution"], "1080p")
+        self.assertEqual(record["probe_status"], "ok")
         app._library_cache = {}
 
     def test_stable_scent_of_a_woman_is_matched_during_reconcile(self):

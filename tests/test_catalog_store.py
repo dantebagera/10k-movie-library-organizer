@@ -13,6 +13,7 @@ from services.catalog_store import (
     CatalogStore,
     _keyword_prefix_bounds,
 )
+from services.media_file_facts import MediaFileFacts
 from tools.build_shadow_catalog import _load_documents
 from tools.catalog_migration_backup import BackupError
 
@@ -201,6 +202,52 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertIn("idx_media_files_quality", indexes)
         self.assertIn("idx_media_identity_key", indexes)
 
+    def test_library_and_file_projections_expose_the_same_measured_facts(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._documents(), {})
+            facts = MediaFileFacts(
+                video_width=1800,
+                video_height=960,
+                video_codec="HEVC",
+                video_profile="Main 10",
+                video_bit_depth=10,
+                video_bitrate=2_000_527,
+                duration_ms=5_780_917,
+                audio_codec="AAC",
+                audio_channels=2,
+                audio_bitrate=132_300,
+                filename_quality_claim="1080p",
+                quality_class="1080p",
+                quality_source="measured",
+                quality_nonstandard=True,
+                probe_status="ok",
+                probe_size=100,
+                probe_modified_time=0,
+            ).as_record()
+            with store.transaction() as connection:
+                report = store.apply_file_facts_batch(connection, [{
+                    "path_key": "e:/movies/alien.mkv",
+                    "expected_size": 100,
+                    "expected_modified_time": 0,
+                    "facts": facts,
+                }])
+            library = store.library_projection()[0]
+            inventory = store.file_inventory()[0]
+            measured_1080 = store.library_page({"resolution": "1080p"})
+            measured_720 = store.library_page({"resolution": "720p"})
+
+        self.assertEqual(report, {"changed": 1, "rejected": 0})
+        for projection in (library, inventory):
+            self.assertEqual((projection["video_width"], projection["video_height"]), (1800, 960))
+            self.assertEqual(projection["video_codec"], "HEVC")
+            self.assertEqual(projection["video_bit_depth"], 10)
+            self.assertEqual(projection["quality_class"], "1080p")
+            self.assertEqual(projection["resolution"], "1080p")
+            self.assertEqual(projection["probe_status"], "ok")
+        self.assertEqual(measured_1080["total"], 1)
+        self.assertEqual(measured_720["total"], 0)
+
     def test_ownership_candidates_support_all_existing_identity_aliases(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")
@@ -266,6 +313,24 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual(rows[0]["path"], "E:/Movies/Alien.mkv")
         self.assertEqual(rows[0]["tmdb_json"]["title"], "Alien")
         self.assertEqual(rows[0]["plex_json"]["plex_title"], "Alien")
+
+    def test_maintenance_candidates_use_normalized_columns_not_legacy_raw_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._documents(), {})
+            with store.transaction() as connection:
+                connection.execute(
+                    "UPDATE media_files SET raw_json='{broken json' "
+                    "WHERE path_key='e:/movies/alien.mkv'"
+                )
+            candidate = store.maintenance_candidates()[0]
+
+        self.assertEqual(candidate["path"], "E:/Movies/Alien.mkv")
+        self.assertEqual(candidate["identity_title"], "Alien")
+        self.assertEqual(candidate["plex_json"]["plex_title"], "Alien")
+        self.assertEqual(candidate["manual_json"]["provider"], "tmdb")
+        self.assertEqual(candidate["tmdb_json"]["title"], "Alien")
+        self.assertIsInstance(candidate["raw_json"], dict)
 
     def test_owned_movie_candidate_query_count_is_bounded_by_one_movie(self):
         with tempfile.TemporaryDirectory() as root:

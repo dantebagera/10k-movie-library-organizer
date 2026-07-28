@@ -242,6 +242,30 @@ class CatalogRepository:
     def library_keywords(self, query="", *, page=1, page_size=50):
         return self.store.library_keywords(query, page=page, page_size=page_size)
 
+    def file_facts_backfill_candidates(self, limit=8, *, retry_failed=False):
+        return self.store.file_facts_backfill_candidates(
+            limit,
+            retry_failed=retry_failed,
+        )
+
+    def file_facts_backfill_remaining(self, *, retry_failed=False):
+        return self.store.file_facts_backfill_remaining(
+            retry_failed=retry_failed,
+        )
+
+    def apply_file_facts_batch(self, updates):
+        with self._lock, self.store.transaction() as connection:
+            report = self.store.apply_file_facts_batch(connection, updates)
+            if report["changed"]:
+                self._bump_generation(
+                    connection,
+                    ("app_metadata/files.json",),
+                )
+                self._cache.pop("app_metadata/files.json", None)
+        if report["changed"]:
+            self.schedule_export("app_metadata/files.json")
+        return report
+
     def library_candidates_for_paths(self, paths):
         path_keys = [
             os.path.normcase(os.path.normpath(str(path or "")))
