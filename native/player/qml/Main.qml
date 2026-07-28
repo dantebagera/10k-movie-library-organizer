@@ -124,8 +124,15 @@ ApplicationWindow {
     Shortcut { sequence: playerBridge.shortcuts.volume_down || "Down"; onActivated: { mpv.setVolume(mpv.volume - 5); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.mute || "M"; onActivated: { mpv.toggleMute(); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.fullscreen || "F"; onActivated: root.toggleFullscreen() }
-    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: "Enter"; onActivated: root.toggleFullscreen() }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending && !subtitleSearchOpen; sequence: "Enter"; onActivated: root.toggleFullscreen() }
     Shortcut { enabled: playerBridge.resumeDecisionPending; sequence: "Return"; onActivated: playerBridge.chooseResume() }
+    Shortcut {
+        enabled: subtitleSearchOpen && playerBridge.subtitleResults.length > 0
+        sequence: "Return"
+        onActivated: playerBridge.requestSubtitleDownload(
+            playerBridge.subtitleResults[0].result_id
+        )
+    }
     Shortcut { enabled: playerBridge.resumeDecisionPending; sequence: "R"; onActivated: playerBridge.chooseRestart() }
     Shortcut {
         sequence: "Escape"
@@ -595,8 +602,8 @@ ApplicationWindow {
     }
 
     Rectangle {
-        width: Math.min(520, root.width - 56)
-        height: 210
+        width: Math.min(760, root.width - 56)
+        height: Math.min(570, root.height - 72)
         anchors.centerIn: parent
         visible: subtitleSearchOpen
         color: PlayerTheme.panelBlack
@@ -615,14 +622,107 @@ ApplicationWindow {
             }
             Text {
                 Layout.fillWidth: true
-                text: "Cinema Paradiso is searching your configured subtitle providers. Provider credentials never enter this player."
+                text: playerBridge.subtitleSearchStatus === "searching"
+                      ? "Searching your configured providers…"
+                      : playerBridge.subtitleSearchStatus === "downloading"
+                        ? "Downloading and validating the selected subtitle…"
+                        : playerBridge.subtitleSearchStatus === "loaded"
+                          ? "Subtitle loaded. You can close this panel."
+                          : playerBridge.subtitleResults.length === 0
+                            ? "No matching subtitles were returned by the configured providers."
+                            : playerBridge.subtitleResults.length + " ranked results"
                 color: PlayerTheme.textSoft
                 wrapMode: Text.WordWrap
                 lineHeight: 1.2
             }
-            Item { Layout.fillHeight: true }
+            Text {
+                Layout.fillWidth: true
+                visible: playerBridge.subtitleSearchError.length > 0
+                text: playerBridge.subtitleSearchError
+                color: PlayerTheme.dangerRed
+                wrapMode: Text.WordWrap
+            }
+            ListView {
+                id: subtitleResultList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 8
+                model: playerBridge.subtitleResults
+                ScrollBar.vertical: ScrollBar { }
+                delegate: Rectangle {
+                    required property var modelData
+                    width: subtitleResultList.width
+                    height: 92
+                    radius: PlayerTheme.radiusMedium
+                    color: resultHover.hovered
+                           ? PlayerTheme.surfaceRaised : PlayerTheme.archiveBlack
+                    border.color: PlayerTheme.borderStrong
+
+                    HoverHandler { id: resultHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: playerBridge.requestSubtitleDownload(modelData.result_id)
+                    }
+                    Column {
+                        anchors.left: parent.left
+                        anchors.right: providerLabel.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14
+                        anchors.rightMargin: 12
+                        spacing: 5
+                        Text {
+                            width: parent.width
+                            text: modelData.release_name
+                            color: PlayerTheme.textStrong
+                            font.pixelSize: 14
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            text: [
+                                String(modelData.language || "und").toUpperCase(),
+                                modelData.frame_rate > 0 ? Number(modelData.frame_rate).toFixed(3) + " fps" : "",
+                                modelData.hearing_impaired ? "SDH" : "",
+                                modelData.forced ? "Forced" : ""
+                            ].filter(Boolean).join("  ·  ")
+                            color: PlayerTheme.textSoft
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: parent.width
+                            text: modelData.match_reason
+                            color: PlayerTheme.projectorGoldBright
+                            font.pixelSize: 12
+                            elide: Text.ElideRight
+                        }
+                    }
+                    Text {
+                        id: providerLabel
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.rightMargin: 14
+                        width: 118
+                        text: modelData.provider
+                        color: PlayerTheme.textMuted
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignRight
+                    }
+                }
+            }
             RowLayout {
-                Layout.alignment: Qt.AlignRight
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    text: "Credentials stay in the Cinema Paradiso backend."
+                    color: PlayerTheme.textMuted
+                    font.pixelSize: 11
+                }
+                CpButton {
+                    text: "Search again"
+                    onClicked: playerBridge.requestSubtitleSearch()
+                }
                 CpButton { text: "Close"; onClicked: root.closeOverlays() }
             }
         }

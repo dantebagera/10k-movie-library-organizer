@@ -20,6 +20,9 @@ class PlayerBridge final : public QObject
     Q_PROPERTY(QVariantMap shortcuts READ shortcuts NOTIFY preferencesChanged)
     Q_PROPERTY(bool resumeDecisionPending READ resumeDecisionPending NOTIFY resumeChanged)
     Q_PROPERTY(qint64 resumePositionMs READ resumePositionMs NOTIFY resumeChanged)
+    Q_PROPERTY(QVariantList subtitleResults READ subtitleResults NOTIFY subtitleSearchChanged)
+    Q_PROPERTY(QString subtitleSearchStatus READ subtitleSearchStatus NOTIFY subtitleSearchChanged)
+    Q_PROPERTY(QString subtitleSearchError READ subtitleSearchError NOTIFY subtitleSearchChanged)
 
 public:
     explicit PlayerBridge(QObject *parent = nullptr);
@@ -32,6 +35,9 @@ public:
     QVariantMap shortcuts() const;
     bool resumeDecisionPending() const;
     qint64 resumePositionMs() const;
+    QVariantList subtitleResults() const;
+    QString subtitleSearchStatus() const;
+    QString subtitleSearchError() const;
 
     bool configurationValid() const;
     QString configurationError() const;
@@ -40,6 +46,7 @@ public:
 
     Q_INVOKABLE void requestClose();
     Q_INVOKABLE void requestSubtitleSearch();
+    Q_INVOKABLE void requestSubtitleDownload(const QString &resultId);
     Q_INVOKABLE void chooseResume();
     Q_INVOKABLE void chooseRestart();
 
@@ -48,6 +55,7 @@ signals:
     void connectionStatusChanged();
     void preferencesChanged();
     void resumeChanged();
+    void subtitleSearchChanged();
     void closeWindowRequested();
 
 private slots:
@@ -93,6 +101,9 @@ private:
     QString m_posterReference;
     QString m_audioTrackFingerprint;
     QString m_subtitleTrackFingerprint;
+    QVariantList m_subtitleResults;
+    QString m_subtitleSearchStatus = QStringLiteral("idle");
+    QString m_subtitleSearchError;
     double m_subtitleDelaySeconds = 0.0;
     QString m_connectionStatus = QStringLiteral("Preparing secure player session");
     QVariantMap m_shortcuts;

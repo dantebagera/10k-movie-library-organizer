@@ -14,6 +14,7 @@ from services.player_protocol import (
 from services.player_runtime import PlayerRuntimeError
 from services.player_windows_pipe import WindowsNamedPipeServer
 from services.playback_history import PlaybackHistoryError
+from services.subtitle_service import SubtitleServiceError
 
 
 PLAYER_STARTUP_TIMEOUT_SECONDS = 10
@@ -65,28 +66,32 @@ class PlayerSession:
         transport,
         on_event,
         playback_context=None,
+        media=None,
     ):
         self.session_id = session_id
         self.process = process
         self.transport = transport
         self.on_event = on_event
         self.playback_context = playback_context
+        self.media = dict(media or {})
         self.last_sequence = 0
         self.closed = threading.Event()
         self._send_sequence = 1
+        self._send_lock = threading.Lock()
         self._reader = None
         self._closed_event_received = False
 
     def send(self, message_type, **payload):
-        message = {
-            "type": message_type,
-            "protocol": PLAYER_PROTOCOL_VERSION,
-            "session_id": self.session_id,
-            "sequence": self._send_sequence,
-            **payload,
-        }
-        self._send_sequence += 1
-        self.transport.send(message)
+        with self._send_lock:
+            message = {
+                "type": message_type,
+                "protocol": PLAYER_PROTOCOL_VERSION,
+                "session_id": self.session_id,
+                "sequence": self._send_sequence,
+                **payload,
+            }
+            self._send_sequence += 1
+            self.transport.send(message)
 
     def start_reader(self):
         self._reader = threading.Thread(
@@ -162,6 +167,7 @@ class PlayerManager:
         transport_factory=None,
         process_launcher=None,
         playback_history=None,
+        subtitle_service=None,
         startup_timeout=PLAYER_STARTUP_TIMEOUT_SECONDS,
     ):
         self.player_config = player_config
@@ -171,6 +177,7 @@ class PlayerManager:
         self.transport_factory = transport_factory or WindowsNamedPipeServer
         self.process_launcher = process_launcher or launch_player_process
         self.playback_history = playback_history
+        self.subtitle_service = subtitle_service
         self.startup_timeout = float(startup_timeout)
         self._lock = threading.RLock()
         self._active = None
@@ -266,6 +273,7 @@ class PlayerManager:
                 transport,
                 self._handle_event,
                 playback_context=playback_context,
+                media=media,
             )
             session.send(
                 "load",
@@ -328,6 +336,23 @@ class PlayerManager:
             raise
 
     def _handle_event(self, session, message):
+        if message["type"] == "subtitle.search" and self.subtitle_service:
+            self.subtitle_service.search_async(
+                session.session_id,
+                session.media,
+                lambda payload: self._send_to_active(
+                    session,
+                    "subtitle.results",
+                    **payload,
+                ),
+            )
+        elif message["type"] == "subtitle.download" and self.subtitle_service:
+            threading.Thread(
+                target=self._download_subtitle,
+                args=(session, message["result_id"]),
+                name=f"cp-subtitle-download-{session.session_id[:8]}",
+                daemon=True,
+            ).start()
         if self.playback_history:
             try:
                 self.playback_history.handle_event(session, message)
@@ -358,3 +383,28 @@ class PlayerManager:
                 self._last_event = safe_event
                 if message["type"] == "closed":
                     self._active = None
+
+    def _send_to_active(self, session, message_type, **payload):
+        with self._lock:
+            active = self._active is session and not session.closed.is_set()
+        if active:
+            try:
+                session.send(message_type, **payload)
+            except (OSError, RuntimeError):
+                pass
+
+    def _download_subtitle(self, session, result_id):
+        try:
+            loaded = self.subtitle_service.download(
+                session.session_id,
+                result_id,
+                session.media,
+            )
+            self._send_to_active(session, "subtitle.loaded", **loaded)
+        except SubtitleServiceError:
+            self._send_to_active(
+                session,
+                "error",
+                code="subtitle_download_failed",
+                message="The selected subtitle could not be loaded.",
+            )

@@ -129,6 +129,43 @@ class PlayerProtocolTests(unittest.TestCase):
                 message("playback.settings", subtitle_delay_ms=4_000_000)
             )
 
+    def test_subtitle_results_and_download_commands_are_bounded(self):
+        result = {
+            "result_id": "opaque-result",
+            "provider": "subdl",
+            "language": "en",
+            "release_name": "Movie.2024.1080p",
+            "file_name": "movie.srt",
+            "frame_rate": 23.976,
+            "rating": 8.5,
+            "download_count": 100,
+            "hearing_impaired": False,
+            "forced": False,
+            "match_reason": "Release-name match",
+        }
+        self.assertEqual(
+            validate_message(message(
+                "subtitle.results",
+                status="complete",
+                results=[result],
+                diagnostics={},
+            ))["results"][0]["result_id"],
+            "opaque-result",
+        )
+        self.assertEqual(
+            validate_message(
+                message("subtitle.download", result_id="opaque-result")
+            )["result_id"],
+            "opaque-result",
+        )
+        with self.assertRaises(PlayerProtocolError):
+            validate_message(message(
+                "subtitle.results",
+                status="complete",
+                results=[result] * 41,
+                diagnostics={},
+            ))
+
 
 if __name__ == "__main__":
     unittest.main()

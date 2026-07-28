@@ -107,6 +107,8 @@ def main():
     parser.add_argument("--allow-no-audio", action="store_true")
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
+    parser.add_argument("--exercise-subtitle-provider-flow", action="store_true")
+    parser.add_argument("--external-subtitle", type=Path)
     parser.add_argument("--exercise-resume", action="store_true")
     parser.add_argument("--restore-audio-fingerprint", default="")
     parser.add_argument("--restore-subtitle-fingerprint", default="")
@@ -145,6 +147,7 @@ def main():
 
     process = None
     events = []
+    backend_sequence = 1
     started = time.monotonic()
     with WindowsNamedPipeServer(pipe_name) as transport:
         try:
@@ -380,6 +383,33 @@ def main():
                     lambda event: event["type"] == "subtitle.search",
                     3,
                 )
+                if args.exercise_subtitle_provider_flow:
+                    if not args.external_subtitle or not args.external_subtitle.resolve().is_file():
+                        raise RuntimeError(
+                            "--external-subtitle is required for subtitle-provider flow."
+                        )
+                    backend_sequence += 1
+                    transport.send(message(
+                        session_id,
+                        backend_sequence,
+                        "subtitle.results",
+                        status="complete",
+                        results=[{
+                            "result_id": "fixture-result",
+                            "provider": "fixture-provider",
+                            "language": "en",
+                            "release_name": "Cinema.Paradiso.Phase4.1080p",
+                            "file_name": args.external_subtitle.name,
+                            "frame_rate": 23.976,
+                            "rating": 9.0,
+                            "download_count": 1000,
+                            "hearing_impaired": False,
+                            "forced": False,
+                            "match_reason": "Exact file hash",
+                        }],
+                        diagnostics={},
+                    ))
+                    time.sleep(0.5)
                 if args.screenshot:
                     time.sleep(0.3)
                     overlay_path = args.screenshot.with_name(
@@ -396,8 +426,50 @@ def main():
                         ),
                         all_screens=True,
                     ).save(overlay_path)
+                if args.exercise_subtitle_provider_flow:
+                    send_window_key(window, 0x0D)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "subtitle.download"
+                        and event.get("result_id") == "fixture-result",
+                        3,
+                    )
+                    backend_sequence += 1
+                    transport.send(message(
+                        session_id,
+                        backend_sequence,
+                        "subtitle.loaded",
+                        path=str(args.external_subtitle.resolve()),
+                        provider="fixture-provider",
+                        language="en",
+                        release_name="Cinema.Paradiso.Phase4.1080p",
+                    ))
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "subtitle.loaded"
+                        and event.get("provider") == "fixture-provider",
+                        3,
+                    )
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "tracks.changed"
+                        and any(
+                            track.get("selected")
+                            and track.get("type") == "sub"
+                            and track.get("external")
+                            for track in event.get("tracks", [])
+                        ),
+                        4,
+                    )
 
-            transport.send(message(session_id, 2, "close"))
+            backend_sequence += 1
+            transport.send(message(session_id, backend_sequence, "close"))
             close_deadline = time.monotonic() + 5.0
             while time.monotonic() < close_deadline:
                 try:

@@ -57,6 +57,7 @@ public:
     Q_INVOKABLE void selectAudioTrack(int id);
     Q_INVOKABLE void selectSubtitleTrack(int id);
     Q_INVOKABLE void disableSubtitles();
+    Q_INVOKABLE bool loadExternalSubtitle(const QString &path);
     Q_INVOKABLE void adjustSubtitleDelay(double seconds);
     Q_INVOKABLE void setSubtitleDelay(double seconds);
     Q_INVOKABLE void adjustAudioDelay(double seconds);

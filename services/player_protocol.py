@@ -6,6 +6,7 @@ PLAYER_PROTOCOL_VERSION = 1
 MAX_MESSAGE_BYTES = 256 * 1024
 MAX_STRING_LENGTH = 4096
 MAX_TRACKS = 128
+MAX_SUBTITLE_RESULTS = 40
 MAX_DURATION_MS = 30 * 24 * 60 * 60 * 1000
 
 MESSAGE_TYPES = {
@@ -90,6 +91,7 @@ def _validate_tracks(tracks):
             "default": bool(track.get("default", False)),
             "forced": bool(track.get("forced", False)),
             "hearing_impaired": bool(track.get("hearing_impaired", False)),
+            "external": bool(track.get("external", False)),
         })
     return result
 
@@ -172,6 +174,56 @@ def validate_message(message, *, expected_type=None, session_id=None, token=None
             raise PlayerProtocolError("Player paused state is invalid")
     elif message_type == "tracks.changed":
         _validate_tracks(message.get("tracks"))
+    elif message_type == "subtitle.search":
+        languages = message.get("languages", [])
+        if not isinstance(languages, list) or len(languages) > 10:
+            raise PlayerProtocolError("Subtitle languages must be a bounded list")
+        for language in languages:
+            _bounded_string(language, "subtitle.language", maximum=16)
+    elif message_type == "subtitle.results":
+        if message.get("status") not in {"complete", "error"}:
+            raise PlayerProtocolError("Subtitle search status is invalid")
+        results = message.get("results", [])
+        if not isinstance(results, list) or len(results) > MAX_SUBTITLE_RESULTS:
+            raise PlayerProtocolError("Subtitle results must be a bounded list")
+        for result in results:
+            if not isinstance(result, dict):
+                raise PlayerProtocolError("Subtitle result entries must be objects")
+            for field, maximum in (
+                ("result_id", 128), ("provider", 32), ("language", 16),
+                ("release_name", 512), ("file_name", 512), ("match_reason", 128),
+            ):
+                _bounded_string(
+                    result.get(field, ""),
+                    f"subtitle.{field}",
+                    maximum=maximum,
+                    allow_empty=field in {"file_name"},
+                )
+            _bounded_number(result.get("frame_rate", 0), "subtitle.frame_rate", maximum=1000)
+            _bounded_number(result.get("rating", 0), "subtitle.rating", maximum=1000000)
+            _bounded_number(
+                result.get("download_count", 0),
+                "subtitle.download_count",
+                maximum=1000000000,
+            )
+            if not isinstance(result.get("hearing_impaired", False), bool):
+                raise PlayerProtocolError("Subtitle hearing-impaired flag is invalid")
+            if not isinstance(result.get("forced", False), bool):
+                raise PlayerProtocolError("Subtitle forced flag is invalid")
+        if not isinstance(message.get("diagnostics", {}), dict):
+            raise PlayerProtocolError("Subtitle diagnostics must be an object")
+    elif message_type == "subtitle.download":
+        _bounded_string(message.get("result_id", ""), "subtitle.result_id", maximum=128)
+    elif message_type == "subtitle.loaded":
+        _bounded_string(message.get("path", ""), "subtitle.path", maximum=32768)
+        _bounded_string(message.get("provider", ""), "subtitle.provider", maximum=32)
+        _bounded_string(message.get("language", ""), "subtitle.language", maximum=16)
+        _bounded_string(
+            message.get("release_name", ""),
+            "subtitle.release_name",
+            maximum=512,
+            allow_empty=True,
+        )
     elif message_type == "resume.choice":
         if message.get("choice") not in {"resume", "restart"}:
             raise PlayerProtocolError("Player resume choice is invalid")

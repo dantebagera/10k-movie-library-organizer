@@ -7,6 +7,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QQuickOpenGLUtils>
+#include <QSet>
 #include <QTimer>
 
 #include <algorithm>
@@ -290,6 +291,31 @@ void MpvItem::disableSubtitles()
     QTimer::singleShot(750, this, &MpvItem::updateTrackModels);
 }
 
+bool MpvItem::loadExternalSubtitle(const QString &path)
+{
+    const QFileInfo subtitle(path);
+    static const QSet<QString> approved{
+        QStringLiteral("srt"),
+        QStringLiteral("ass"),
+        QStringLiteral("ssa"),
+        QStringLiteral("vtt"),
+    };
+    if (!subtitle.isAbsolute() || !subtitle.exists() || !subtitle.isFile()
+        || !approved.contains(subtitle.suffix().toLower())) {
+        return false;
+    }
+    const bool accepted = sendCommand({
+        QByteArrayLiteral("sub-add"),
+        QFile::encodeName(subtitle.absoluteFilePath()),
+        QByteArrayLiteral("select"),
+    });
+    if (accepted) {
+        QTimer::singleShot(250, this, &MpvItem::updateTrackModels);
+        QTimer::singleShot(750, this, &MpvItem::updateTrackModels);
+    }
+    return accepted;
+}
+
 void MpvItem::adjustSubtitleDelay(double seconds)
 {
     sendCommand({
@@ -547,6 +573,8 @@ QVariantMap MpvItem::trackModel(int index) const
                  propertyYes(propertyString(base + QByteArrayLiteral("forced"))));
     track.insert(QStringLiteral("hearing_impaired"),
                  propertyYes(propertyString(base + QByteArrayLiteral("hearing-impaired"))));
+    track.insert(QStringLiteral("external"),
+                 propertyYes(propertyString(base + QByteArrayLiteral("external"))));
     track.insert(QStringLiteral("fingerprint"), trackFingerprint(track));
     return track;
 }

@@ -132,6 +132,27 @@ class FakePlaybackHistory:
         self.received.set()
 
 
+class FakeSubtitleService:
+    def __init__(self):
+        self.searches = []
+        self.downloads = []
+        self.downloaded = threading.Event()
+
+    def search_async(self, session_id, media, callback):
+        self.searches.append((session_id, dict(media)))
+        callback({"status": "complete", "results": [], "diagnostics": {}})
+
+    def download(self, session_id, result_id, media):
+        self.downloads.append((session_id, result_id, dict(media)))
+        self.downloaded.set()
+        return {
+            "path": "C:\\cache\\subtitle.srt",
+            "provider": "subdl",
+            "language": "en",
+            "release_name": "Movie",
+        }
+
+
 class PlayerManagerTests(unittest.TestCase):
     @staticmethod
     def media(path):
@@ -364,6 +385,42 @@ class PlayerManagerTests(unittest.TestCase):
 
         self.assertNotIn("providers", safe)
         self.assertNotIn("secret", str(safe))
+
+    def test_subtitle_search_and_download_stay_on_authenticated_session(self):
+        subtitle_service = FakeSubtitleService()
+        manager = PlayerManager(
+            PlayerConfig(),
+            FakeRuntime(error=AssertionError("not used")),
+            lambda _path_key: {},
+            subtitle_service=subtitle_service,
+        )
+        transport = EventTransport([])
+        session = PlayerSession(
+            "subtitle-session",
+            FakeProcess(),
+            transport,
+            lambda _session, _message: None,
+            media={"path_key": "e:\\movie.mkv", "path": "E:\\Movie.mkv"},
+        )
+        manager._active = session
+
+        manager._handle_event(session, {
+            "type": "subtitle.search",
+            "sequence": 2,
+        })
+        manager._handle_event(session, {
+            "type": "subtitle.download",
+            "sequence": 3,
+            "result_id": "opaque-result",
+        })
+        self.assertTrue(subtitle_service.downloaded.wait(2))
+
+        self.assertEqual(subtitle_service.searches[0][0], "subtitle-session")
+        self.assertEqual(subtitle_service.downloads[0][1], "opaque-result")
+        self.assertEqual(
+            [message["type"] for message in transport.sent],
+            ["subtitle.results", "subtitle.loaded"],
+        )
 
 
 if __name__ == "__main__":

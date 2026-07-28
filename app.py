@@ -43,6 +43,7 @@ from services.player_manager import PlayerManager
 from services.player_routes import register_player_routes
 from services.player_runtime import PlayerRuntime
 from services.playback_history import PlaybackHistoryService, PlaybackHistoryStore
+from services.subtitle_service import SubtitleService
 from services.metadata_migration import MetadataMigrationCoordinator
 from services.identity_audit import IdentityAuditCoordinator
 from services.identity_decision import (
@@ -216,6 +217,10 @@ _playback_history = PlaybackHistoryService(
     _player_config,
     lambda: _curation_store(),
 )
+_subtitle_service = SubtitleService(
+    _player_config,
+    lambda: Path(_user_data_dir) / 'subtitle_cache',
+)
 _player_manager = PlayerManager(
     _player_config,
     _player_runtime,
@@ -225,6 +230,7 @@ _player_manager = PlayerManager(
         get_movies_dirs(),
     ),
     playback_history=_playback_history,
+    subtitle_service=_subtitle_service,
 )
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1
@@ -352,6 +358,7 @@ register_player_routes(
     _player_runtime,
     _player_manager,
     _playback_history,
+    _subtitle_service,
     lambda: _save_config(_all_config()),
 )
 _plex_cache     = {}   # _norm(file_path) -> {plex_title, plex_year, plex_genres}

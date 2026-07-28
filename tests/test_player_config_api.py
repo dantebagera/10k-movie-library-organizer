@@ -75,6 +75,8 @@ class PlayerConfigApiTests(unittest.TestCase):
 
         self.assertEqual(quick.status_code, 200)
         self.assertEqual(verified.status_code, 200)
+        self.assertIn("subtitles", quick.get_json())
+        self.assertNotIn("secret", str(quick.get_json()).lower())
         self.assertEqual(
             status.call_args_list,
             [

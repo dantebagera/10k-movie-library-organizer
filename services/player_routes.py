@@ -12,6 +12,7 @@ def register_player_routes(
     player_runtime,
     player_manager,
     playback_history,
+    subtitle_service,
     persist_config,
 ):
     @app.get("/api/player/config")
@@ -32,7 +33,9 @@ def register_player_routes(
 
     @app.get("/api/player/status")
     def get_player_status():
-        return jsonify(player_runtime.status(verify_hashes=False))
+        payload = player_runtime.status(verify_hashes=False)
+        payload["subtitles"] = subtitle_service.diagnostics()
+        return jsonify(payload)
 
     @app.post("/api/player/verify")
     def verify_player_runtime():

@@ -40,6 +40,7 @@ QJsonObject trackToJson(const QVariant &value)
         QStringLiteral("default"),
         QStringLiteral("forced"),
         QStringLiteral("hearing_impaired"),
+        QStringLiteral("external"),
     };
     for (const QString &key : flags) {
         result.insert(key, track.value(key).toBool());
@@ -87,6 +88,9 @@ bool PlayerBridge::connected() const
 QVariantMap PlayerBridge::shortcuts() const { return m_shortcuts; }
 bool PlayerBridge::resumeDecisionPending() const { return m_resumeDecisionPending; }
 qint64 PlayerBridge::resumePositionMs() const { return qRound64(m_resumeSeconds * 1000.0); }
+QVariantList PlayerBridge::subtitleResults() const { return m_subtitleResults; }
+QString PlayerBridge::subtitleSearchStatus() const { return m_subtitleSearchStatus; }
+QString PlayerBridge::subtitleSearchError() const { return m_subtitleSearchError; }
 bool PlayerBridge::configurationValid() const { return m_configurationError.isEmpty(); }
 QString PlayerBridge::configurationError() const { return m_configurationError; }
 
@@ -140,8 +144,26 @@ void PlayerBridge::requestClose()
 void PlayerBridge::requestSubtitleSearch()
 {
     if (m_loadAccepted) {
+        m_subtitleResults.clear();
+        m_subtitleSearchError.clear();
+        m_subtitleSearchStatus = QStringLiteral("searching");
+        emit subtitleSearchChanged();
         sendMessage(QStringLiteral("subtitle.search"));
     }
+}
+
+void PlayerBridge::requestSubtitleDownload(const QString &resultId)
+{
+    const QString normalized = resultId.trimmed();
+    if (!m_loadAccepted || normalized.isEmpty() || normalized.size() > 128) {
+        return;
+    }
+    m_subtitleSearchStatus = QStringLiteral("downloading");
+    m_subtitleSearchError.clear();
+    emit subtitleSearchChanged();
+    QJsonObject payload;
+    payload.insert(QStringLiteral("result_id"), normalized);
+    sendMessage(QStringLiteral("subtitle.download"), payload);
 }
 
 void PlayerBridge::chooseResume()
@@ -439,6 +461,102 @@ void PlayerBridge::handleMessage(const QJsonObject &message)
             failAndClose(QStringLiteral("invalid_load"),
                          QStringLiteral("The backend playback request was rejected"));
         }
+        return;
+    }
+    if (type == QStringLiteral("subtitle.results")
+        && validateEnvelope(message, QStringLiteral("subtitle.results"))) {
+        const QString status = message.value(QStringLiteral("status")).toString();
+        const QJsonArray rows = message.value(QStringLiteral("results")).toArray();
+        if ((status != QStringLiteral("complete") && status != QStringLiteral("error"))
+            || rows.size() > 40) {
+            failAndClose(QStringLiteral("invalid_subtitle_results"),
+                         QStringLiteral("The backend sent invalid subtitle results"));
+            return;
+        }
+        QVariantList safeRows;
+        for (const QJsonValue &value : rows) {
+            const QJsonObject row = value.toObject();
+            const QString resultId = row.value(QStringLiteral("result_id")).toString();
+            const QString provider = row.value(QStringLiteral("provider")).toString();
+            const QString language = row.value(QStringLiteral("language")).toString();
+            const QString release = row.value(QStringLiteral("release_name")).toString();
+            const QString fileName = row.value(QStringLiteral("file_name")).toString();
+            const QString reason = row.value(QStringLiteral("match_reason")).toString();
+            if (resultId.isEmpty() || resultId.size() > 128
+                || provider.isEmpty() || provider.size() > 32
+                || language.isEmpty() || language.size() > 16
+                || release.isEmpty() || release.size() > 512
+                || fileName.size() > 512 || reason.isEmpty() || reason.size() > 128) {
+                failAndClose(QStringLiteral("invalid_subtitle_results"),
+                             QStringLiteral("The backend sent invalid subtitle results"));
+                return;
+            }
+            QVariantMap safe;
+            safe.insert(QStringLiteral("result_id"), resultId);
+            safe.insert(QStringLiteral("provider"), provider);
+            safe.insert(QStringLiteral("language"), language);
+            safe.insert(QStringLiteral("release_name"), release);
+            safe.insert(QStringLiteral("file_name"), fileName);
+            safe.insert(QStringLiteral("match_reason"), reason);
+            safe.insert(QStringLiteral("frame_rate"),
+                        row.value(QStringLiteral("frame_rate")).toDouble());
+            safe.insert(QStringLiteral("rating"),
+                        row.value(QStringLiteral("rating")).toDouble());
+            safe.insert(QStringLiteral("download_count"),
+                        row.value(QStringLiteral("download_count")).toInteger());
+            safe.insert(QStringLiteral("hearing_impaired"),
+                        row.value(QStringLiteral("hearing_impaired")).toBool());
+            safe.insert(QStringLiteral("forced"),
+                        row.value(QStringLiteral("forced")).toBool());
+            safeRows.append(safe);
+        }
+        m_lastReceivedSequence =
+            static_cast<quint64>(message.value(QStringLiteral("sequence")).toDouble());
+        m_subtitleResults = safeRows;
+        m_subtitleSearchStatus = status;
+        m_subtitleSearchError = status == QStringLiteral("error")
+                                    ? QStringLiteral("Subtitle providers are unavailable")
+                                    : QString();
+        emit subtitleSearchChanged();
+        return;
+    }
+    if (type == QStringLiteral("subtitle.loaded")
+        && validateEnvelope(message, QStringLiteral("subtitle.loaded"))) {
+        const QString path = message.value(QStringLiteral("path")).toString();
+        const QString provider = message.value(QStringLiteral("provider")).toString();
+        const QString language = message.value(QStringLiteral("language")).toString();
+        const QString release = message.value(QStringLiteral("release_name")).toString();
+        if (path.isEmpty() || path.size() > 32768 || provider.isEmpty()
+            || provider.size() > 32 || language.isEmpty() || language.size() > 16
+            || release.size() > 512 || !m_player || !m_player->loadExternalSubtitle(path)) {
+            m_subtitleSearchStatus = QStringLiteral("error");
+            m_subtitleSearchError = QStringLiteral("The downloaded subtitle could not be loaded");
+            emit subtitleSearchChanged();
+            return;
+        }
+        m_lastReceivedSequence =
+            static_cast<quint64>(message.value(QStringLiteral("sequence")).toDouble());
+        m_subtitleSearchStatus = QStringLiteral("loaded");
+        m_subtitleSearchError.clear();
+        emit subtitleSearchChanged();
+        sendMessage(QStringLiteral("subtitle.loaded"), {
+            {QStringLiteral("path"), path},
+            {QStringLiteral("provider"), provider},
+            {QStringLiteral("language"), language},
+            {QStringLiteral("release_name"), release},
+        });
+        return;
+    }
+    if (type == QStringLiteral("error")
+        && validateEnvelope(message, QStringLiteral("error"))
+        && message.value(QStringLiteral("code")).toString()
+               == QStringLiteral("subtitle_download_failed")) {
+        m_lastReceivedSequence =
+            static_cast<quint64>(message.value(QStringLiteral("sequence")).toDouble());
+        m_subtitleSearchStatus = QStringLiteral("error");
+        m_subtitleSearchError =
+            message.value(QStringLiteral("message")).toString().left(1024);
+        emit subtitleSearchChanged();
         return;
     }
     if (type == QStringLiteral("close")
