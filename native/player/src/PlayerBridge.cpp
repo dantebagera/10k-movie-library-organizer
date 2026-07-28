@@ -4,10 +4,12 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSet>
+#include <QScreen>
 #include <QTimer>
 
 #include <cmath>
@@ -86,6 +88,7 @@ bool PlayerBridge::connected() const
     return m_socket.state() == QLocalSocket::ConnectedState;
 }
 QVariantMap PlayerBridge::shortcuts() const { return m_shortcuts; }
+QVariantMap PlayerBridge::windowState() const { return m_windowState; }
 bool PlayerBridge::resumeDecisionPending() const { return m_resumeDecisionPending; }
 qint64 PlayerBridge::resumePositionMs() const { return qRound64(m_resumeSeconds * 1000.0); }
 QVariantList PlayerBridge::subtitleResults() const { return m_subtitleResults; }
@@ -192,6 +195,27 @@ void PlayerBridge::chooseRestart()
     payload.insert(QStringLiteral("choice"), QStringLiteral("restart"));
     sendMessage(QStringLiteral("resume.choice"), payload);
     m_player->setPaused(false);
+}
+
+void PlayerBridge::reportWindowState(int x, int y, int width, int height,
+                                     const QString &screen, bool maximized,
+                                     bool alwaysOnTop)
+{
+    if (!m_loadAccepted) {
+        return;
+    }
+    QJsonObject state;
+    state.insert(QStringLiteral("x"), std::clamp(x, -32768, 32768));
+    state.insert(QStringLiteral("y"), std::clamp(y, -32768, 32768));
+    state.insert(QStringLiteral("width"), std::clamp(width, 640, 7680));
+    state.insert(QStringLiteral("height"), std::clamp(height, 360, 4320));
+    state.insert(QStringLiteral("screen"), screen.trimmed().left(256));
+    state.insert(QStringLiteral("maximized"), maximized);
+    state.insert(QStringLiteral("always_on_top"), alwaysOnTop);
+    state.insert(QStringLiteral("positioned"), true);
+    sendMessage(QStringLiteral("window.state"), {
+        {QStringLiteral("window_state"), state},
+    });
 }
 
 void PlayerBridge::handleConnected()
@@ -425,6 +449,18 @@ bool PlayerBridge::handleLoad(const QJsonObject &message)
         QStringLiteral("chapters"),
         QStringLiteral("statistics"),
         QStringLiteral("screenshot"),
+        QStringLiteral("ab_repeat"),
+        QStringLiteral("frame_advance"),
+        QStringLiteral("aspect_ratio"),
+        QStringLiteral("crop"),
+        QStringLiteral("rotate"),
+        QStringLiteral("zoom_in"),
+        QStringLiteral("zoom_out"),
+        QStringLiteral("pan_left"),
+        QStringLiteral("pan_right"),
+        QStringLiteral("pan_up"),
+        QStringLiteral("pan_down"),
+        QStringLiteral("always_on_top"),
     };
     QVariantMap validatedShortcuts;
     for (auto iterator = requestedShortcuts.cbegin();
@@ -437,6 +473,66 @@ bool PlayerBridge::handleLoad(const QJsonObject &message)
         }
     }
     m_shortcuts = validatedShortcuts;
+    const QVariantMap requestedWindowState =
+        preferences.value(QStringLiteral("window_state")).toMap();
+    const bool positioned =
+        requestedWindowState.value(QStringLiteral("positioned")).toBool();
+    QScreen *targetScreen = nullptr;
+    const QString requestedScreen =
+        requestedWindowState.value(QStringLiteral("screen")).toString().trimmed();
+    for (QScreen *screen : QGuiApplication::screens()) {
+        if (screen && screen->name() == requestedScreen) {
+            targetScreen = screen;
+            break;
+        }
+    }
+    if (!targetScreen) {
+        const QPoint requestedCenter(
+            requestedWindowState.value(QStringLiteral("x")).toInt()
+                + requestedWindowState.value(QStringLiteral("width")).toInt() / 2,
+            requestedWindowState.value(QStringLiteral("y")).toInt()
+                + requestedWindowState.value(QStringLiteral("height")).toInt() / 2
+        );
+        targetScreen = QGuiApplication::screenAt(requestedCenter);
+    }
+    if (!targetScreen) {
+        targetScreen = QGuiApplication::primaryScreen();
+    }
+    if (targetScreen) {
+        const QRect available = targetScreen->availableGeometry();
+        const int width = std::clamp(
+            requestedWindowState.value(QStringLiteral("width"), 1280).toInt(),
+            std::min(640, available.width()), available.width()
+        );
+        const int height = std::clamp(
+            requestedWindowState.value(QStringLiteral("height"), 720).toInt(),
+            std::min(360, available.height()), available.height()
+        );
+        const int x = positioned
+            ? std::clamp(
+                requestedWindowState.value(QStringLiteral("x")).toInt(),
+                available.left(), available.right() - width + 1
+            )
+            : available.left() + (available.width() - width) / 2;
+        const int y = positioned
+            ? std::clamp(
+                requestedWindowState.value(QStringLiteral("y")).toInt(),
+                available.top(), available.bottom() - height + 1
+            )
+            : available.top() + (available.height() - height) / 2;
+        m_windowState = {
+            {QStringLiteral("x"), x},
+            {QStringLiteral("y"), y},
+            {QStringLiteral("width"), width},
+            {QStringLiteral("height"), height},
+            {QStringLiteral("screen"), targetScreen->name()},
+            {QStringLiteral("maximized"),
+             requestedWindowState.value(QStringLiteral("maximized")).toBool()},
+            {QStringLiteral("always_on_top"),
+             requestedWindowState.value(QStringLiteral("always_on_top")).toBool()},
+            {QStringLiteral("positioned"), positioned},
+        };
+    }
     emit preferencesChanged();
     if (m_resumeDecisionPending) {
         m_player->setPaused(true);

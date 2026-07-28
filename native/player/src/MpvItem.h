@@ -4,6 +4,7 @@
 
 #include <QElapsedTimer>
 #include <QQuickFramebufferObject>
+#include <QSet>
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
@@ -58,6 +59,16 @@ public:
     Q_INVOKABLE void selectSubtitleTrack(int id);
     Q_INVOKABLE void disableSubtitles();
     Q_INVOKABLE bool loadExternalSubtitle(const QString &path);
+    Q_INVOKABLE QString seekThumbnail(double seconds) const;
+    Q_INVOKABLE QVariantMap playbackStatistics() const;
+    Q_INVOKABLE QString captureScreenshot();
+    Q_INVOKABLE QString cycleABRepeat();
+    Q_INVOKABLE void frameAdvance();
+    Q_INVOKABLE void cycleAspectRatio();
+    Q_INVOKABLE void cycleCrop();
+    Q_INVOKABLE void rotateVideo();
+    Q_INVOKABLE void adjustZoom(double amount);
+    Q_INVOKABLE void adjustPan(double horizontal, double vertical);
     Q_INVOKABLE void adjustSubtitleDelay(double seconds);
     Q_INVOKABLE void setSubtitleDelay(double seconds);
     Q_INVOKABLE void adjustAudioDelay(double seconds);
@@ -77,6 +88,7 @@ signals:
     void subtitleTracksChanged();
     void tracksChanged();
     void chaptersChanged();
+    void seekThumbnailsChanged();
     void fileLoaded();
     void playbackEnded();
     void firstFrameRendered(qint64 elapsedMilliseconds);
@@ -92,6 +104,7 @@ private:
 
     static void wakeup(void *context);
     bool sendCommand(const QList<QByteArray> &arguments);
+    bool sendCommandAsync(const QList<QByteArray> &arguments);
     void initializeMpv();
     void setStatus(const QString &status);
     void updateTrackModels();
@@ -100,6 +113,7 @@ private:
     QVariantMap trackModel(int index) const;
     static QString trackFingerprint(const QVariantMap &track);
     void applyPreferences(const QVariantMap &preferences);
+    void captureCurrentSeekThumbnail();
 
     std::unique_ptr<MpvApi> m_api;
     mpv_handle *m_mpv = nullptr;
@@ -116,7 +130,14 @@ private:
     QVariantList m_audioTracks;
     QVariantList m_subtitleTracks;
     QVariantList m_chapters;
+    QString m_thumbnailRoot;
+    QSet<int> m_thumbnailBuckets;
+    QSet<int> m_pendingThumbnailBuckets;
+    int m_lastThumbnailBucket = -1;
     QElapsedTimer m_loadTimer;
     quint64 m_loadGeneration = 0;
     quint64 m_fileLoadedGeneration = 0;
+    int m_abRepeatStage = 0;
+    int m_rotation = 0;
+    quint64 m_asyncCommandId = 1000;
 };

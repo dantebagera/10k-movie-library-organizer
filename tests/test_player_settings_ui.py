@@ -19,6 +19,9 @@ class PlayerSettingsUiTests(unittest.TestCase):
         self.assertIn("Minimum resume position", self.settings)
         self.assertIn("Completion threshold", self.settings)
         self.assertIn("Hardware decoding", self.settings)
+        self.assertIn("Tone mapping", self.settings)
+        self.assertIn("Audio channel layout", self.settings)
+        self.assertIn("Subtitle font", self.settings)
         self.assertIn("Downloaded subtitle storage", self.settings)
         self.assertIn("Keyboard shortcuts", self.settings)
 

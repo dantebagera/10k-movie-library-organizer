@@ -1,4 +1,5 @@
 from copy import deepcopy
+import re
 import threading
 
 
@@ -6,6 +7,8 @@ PLAYER_CONFIG_VERSION = 1
 PLAYER_MODES = {"built_in", "os_default"}
 HARDWARE_DECODING_MODES = {"safe_auto", "off", "advanced"}
 HDR_MODES = {"auto", "off", "passthrough"}
+TONE_MAPPING_MODES = {"auto", "bt.2446a", "mobius", "reinhard", "hable"}
+AUDIO_DOWNMIX_MODES = {"auto", "stereo", "5.1"}
 SUBTITLE_STORAGE_MODES = {"cache", "beside_movie"}
 SECRET_FIELDS = {
     "opensubtitles": {"username", "api_key", "password"},
@@ -34,6 +37,18 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
     "chapters": "C",
     "statistics": "I",
     "screenshot": "P",
+    "ab_repeat": "Ctrl+B",
+    "frame_advance": ".",
+    "aspect_ratio": "V",
+    "crop": "Shift+V",
+    "rotate": "Alt+R",
+    "zoom_in": "Ctrl++",
+    "zoom_out": "Ctrl+-",
+    "pan_left": "Alt+Left",
+    "pan_right": "Alt+Right",
+    "pan_up": "Alt+Up",
+    "pan_down": "Alt+Down",
+    "always_on_top": "T",
 }
 
 
@@ -51,11 +66,32 @@ def default_player_config():
         "auto_mark_completed_watched": True,
         "hardware_decoding": "safe_auto",
         "hdr_handling": "auto",
+        "tone_mapping": "auto",
         "audio_output": "auto",
+        "audio_downmix": "auto",
         "audio_passthrough": [],
+        "subtitle_style": {
+            "font": "Segoe UI",
+            "size": 46,
+            "position": 100,
+            "color": "#FFFFFFFF",
+            "border_size": 2.0,
+            "border_color": "#FF000000",
+            "background_color": "#00000000",
+        },
         "subtitle_storage": "cache",
         "auto_subtitle_search": False,
         "keyboard_shortcuts": deepcopy(DEFAULT_KEYBOARD_SHORTCUTS),
+        "window_state": {
+            "width": 1280,
+            "height": 720,
+            "x": 0,
+            "y": 0,
+            "screen": "",
+            "maximized": False,
+            "always_on_top": False,
+            "positioned": False,
+        },
         "providers": {
             "opensubtitles": {
                 "enabled": False,
@@ -174,6 +210,8 @@ class PlayerConfig:
             "mode": PLAYER_MODES,
             "hardware_decoding": HARDWARE_DECODING_MODES,
             "hdr_handling": HDR_MODES,
+            "tone_mapping": TONE_MAPPING_MODES,
+            "audio_downmix": AUDIO_DOWNMIX_MODES,
             "subtitle_storage": SUBTITLE_STORAGE_MODES,
         }
         bool_fields = {
@@ -219,6 +257,35 @@ class PlayerConfig:
             config["audio_passthrough"] = _coerce_string_list(
                 changes["audio_passthrough"], "audio_passthrough"
             )
+        if "subtitle_style" in changes:
+            style_changes = changes["subtitle_style"]
+            if not isinstance(style_changes, dict):
+                raise PlayerConfigError("subtitle_style must be an object")
+            style = deepcopy(config["subtitle_style"])
+            if "font" in style_changes:
+                font = str(style_changes["font"] or "").strip()
+                if not font or len(font) > 128 or any(value in font for value in "\r\n\x00"):
+                    raise PlayerConfigError("subtitle_style font is invalid")
+                style["font"] = font
+            for field, minimum, maximum in (
+                ("size", 12, 120),
+                ("position", 0, 150),
+                ("border_size", 0, 10),
+            ):
+                if field in style_changes:
+                    style[field] = _coerce_number(
+                        style_changes[field],
+                        f"subtitle_style.{field}",
+                        minimum,
+                        maximum,
+                    )
+            for field in ("color", "border_color", "background_color"):
+                if field in style_changes:
+                    color = str(style_changes[field] or "").strip().upper()
+                    if not re.fullmatch(r"#[0-9A-F]{8}", color):
+                        raise PlayerConfigError(f"subtitle_style.{field} is invalid")
+                    style[field] = color
+            config["subtitle_style"] = style
         if "keyboard_shortcuts" in changes:
             shortcuts = changes["keyboard_shortcuts"]
             if not isinstance(shortcuts, dict):
@@ -232,6 +299,35 @@ class PlayerConfig:
                     raise PlayerConfigError("keyboard_shortcuts contains an invalid shortcut")
                 merged[action] = normalized
             config["keyboard_shortcuts"] = merged
+        if "window_state" in changes:
+            state_changes = changes["window_state"]
+            if not isinstance(state_changes, dict):
+                raise PlayerConfigError("window_state must be an object")
+            state = deepcopy(config["window_state"])
+            for field, minimum, maximum in (
+                ("width", 640, 7680),
+                ("height", 360, 4320),
+                ("x", -32768, 32768),
+                ("y", -32768, 32768),
+            ):
+                if field in state_changes:
+                    state[field] = int(_coerce_number(
+                        state_changes[field],
+                        f"window_state.{field}",
+                        minimum,
+                        maximum,
+                    ))
+            if "screen" in state_changes:
+                screen = str(state_changes["screen"] or "").strip()
+                if len(screen) > 256 or any(value in screen for value in "\r\n\x00"):
+                    raise PlayerConfigError("window_state.screen is invalid")
+                state["screen"] = screen
+            for field in ("maximized", "always_on_top", "positioned"):
+                if field in state_changes:
+                    state[field] = _coerce_bool(
+                        state_changes[field], f"window_state.{field}"
+                    )
+            config["window_state"] = state
         if "providers" in changes:
             self._apply_providers(changes["providers"], initial_load)
         config["version"] = PLAYER_CONFIG_VERSION

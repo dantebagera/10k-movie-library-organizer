@@ -16,6 +16,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from services.player_protocol import PLAYER_PROTOCOL_VERSION, validate_message
+from services.player_config import default_player_config
+from services.player_manager import safe_player_preferences
 from services.player_windows_pipe import WindowsNamedPipeServer
 
 
@@ -63,9 +65,14 @@ def click_window_fraction(window, x_fraction, y_fraction):
     x = round(rectangle.left + (rectangle.right - rectangle.left) * x_fraction)
     y = round(rectangle.top + (rectangle.bottom - rectangle.top) * y_fraction)
     user32.SetForegroundWindow(window)
+    time.sleep(0.15)
     user32.SetCursorPos(x, y)
-    user32.mouse_event(0x0002, 0, 0, 0, 0)
-    user32.mouse_event(0x0004, 0, 0, 0, 0)
+    point = wintypes.POINT(x, y)
+    user32.ScreenToClient(window, ctypes.byref(point))
+    packed = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
+    user32.PostMessageW(window, 0x0200, 0, packed)
+    user32.PostMessageW(window, 0x0201, 1, packed)
+    user32.PostMessageW(window, 0x0202, 0, packed)
 
 
 def receive_until(transport, process, events, predicate, timeout):
@@ -110,6 +117,7 @@ def main():
     parser.add_argument("--exercise-subtitle-provider-flow", action="store_true")
     parser.add_argument("--external-subtitle", type=Path)
     parser.add_argument("--exercise-resume", action="store_true")
+    parser.add_argument("--resume-position-ms", type=int, default=4000)
     parser.add_argument("--restore-audio-fingerprint", default="")
     parser.add_argument("--restore-subtitle-fingerprint", default="")
     parser.add_argument("--restore-subtitle-delay-ms", type=int, default=0)
@@ -136,8 +144,19 @@ def main():
             "APPDATA",
         }
     }
+    isolated_user_data = (
+        Path(os.environ.get("TEMP") or os.environ.get("TMP") or ".")
+        / "cp-player-smoke-userdata"
+        / session_id
+    ).resolve()
+    isolated_local = isolated_user_data / "Local"
+    isolated_roaming = isolated_user_data / "Roaming"
+    isolated_local.mkdir(parents=True, exist_ok=True)
+    isolated_roaming.mkdir(parents=True, exist_ok=True)
     environment.update(
         {
+            "LOCALAPPDATA": str(isolated_local),
+            "APPDATA": str(isolated_roaming),
             "CP_PLAYER_PIPE": pipe_name,
             "CP_PLAYER_SESSION_ID": session_id,
             "CP_PLAYER_SESSION_TOKEN": token,
@@ -184,20 +203,28 @@ def main():
                         "movie_key": "fixture:phase2",
                         "poster_reference": "",
                     },
-                    start_position_ms=4000 if args.exercise_resume else 0,
+                    start_position_ms=(
+                        max(0, args.resume_position_ms)
+                        if args.exercise_resume else 0
+                    ),
                     playback_state={
                         "audio_track_fingerprint": args.restore_audio_fingerprint,
                         "subtitle_track_fingerprint": args.restore_subtitle_fingerprint,
                         "subtitle_delay_ms": args.restore_subtitle_delay_ms,
                     },
                     preferences={
+                        **safe_player_preferences(default_player_config()),
                         "preferred_audio_languages": ["eng", "fra"],
                         "preferred_subtitle_languages": ["eng", "spa"],
-                        "hardware_decoding": "auto_safe",
                     },
                 )
             )
             ready = transport.receive(10)
+            if ready.get("type") == "error":
+                raise RuntimeError(
+                    f"Native helper rejected load {ready.get('code')}: "
+                    f"{ready.get('message')}"
+                )
             validate_message(ready, expected_type="ready", session_id=session_id)
             if not ready.get("accepted"):
                 raise RuntimeError("The production player rejected the fixture.")
@@ -253,7 +280,8 @@ def main():
                     process,
                     events,
                     lambda event: event["type"] == "progress"
-                    and event.get("position_ms", 0) >= 3500,
+                    and event.get("position_ms", 0)
+                        >= max(0, args.resume_position_ms - 500),
                     3,
                 )
 
@@ -276,6 +304,24 @@ def main():
                 window = find_visible_window(process.pid)
                 if not window:
                     raise RuntimeError("The production player window was not visible.")
+                if args.screenshot:
+                    from PIL import ImageGrab
+
+                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
+                    pre_controls_path = args.screenshot.with_name(
+                        f"{args.screenshot.stem}-pre-controls{args.screenshot.suffix}"
+                    )
+                    rectangle = wintypes.RECT()
+                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
+                    ImageGrab.grab(
+                        bbox=(
+                            rectangle.left,
+                            rectangle.top,
+                            rectangle.right,
+                            rectangle.bottom,
+                        ),
+                        all_screens=True,
+                    ).save(pre_controls_path)
                 send_window_key(window, 0x20)
                 receive_until(
                     transport,
@@ -549,6 +595,10 @@ def main():
         "audio_tracks": sum(track.get("type") == "audio" for track in tracks),
         "subtitle_tracks": sum(track.get("type") == "sub" for track in tracks),
         "progress_samples": len(progress),
+        "max_duration_ms": max(
+            (int(event.get("duration_ms", 0)) for event in progress),
+            default=0,
+        ),
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
         "controls_exercised": bool(args.exercise_controls),

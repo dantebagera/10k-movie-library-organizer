@@ -231,6 +231,7 @@ _player_manager = PlayerManager(
     ),
     playback_history=_playback_history,
     subtitle_service=_subtitle_service,
+    persist_config=lambda: _save_config(_all_config()),
 )
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1

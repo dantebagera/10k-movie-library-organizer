@@ -32,6 +32,7 @@ def main():
     )
     parser.add_argument("--runtime", required=True, type=Path)
     parser.add_argument("--media", required=True, type=Path)
+    parser.add_argument("--simulate-crash", action="store_true")
     args = parser.parse_args()
 
     runtime = args.runtime.resolve()
@@ -65,12 +66,34 @@ def main():
         ):
             break
         time.sleep(0.1)
-    manager.close_active()
     if (
         status.get("last_event", {}).get("type") != "progress"
         or status["last_event"].get("duration_ms", 0) <= 0
     ):
         raise RuntimeError(f"PlayerManager did not receive progress: {status}")
+    crash_event = {}
+    if args.simulate_crash:
+        with manager._lock:
+            session = manager._active
+        if not session or session.process.poll() is not None:
+            raise RuntimeError("The native helper was not active before crash simulation.")
+        session.process.terminate()
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            crash_status = manager.active_status()
+            if (
+                not crash_status.get("active")
+                and crash_status.get("last_event", {}).get("type") == "closed"
+            ):
+                crash_event = crash_status["last_event"]
+                break
+            time.sleep(0.1)
+        if not crash_event:
+            raise RuntimeError(
+                f"PlayerManager did not close the crashed session: {manager.active_status()}"
+            )
+    else:
+        manager.close_active()
     if os_fallback_calls:
         raise RuntimeError("PlayerManager invoked the OS fallback during a healthy native session.")
 
@@ -81,6 +104,8 @@ def main():
                 "ok": True,
                 "launch": result,
                 "last_event": status["last_event"],
+                "simulated_crash": bool(args.simulate_crash),
+                "crash_event": crash_event,
                 "os_fallback_calls": 0,
             },
             indent=2,

@@ -19,6 +19,7 @@ public:
     decltype(&mpv_terminate_destroy) terminateDestroy = nullptr;
     decltype(&mpv_set_option_string) setOptionString = nullptr;
     decltype(&mpv_command) command = nullptr;
+    decltype(&mpv_command_async) commandAsync = nullptr;
     decltype(&mpv_observe_property) observeProperty = nullptr;
     decltype(&mpv_wait_event) waitEvent = nullptr;
     decltype(&mpv_set_wakeup_callback) setWakeupCallback = nullptr;

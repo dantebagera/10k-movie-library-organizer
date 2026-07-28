@@ -6,7 +6,9 @@ param(
     [string]$MpvRoot,
 
     [Parameter(Mandatory = $true)]
-    [string]$BuildRoot
+    [string]$BuildRoot,
+
+    [string]$StageRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,3 +50,38 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Get-Item -LiteralPath (Join-Path $buildRootPath "cp-player.exe")
+
+if ($StageRoot) {
+    $stageRootPath = [System.IO.Path]::GetFullPath($StageRoot)
+    $deployTool = Join-Path $qtRootPath "bin\windeployqt.exe"
+    if (-not (Test-Path -LiteralPath $deployTool -PathType Leaf)) {
+        throw "Missing required pinned deployment tool: $deployTool"
+    }
+    New-Item -ItemType Directory -Force -Path $stageRootPath | Out-Null
+    Copy-Item -LiteralPath (Join-Path $buildRootPath "cp-player.exe") `
+        -Destination (Join-Path $stageRootPath "cp-player.exe") -Force
+    Copy-Item -LiteralPath (Join-Path $mpvRootPath "libmpv-2.dll") `
+        -Destination (Join-Path $stageRootPath "libmpv-2.dll") -Force
+    & $deployTool --release `
+        --plugindir (Join-Path $stageRootPath "plugins") `
+        --qml-deploy-dir (Join-Path $stageRootPath "qml") `
+        --qmldir (Join-Path $sourceRoot "qml") `
+        (Join-Path $stageRootPath "cp-player.exe")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Qt runtime deployment failed."
+    }
+    $licenseSource = Join-Path $sourceRoot "runtime\licenses"
+    $licenseDestination = Join-Path $stageRootPath "licenses"
+    if (-not (Test-Path -LiteralPath $licenseSource -PathType Container)) {
+        throw "Native player license inventory is missing: $licenseSource"
+    }
+    Copy-Item -LiteralPath $licenseSource -Destination $licenseDestination `
+        -Recurse -Force
+    Copy-Item -LiteralPath (Join-Path $sourceRoot "runtime\qt.conf") `
+        -Destination (Join-Path $stageRootPath "qt.conf") -Force
+    $assetDestination = Join-Path $stageRootPath "assets"
+    New-Item -ItemType Directory -Force -Path $assetDestination | Out-Null
+    Copy-Item -LiteralPath (Join-Path $sourceRoot "..\..\design\player-theme.json") `
+        -Destination (Join-Path $assetDestination "player-theme.json") -Force
+    Get-Item -LiteralPath $stageRootPath
+}

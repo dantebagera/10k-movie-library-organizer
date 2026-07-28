@@ -102,6 +102,50 @@ class PlayerConfigTests(unittest.TestCase):
         with self.assertRaises(PlayerConfigError):
             config.update({"keyboard_shortcuts": {"launch_iptv": "T"}})
 
+    def test_subtitle_style_is_bounded_and_preserved_as_one_config_owner(self):
+        config = PlayerConfig()
+        payload = config.update({
+            "subtitle_style": {
+                "font": "Noto Sans Arabic",
+                "size": 54,
+                "position": 92,
+                "color": "#FFEEDDCC",
+                "border_size": 3.5,
+                "border_color": "#FF000000",
+                "background_color": "#66000000",
+            },
+        })
+        self.assertEqual(payload["subtitle_style"]["font"], "Noto Sans Arabic")
+        self.assertEqual(payload["subtitle_style"]["size"], 54)
+        with self.assertRaises(PlayerConfigError):
+            config.update({"subtitle_style": {"color": "red"}})
+
+    def test_premium_audio_hdr_and_window_state_are_bounded(self):
+        config = PlayerConfig()
+        payload = config.update({
+            "tone_mapping": "mobius",
+            "audio_downmix": "stereo",
+            "window_state": {
+                "x": -1600,
+                "y": 80,
+                "width": 1100,
+                "height": 700,
+                "screen": "DISPLAY2",
+                "maximized": False,
+                "always_on_top": True,
+                "positioned": True,
+            },
+        })
+
+        self.assertEqual(payload["tone_mapping"], "mobius")
+        self.assertEqual(payload["audio_downmix"], "stereo")
+        self.assertEqual(payload["window_state"]["x"], -1600)
+        self.assertTrue(payload["window_state"]["always_on_top"])
+        with self.assertRaises(PlayerConfigError):
+            config.update({"window_state": {"width": 100}})
+        with self.assertRaises(PlayerConfigError):
+            config.update({"tone_mapping": "unbounded-filter"})
+
     def test_reset_restores_os_default_and_clears_provider_secrets(self):
         config = PlayerConfig()
         config.update({

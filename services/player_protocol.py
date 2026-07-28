@@ -17,6 +17,7 @@ MESSAGE_TYPES = {
     "progress",
     "resume.choice",
     "playback.settings",
+    "window.state",
     "tracks.changed",
     "subtitle.search",
     "subtitle.results",
@@ -234,6 +235,31 @@ def validate_message(message, *, expected_type=None, session_id=None, token=None
             minimum=-60 * 60 * 1000,
             maximum=60 * 60 * 1000,
         )
+    elif message_type == "window.state":
+        state = message.get("window_state")
+        if not isinstance(state, dict):
+            raise PlayerProtocolError("Player window state must be an object")
+        for field, minimum, maximum in (
+            ("width", 640, 7680),
+            ("height", 360, 4320),
+            ("x", -32768, 32768),
+            ("y", -32768, 32768),
+        ):
+            _bounded_number(
+                state.get(field),
+                f"window_state.{field}",
+                minimum=minimum,
+                maximum=maximum,
+            )
+        _bounded_string(
+            state.get("screen", ""),
+            "window_state.screen",
+            maximum=256,
+            allow_empty=True,
+        )
+        for field in ("maximized", "always_on_top", "positioned"):
+            if not isinstance(state.get(field), bool):
+                raise PlayerProtocolError(f"window_state.{field} must be true or false")
     elif message_type == "error":
         _bounded_string(message.get("code", ""), "error.code", maximum=128)
         _bounded_string(message.get("message", ""), "error.message", maximum=1024)

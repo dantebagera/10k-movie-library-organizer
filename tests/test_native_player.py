@@ -49,6 +49,10 @@ class NativePlayerSourceTests(unittest.TestCase):
             'shortcuts.audio_delay_down || "Ctrl+Z"',
             'shortcuts.audio_delay_up || "Ctrl+X"',
             'shortcuts.chapters || "C"',
+            'shortcuts.statistics || "I"',
+            'shortcuts.screenshot || "P"',
+            'shortcuts.crop || "Shift+V"',
+            'shortcuts.always_on_top || "T"',
         ):
             self.assertIn(shortcut, qml)
         self.assertIn("Generated from design/player-theme.json", generated_theme)
@@ -73,6 +77,28 @@ class NativePlayerSourceTests(unittest.TestCase):
         ).lower()
         for forbidden in ("opensubtitles", "subdl", "api_key", "password"):
             self.assertNotIn(forbidden, native_source)
+
+    def test_premium_controls_stay_in_the_libmpv_owner(self):
+        qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
+        mpv_item = (PLAYER_ROOT / "src" / "MpvItem.cpp").read_text(encoding="utf-8")
+        bridge = (PLAYER_ROOT / "src" / "PlayerBridge.cpp").read_text(encoding="utf-8")
+
+        for command in (
+            "screenshot-to-file",
+            "ab-loop-a",
+            "frame-step",
+            "video-aspect-override",
+            "video-crop",
+            "video-pan-x",
+            "video-rotate",
+            "tone-mapping",
+            "audio-channels",
+        ):
+            self.assertIn(command, mpv_item)
+        self.assertIn("seekThumbnail(hoverPosition)", qml)
+        self.assertIn("model: mpv.chapters", qml)
+        self.assertIn("reportWindowState", qml)
+        self.assertIn('QStringLiteral("window.state")', bridge)
 
 
 if __name__ == "__main__":

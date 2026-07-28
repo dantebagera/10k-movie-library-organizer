@@ -22,6 +22,8 @@ ApplicationWindow {
     property bool subtitlePanelOpen: false
     property bool chapterPanelOpen: false
     property bool subtitleSearchOpen: false
+    property bool statisticsOpen: false
+    property var playbackStatistics: ({})
     property string toastText: ""
     property bool seeking: timeline.pressed
 
@@ -55,11 +57,13 @@ ApplicationWindow {
     }
 
     function closeOverlays() {
-        if (audioPanelOpen || subtitlePanelOpen || chapterPanelOpen || subtitleSearchOpen) {
+        if (audioPanelOpen || subtitlePanelOpen || chapterPanelOpen || subtitleSearchOpen
+                || statisticsOpen) {
             audioPanelOpen = false
             subtitlePanelOpen = false
             chapterPanelOpen = false
             subtitleSearchOpen = false
+            statisticsOpen = false
             showControls()
             return true
         }
@@ -69,6 +73,29 @@ ApplicationWindow {
     function toggleFullscreen() {
         visibility = visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
         showControls()
+    }
+
+    function setAlwaysOnTop(enabled) {
+        const current = Boolean(root.flags & Qt.WindowStaysOnTopHint)
+        if (current === enabled)
+            return
+        if (enabled)
+            root.flags = root.flags | Qt.WindowStaysOnTopHint
+        else
+            root.flags = root.flags & ~Qt.WindowStaysOnTopHint
+    }
+
+    function restoreWindowState() {
+        const state = playerBridge.windowState
+        if (!state || !state.width || !state.positioned)
+            return
+        root.width = state.width
+        root.height = state.height
+        root.x = state.x
+        root.y = state.y
+        root.setAlwaysOnTop(Boolean(state.always_on_top))
+        if (state.maximized)
+            root.visibility = Window.Maximized
     }
 
     function formatTime(seconds) {
@@ -93,7 +120,17 @@ ApplicationWindow {
     }
 
     onClosing: function(close) {
+        playerBridge.reportWindowState(
+            root.x, root.y, root.width, root.height, Screen.name,
+            root.visibility === Window.Maximized,
+            Boolean(root.flags & Qt.WindowStaysOnTopHint)
+        )
         playerBridge.requestClose()
+    }
+
+    Connections {
+        target: playerBridge
+        function onPreferencesChanged() { root.restoreWindowState() }
     }
 
     Timer {
@@ -104,6 +141,7 @@ ApplicationWindow {
         onTriggered: {
             if (!mpv.paused && !root.seeking && !audioPanelOpen && !subtitlePanelOpen
                     && !chapterPanelOpen && !subtitleSearchOpen
+                    && !statisticsOpen
                     && !playerBridge.resumeDecisionPending)
                 controlsVisible = false
         }
@@ -113,6 +151,13 @@ ApplicationWindow {
         id: toastTimer
         interval: 1800
         onTriggered: toastText = ""
+    }
+    Timer {
+        interval: 1000
+        running: statisticsOpen
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: playbackStatistics = mpv.playbackStatistics()
     }
 
     Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.play_pause || "Space"; onActivated: { mpv.togglePause(); root.showControls() } }
@@ -188,6 +233,46 @@ ApplicationWindow {
     Shortcut { sequence: playerBridge.shortcuts.subtitle_delay_up || "X"; onActivated: { mpv.adjustSubtitleDelay(0.1); toastText = "Subtitles +0.1 s"; toastTimer.restart(); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.audio_delay_down || "Ctrl+Z"; onActivated: { mpv.adjustAudioDelay(-0.1); toastText = "Audio −0.1 s"; toastTimer.restart(); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.audio_delay_up || "Ctrl+X"; onActivated: { mpv.adjustAudioDelay(0.1); toastText = "Audio +0.1 s"; toastTimer.restart(); root.showControls() } }
+    Shortcut {
+        sequence: playerBridge.shortcuts.statistics || "I"
+        onActivated: {
+            statisticsOpen = !statisticsOpen
+            audioPanelOpen = false
+            subtitlePanelOpen = false
+            chapterPanelOpen = false
+            subtitleSearchOpen = false
+            playbackStatistics = mpv.playbackStatistics()
+            root.showControls()
+        }
+    }
+    Shortcut {
+        sequence: playerBridge.shortcuts.screenshot || "P"
+        onActivated: {
+            toastText = mpv.captureScreenshot()
+            toastTimer.restart()
+            root.showControls()
+        }
+    }
+    Shortcut { sequence: playerBridge.shortcuts.ab_repeat || "Ctrl+B"; onActivated: { toastText = mpv.cycleABRepeat(); toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.frame_advance || "."; onActivated: { mpv.frameAdvance(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.aspect_ratio || "V"; onActivated: { mpv.cycleAspectRatio(); toastText = "Aspect ratio changed"; toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.crop || "Shift+V"; onActivated: { mpv.cycleCrop(); toastText = "Video crop changed"; toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.rotate || "Alt+R"; onActivated: { mpv.rotateVideo(); toastText = "Video rotated"; toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.zoom_in || "Ctrl++"; onActivated: { mpv.adjustZoom(0.1); toastText = "Zoom in"; toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.zoom_out || "Ctrl+-"; onActivated: { mpv.adjustZoom(-0.1); toastText = "Zoom out"; toastTimer.restart(); root.showControls() } }
+    Shortcut { sequence: playerBridge.shortcuts.pan_left || "Alt+Left"; onActivated: mpv.adjustPan(-0.05, 0) }
+    Shortcut { sequence: playerBridge.shortcuts.pan_right || "Alt+Right"; onActivated: mpv.adjustPan(0.05, 0) }
+    Shortcut { sequence: playerBridge.shortcuts.pan_up || "Alt+Up"; onActivated: mpv.adjustPan(0, -0.05) }
+    Shortcut { sequence: playerBridge.shortcuts.pan_down || "Alt+Down"; onActivated: mpv.adjustPan(0, 0.05) }
+    Shortcut {
+        sequence: playerBridge.shortcuts.always_on_top || "T"
+        onActivated: {
+            root.setAlwaysOnTop(!(root.flags & Qt.WindowStaysOnTopHint))
+            toastText = (root.flags & Qt.WindowStaysOnTopHint)
+                        ? "Always on top" : "Normal window"
+            toastTimer.restart()
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -334,8 +419,61 @@ ApplicationWindow {
                 from: 0
                 to: Math.max(1, mpv.duration)
                 value: pressed ? value : mpv.position
+                property real hoverPosition: 0
+                property string hoverThumbnail: ""
+                function updateHoverPreview() {
+                    const localX = Math.max(0, Math.min(width, timelineHover.point.position.x))
+                    hoverPosition = to * localX / Math.max(1, width)
+                    hoverThumbnail = mpv.seekThumbnail(hoverPosition)
+                }
                 onMoved: mpv.seekAbsolute(value)
                 onPressedChanged: root.showControls()
+                HoverHandler { id: timelineHover }
+                Timer {
+                    interval: 90
+                    running: timelineHover.hovered
+                    repeat: true
+                    triggeredOnStart: true
+                    onTriggered: timeline.updateHoverPreview()
+                }
+                Connections {
+                    target: mpv
+                    function onSeekThumbnailsChanged() {
+                        if (timelineHover.hovered)
+                            timeline.updateHoverPreview()
+                    }
+                }
+                Rectangle {
+                    z: 8
+                    visible: timelineHover.hovered
+                    width: 220
+                    height: timeline.hoverThumbnail.length > 0 ? 154 : 42
+                    x: Math.max(0, Math.min(timeline.width - width,
+                        timelineHover.point.position.x - width / 2))
+                    y: -height - 8
+                    radius: PlayerTheme.radiusMedium
+                    color: PlayerTheme.panelBlack
+                    border.color: PlayerTheme.borderStrong
+                    Image {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 6
+                        height: 118
+                        visible: timeline.hoverThumbnail.length > 0
+                        source: timeline.hoverThumbnail
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                    }
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 7
+                        text: root.formatTime(timeline.hoverPosition)
+                        color: PlayerTheme.textSoft
+                        font.pixelSize: 12
+                    }
+                }
                 background: Rectangle {
                     x: parent.leftPadding
                     y: parent.topPadding + parent.availableHeight / 2 - height / 2
@@ -348,6 +486,20 @@ ApplicationWindow {
                         height: parent.height
                         radius: 2
                         color: PlayerTheme.projectorGold
+                    }
+                    Repeater {
+                        model: mpv.chapters
+                        delegate: Rectangle {
+                            required property var modelData
+                            x: Math.max(0, Math.min(parent.width - 2,
+                                parent.width * Number(modelData.time || 0)
+                                / Math.max(1, mpv.duration)))
+                            width: 2
+                            height: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: PlayerTheme.textSoft
+                            opacity: 0.8
+                        }
                     }
                 }
                 handle: Rectangle {
@@ -724,6 +876,53 @@ ApplicationWindow {
                     onClicked: playerBridge.requestSubtitleSearch()
                 }
                 CpButton { text: "Close"; onClicked: root.closeOverlays() }
+            }
+        }
+    }
+
+    Rectangle {
+        width: 350
+        height: 250
+        anchors.right: parent.right
+        anchors.top: topBar.bottom
+        anchors.rightMargin: 28
+        visible: statisticsOpen
+        color: PlayerTheme.panelBlack
+        radius: PlayerTheme.radiusLarge
+        border.color: PlayerTheme.projectorGold
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 18
+            spacing: 8
+            Text {
+                text: "Playback statistics"
+                color: PlayerTheme.textStrong
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+            }
+            Repeater {
+                model: [
+                    ["Video", playbackStatistics.video_codec || "Unknown"],
+                    ["Resolution", playbackStatistics.resolution || "Unknown"],
+                    ["Frame rate", playbackStatistics.frame_rate || "Unknown"],
+                    ["Hardware decoder", playbackStatistics.hardware_decoder || "Software"],
+                    ["Audio", playbackStatistics.audio_codec || "Unknown"],
+                    ["Display", playbackStatistics.display_fps
+                                ? playbackStatistics.display_fps + " Hz" : "Unknown"]
+                ]
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Text { text: modelData[0]; color: PlayerTheme.textMuted; Layout.preferredWidth: 125 }
+                    Text { text: modelData[1]; color: PlayerTheme.textSoft; Layout.fillWidth: true; elide: Text.ElideRight }
+                }
+            }
+            Item { Layout.fillHeight: true }
+            Text {
+                text: "I closes statistics"
+                color: PlayerTheme.textFaint
+                font.pixelSize: 11
             }
         }
     }

@@ -24,6 +24,28 @@ EXCLUDED_QBT_NAMES = {
     "incomplete",
     "downloads",
 }
+PORTABLE_ROOT_FILES = {
+    "app.py",
+    "CHANGELOG.md",
+    "index.html",
+    "package-lock.json",
+    "package.json",
+    "README.md",
+    "requirements.txt",
+    "run.bat",
+    "vite.config.js",
+}
+PORTABLE_ROOT_DIRECTORIES = {
+    "design",
+    "dist",
+    "services",
+    "src",
+    "static",
+    "tools",
+}
+PORTABLE_NATIVE_DIRECTORIES = {
+    "player",
+}
 
 
 def read_project_version(project_root=PROJECT_ROOT):
@@ -186,29 +208,28 @@ def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
-    ignored_roots = {
-        ".git",
-        ".venv",
-        "node_modules",
-        "data",
-        "cache",
-        "release",
-        "runtime",
-        "winapp",
-        "_cf_profile",
-        "test-results",
-        "__pycache__",
-        "config.json",
-        "res_cache.json",
-    }
     for item in project_root.iterdir():
-        if item.name in ignored_roots or item.suffix.lower() == ".log":
+        if item.is_file() and item.name not in PORTABLE_ROOT_FILES:
+            continue
+        if item.is_dir() and item.name not in PORTABLE_ROOT_DIRECTORIES:
             continue
         target = staging / item.name
         if item.is_dir():
             shutil.copytree(item, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         else:
             shutil.copy2(item, target)
+    native_root = project_root / "native"
+    if native_root.is_dir():
+        native_destination = staging / "native"
+        native_destination.mkdir(parents=True, exist_ok=True)
+        for directory_name in PORTABLE_NATIVE_DIRECTORIES:
+            source = native_root / directory_name
+            if source.is_dir():
+                shutil.copytree(
+                    source,
+                    native_destination / directory_name,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pdb"),
+                )
     copy_qbt_runtime(
         qbt_source,
         staging / "runtime" / "qbittorrent" / "versions" / QBT_VERSION,

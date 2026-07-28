@@ -422,6 +422,40 @@ class PlayerManagerTests(unittest.TestCase):
             ["subtitle.results", "subtitle.loaded"],
         )
 
+    def test_window_state_is_persisted_by_the_authoritative_player_config(self):
+        config = PlayerConfig()
+        persisted = []
+        manager = PlayerManager(
+            config,
+            FakeRuntime(error=AssertionError("not used")),
+            lambda _path_key: {},
+            persist_config=lambda: persisted.append(config.storage_payload()),
+        )
+        session = PlayerSession(
+            "window-session",
+            FakeProcess(),
+            EventTransport([]),
+            manager._handle_event,
+        )
+
+        manager._handle_event(session, {
+            "type": "window.state",
+            "sequence": 4,
+            "window_state": {
+                "x": -1280,
+                "y": 40,
+                "width": 1000,
+                "height": 640,
+                "screen": "DISPLAY2",
+                "maximized": False,
+                "always_on_top": True,
+                "positioned": True,
+            },
+        })
+
+        self.assertEqual(config.storage_payload()["window_state"]["x"], -1280)
+        self.assertTrue(persisted[-1]["window_state"]["always_on_top"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -129,6 +129,29 @@ class PlayerProtocolTests(unittest.TestCase):
                 message("playback.settings", subtitle_delay_ms=4_000_000)
             )
 
+    def test_window_state_supports_bounded_secondary_monitor_coordinates(self):
+        window_state = {
+            "x": -1920,
+            "y": 0,
+            "width": 1280,
+            "height": 720,
+            "screen": "DISPLAY2",
+            "maximized": False,
+            "always_on_top": True,
+            "positioned": True,
+        }
+        self.assertEqual(
+            validate_message(
+                message("window.state", window_state=window_state)
+            )["window_state"]["x"],
+            -1920,
+        )
+        with self.assertRaises(PlayerProtocolError):
+            validate_message(message(
+                "window.state",
+                window_state={**window_state, "width": 120},
+            ))
+
     def test_subtitle_results_and_download_commands_are_bounded(self):
         result = {
             "result_id": "opaque-result",

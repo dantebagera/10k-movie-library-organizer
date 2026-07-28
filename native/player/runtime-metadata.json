@@ -62,6 +62,24 @@
       "spdx": "LGPL-3.0-or-later",
       "path": "licenses/FFmpeg-LGPL-3.0.txt",
       "source": "https://ffmpeg.org/legal.html"
+    },
+    {
+      "component": "Cinema Paradiso Player relinking instructions",
+      "spdx": "LicenseRef-Relinking-Instructions",
+      "path": "licenses/RELINKING.md",
+      "source": "native/player/runtime/licenses/RELINKING.md"
+    },
+    {
+      "component": "Cinema Paradiso Player third-party notices",
+      "spdx": "LicenseRef-Third-Party-Notices",
+      "path": "licenses/THIRD-PARTY-NOTICES.md",
+      "source": "native/player/runtime/licenses/THIRD-PARTY-NOTICES.md"
+    },
+    {
+      "component": "Cinema Paradiso Player source information",
+      "spdx": "LicenseRef-Source-Information",
+      "path": "licenses/SOURCE-OFFER.md",
+      "source": "native/player/runtime/licenses/SOURCE-OFFER.md"
     }
   ],
   "pinned_sha256": {

@@ -99,6 +99,26 @@ class PlayerRuntimeAssemblyTests(unittest.TestCase):
                 [],
             )
 
+    def test_production_metadata_license_inventory_is_complete(self):
+        project = Path(__file__).resolve().parents[1]
+        metadata = json.loads(
+            (project / "native" / "player" / "runtime-metadata.json")
+            .read_text(encoding="utf-8")
+        )
+        license_root = project / "native" / "player" / "runtime"
+        paths = {entry["path"] for entry in metadata["licenses"]}
+
+        for required in (
+            "licenses/Qt-LGPL-3.0.txt",
+            "licenses/mpv-LGPL-2.1.txt",
+            "licenses/FFmpeg-LGPL-3.0.txt",
+            "licenses/RELINKING.md",
+            "licenses/THIRD-PARTY-NOTICES.md",
+            "licenses/SOURCE-OFFER.md",
+        ):
+            self.assertIn(required, paths)
+            self.assertTrue((license_root / required).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

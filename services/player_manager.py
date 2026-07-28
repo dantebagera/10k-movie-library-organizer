@@ -34,9 +34,13 @@ def safe_player_preferences(payload):
         "prefer_hearing_impaired_subtitles",
         "hardware_decoding",
         "hdr_handling",
+        "tone_mapping",
         "audio_output",
+        "audio_downmix",
         "audio_passthrough",
+        "subtitle_style",
         "keyboard_shortcuts",
+        "window_state",
     }
     return {
         key: value
@@ -168,6 +172,7 @@ class PlayerManager:
         process_launcher=None,
         playback_history=None,
         subtitle_service=None,
+        persist_config=None,
         startup_timeout=PLAYER_STARTUP_TIMEOUT_SECONDS,
     ):
         self.player_config = player_config
@@ -178,6 +183,7 @@ class PlayerManager:
         self.process_launcher = process_launcher or launch_player_process
         self.playback_history = playback_history
         self.subtitle_service = subtitle_service
+        self.persist_config = persist_config
         self.startup_timeout = float(startup_timeout)
         self._lock = threading.RLock()
         self._active = None
@@ -353,6 +359,13 @@ class PlayerManager:
                 name=f"cp-subtitle-download-{session.session_id[:8]}",
                 daemon=True,
             ).start()
+        elif message["type"] == "window.state":
+            try:
+                self.player_config.update({"window_state": message["window_state"]})
+                if self.persist_config:
+                    self.persist_config()
+            except (OSError, RuntimeError, ValueError):
+                pass
         if self.playback_history:
             try:
                 self.playback_history.handle_event(session, message)

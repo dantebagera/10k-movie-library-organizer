@@ -97,8 +97,19 @@ const emptySettingsState = {
     auto_mark_completed_watched: true,
     hardware_decoding: 'safe_auto',
     hdr_handling: 'auto',
+    tone_mapping: 'auto',
     audio_output: 'auto',
+    audio_downmix: 'auto',
     audio_passthrough: [],
+    subtitle_style: {
+      font: 'Segoe UI',
+      size: 46,
+      position: 100,
+      color: '#FFFFFFFF',
+      border_size: 2,
+      border_color: '#FF000000',
+      background_color: '#00000000'
+    },
     subtitle_storage: 'cache',
     auto_subtitle_search: false,
     keyboard_shortcuts: {},
@@ -143,6 +154,10 @@ function playerForm(payload = {}) {
     preferred_audio_languages: payload.preferred_audio_languages || emptySettingsState.player.preferred_audio_languages,
     preferred_subtitle_languages: payload.preferred_subtitle_languages || emptySettingsState.player.preferred_subtitle_languages,
     audio_passthrough: payload.audio_passthrough || [],
+    subtitle_style: {
+      ...emptySettingsState.player.subtitle_style,
+      ...(payload.subtitle_style || {})
+    },
     keyboard_shortcuts: payload.keyboard_shortcuts || {},
     providers: {
       opensubtitles: {
@@ -756,8 +771,11 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           auto_mark_completed_watched: Boolean(player.auto_mark_completed_watched),
           hardware_decoding: player.hardware_decoding,
           hdr_handling: player.hdr_handling,
+          tone_mapping: player.tone_mapping,
           audio_output: player.audio_output,
+          audio_downmix: player.audio_downmix,
           audio_passthrough: player.audio_passthrough,
+          subtitle_style: player.subtitle_style,
           subtitle_storage: player.subtitle_storage,
           auto_subtitle_search: Boolean(player.auto_subtitle_search),
           keyboard_shortcuts: player.keyboard_shortcuts,
@@ -1180,6 +1198,16 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                   <option value="passthrough">Display passthrough</option>
                 </select>
               </label>
+              <label className="dialog-field">
+                <span>Tone mapping</span>
+                <select value={forms.player.tone_mapping} onChange={(event) => updateField('player', 'tone_mapping', event.target.value)}>
+                  <option value="auto">Automatic</option>
+                  <option value="bt.2446a">BT.2446A</option>
+                  <option value="mobius">Mobius</option>
+                  <option value="reinhard">Reinhard</option>
+                  <option value="hable">Hable</option>
+                </select>
+              </label>
             </div>
             <label className="settings-checkbox-field">
               <input type="checkbox" checked={forms.player.prefer_forced_subtitles} onChange={(event) => updateField('player', 'prefer_forced_subtitles', event.target.checked)} />
@@ -1198,6 +1226,14 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
               <input value={forms.player.audio_output} onChange={(event) => updateField('player', 'audio_output', event.target.value)} placeholder="auto" />
             </label>
             <label className="dialog-field">
+              <span>Audio channel layout</span>
+              <select value={forms.player.audio_downmix} onChange={(event) => updateField('player', 'audio_downmix', event.target.value)}>
+                <option value="auto">Automatic</option>
+                <option value="stereo">Downmix to stereo</option>
+                <option value="5.1">Downmix to 5.1</option>
+              </select>
+            </label>
+            <label className="dialog-field">
               <span>Audio passthrough codecs</span>
               <input
                 value={(forms.player.audio_passthrough || []).join(', ')}
@@ -1205,6 +1241,75 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                 placeholder="ac3, eac3, dts, truehd"
               />
             </label>
+            <label className="dialog-field">
+              <span>Subtitle font</span>
+              <input
+                value={forms.player.subtitle_style.font}
+                onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, font: event.target.value })}
+                placeholder="Segoe UI"
+              />
+            </label>
+            <div className="settings-two-column">
+              <label className="dialog-field">
+                <span>Subtitle size</span>
+                <input
+                  type="number"
+                  min="12"
+                  max="120"
+                  value={forms.player.subtitle_style.size}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, size: Number(event.target.value) })}
+                />
+              </label>
+              <label className="dialog-field">
+                <span>Subtitle vertical position</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="150"
+                  value={forms.player.subtitle_style.position}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, position: Number(event.target.value) })}
+                />
+              </label>
+            </div>
+            <div className="settings-two-column">
+              <label className="dialog-field">
+                <span>Subtitle text color (AARRGGBB)</span>
+                <input
+                  value={forms.player.subtitle_style.color}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, color: event.target.value })}
+                  placeholder="#FFFFFFFF"
+                />
+              </label>
+              <label className="dialog-field">
+                <span>Subtitle border color (AARRGGBB)</span>
+                <input
+                  value={forms.player.subtitle_style.border_color}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, border_color: event.target.value })}
+                  placeholder="#FF000000"
+                />
+              </label>
+            </div>
+            <div className="settings-two-column">
+              <label className="dialog-field">
+                <span>Subtitle border size</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.5"
+                  value={forms.player.subtitle_style.border_size}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, border_size: Number(event.target.value) })}
+                />
+              </label>
+              <label className="dialog-field">
+                <span>Subtitle background (AARRGGBB)</span>
+                <input
+                  value={forms.player.subtitle_style.background_color}
+                  onChange={(event) => updateField('player', 'subtitle_style', { ...forms.player.subtitle_style, background_color: event.target.value })}
+                  placeholder="#00000000"
+                />
+              </label>
+            </div>
             <label className="dialog-field">
               <span>Downloaded subtitle storage</span>
               <select value={forms.player.subtitle_storage} onChange={(event) => updateField('player', 'subtitle_storage', event.target.value)}>

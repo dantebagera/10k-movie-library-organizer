@@ -1,6 +1,9 @@
 #include "MpvItem.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
@@ -8,7 +11,9 @@
 #include <QOpenGLFramebufferObject>
 #include <QQuickOpenGLUtils>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 
 #include <algorithm>
 #include <vector>
@@ -196,6 +201,24 @@ bool MpvItem::openTrustedLocalPath(const QString &path, const QVariantMap &prefe
     }
 
     applyPreferences(preferences);
+    const QByteArray thumbnailIdentity =
+        QFile::encodeName(media.absoluteFilePath())
+        + QByteArray::number(media.size())
+        + QByteArray::number(media.lastModified().toMSecsSinceEpoch());
+    const QString cacheRoot =
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    m_thumbnailRoot = QDir(cacheRoot).filePath(
+        QStringLiteral("seek-thumbnails/%1").arg(
+            QString::fromLatin1(
+                QCryptographicHash::hash(thumbnailIdentity, QCryptographicHash::Sha256)
+                    .toHex()
+            )
+        )
+    );
+    QDir().mkpath(m_thumbnailRoot);
+    m_thumbnailBuckets.clear();
+    m_pendingThumbnailBuckets.clear();
+    m_lastThumbnailBucket = -1;
     m_firstFrameNoted = false;
     ++m_loadGeneration;
     m_loadTimer.restart();
@@ -316,6 +339,134 @@ bool MpvItem::loadExternalSubtitle(const QString &path)
     return accepted;
 }
 
+QString MpvItem::seekThumbnail(double seconds) const
+{
+    if (!std::isfinite(seconds) || seconds < 0.0 || m_thumbnailRoot.isEmpty()) {
+        return {};
+    }
+    const int bucket = std::max(0, static_cast<int>(seconds / 30.0) * 30);
+    const QString path =
+        QDir(m_thumbnailRoot).filePath(QStringLiteral("%1.jpg").arg(bucket));
+    if (!m_thumbnailBuckets.contains(bucket) && !QFileInfo::exists(path)) {
+        return {};
+    }
+    return QUrl::fromLocalFile(path).toString();
+}
+
+QVariantMap MpvItem::playbackStatistics() const
+{
+    QVariantMap stats;
+    stats.insert(QStringLiteral("video_codec"),
+                 propertyString(QByteArrayLiteral("video-codec")));
+    stats.insert(QStringLiteral("resolution"),
+                 QStringLiteral("%1×%2")
+                     .arg(propertyString(QByteArrayLiteral("video-params/w")),
+                          propertyString(QByteArrayLiteral("video-params/h"))));
+    stats.insert(QStringLiteral("frame_rate"),
+                 propertyString(QByteArrayLiteral("estimated-vf-fps")));
+    stats.insert(QStringLiteral("hardware_decoder"),
+                 propertyString(QByteArrayLiteral("hwdec-current")));
+    stats.insert(QStringLiteral("audio_codec"),
+                 propertyString(QByteArrayLiteral("audio-codec-name")));
+    stats.insert(QStringLiteral("display_fps"),
+                 propertyString(QByteArrayLiteral("display-fps")));
+    return stats;
+}
+
+QString MpvItem::captureScreenshot()
+{
+    const QString pictures =
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    if (pictures.isEmpty()) {
+        return QStringLiteral("Screenshot folder is unavailable");
+    }
+    QDir root(pictures);
+    if (!root.mkpath(QStringLiteral("Cinema Paradiso Screenshots"))) {
+        return QStringLiteral("Screenshot folder is unavailable");
+    }
+    const QString path = root.filePath(
+        QStringLiteral("Cinema Paradiso Screenshots/CP-%1.png")
+            .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")))
+    );
+    if (!sendCommandAsync({
+            QByteArrayLiteral("screenshot-to-file"),
+            QFile::encodeName(path),
+            QByteArrayLiteral("video"),
+        })) {
+        return QStringLiteral("Screenshot failed");
+    }
+    return QStringLiteral("Screenshot saved");
+}
+
+QString MpvItem::cycleABRepeat()
+{
+    if (m_abRepeatStage == 0) {
+        sendCommand({
+            QByteArrayLiteral("set"),
+            QByteArrayLiteral("ab-loop-a"),
+            QByteArray::number(std::max(0.0, m_position), 'f', 3),
+        });
+        m_abRepeatStage = 1;
+        return QStringLiteral("A point set");
+    }
+    if (m_abRepeatStage == 1) {
+        sendCommand({
+            QByteArrayLiteral("set"),
+            QByteArrayLiteral("ab-loop-b"),
+            QByteArray::number(std::max(0.0, m_position), 'f', 3),
+        });
+        m_abRepeatStage = 2;
+        return QStringLiteral("A–B repeat active");
+    }
+    sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("ab-loop-a"), QByteArrayLiteral("no")});
+    sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("ab-loop-b"), QByteArrayLiteral("no")});
+    m_abRepeatStage = 0;
+    return QStringLiteral("A–B repeat cleared");
+}
+
+void MpvItem::frameAdvance()
+{
+    sendCommand({QByteArrayLiteral("frame-step")});
+}
+
+void MpvItem::cycleAspectRatio()
+{
+    sendCommand({QByteArrayLiteral("cycle-values"), QByteArrayLiteral("video-aspect-override"),
+                 QByteArrayLiteral("-1"), QByteArrayLiteral("16:9"), QByteArrayLiteral("4:3")});
+}
+
+void MpvItem::cycleCrop()
+{
+    sendCommand({QByteArrayLiteral("cycle-values"), QByteArrayLiteral("video-crop"),
+                 QByteArrayLiteral("no"), QByteArrayLiteral("16:9"),
+                 QByteArrayLiteral("4:3")});
+}
+
+void MpvItem::rotateVideo()
+{
+    m_rotation = (m_rotation + 90) % 360;
+    sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("video-rotate"),
+                 QByteArray::number(m_rotation)});
+}
+
+void MpvItem::adjustZoom(double amount)
+{
+    sendCommand({QByteArrayLiteral("add"), QByteArrayLiteral("video-zoom"),
+                 QByteArray::number(amount, 'f', 2)});
+}
+
+void MpvItem::adjustPan(double horizontal, double vertical)
+{
+    if (horizontal != 0.0) {
+        sendCommand({QByteArrayLiteral("add"), QByteArrayLiteral("video-pan-x"),
+                     QByteArray::number(horizontal, 'f', 2)});
+    }
+    if (vertical != 0.0) {
+        sendCommand({QByteArrayLiteral("add"), QByteArrayLiteral("video-pan-y"),
+                     QByteArray::number(vertical, 'f', 2)});
+    }
+}
+
 void MpvItem::adjustSubtitleDelay(double seconds)
 {
     sendCommand({
@@ -383,6 +534,15 @@ void MpvItem::processEvents()
             if (name == QByteArrayLiteral("time-pos") && property->format == MPV_FORMAT_DOUBLE) {
                 m_position = *static_cast<double *>(property->data);
                 emit positionChanged();
+                const int bucket =
+                    std::max(0, static_cast<int>(m_position / 30.0) * 30);
+                if (bucket != m_lastThumbnailBucket
+                    && !m_thumbnailBuckets.contains(bucket)
+                    && !m_pendingThumbnailBuckets.contains(bucket)) {
+                    m_lastThumbnailBucket = bucket;
+                    m_pendingThumbnailBuckets.insert(bucket);
+                    QTimer::singleShot(250, this, &MpvItem::captureCurrentSeekThumbnail);
+                }
             } else if (name == QByteArrayLiteral("duration")
                        && property->format == MPV_FORMAT_DOUBLE) {
                 m_duration = *static_cast<double *>(property->data);
@@ -425,6 +585,37 @@ void MpvItem::processEvents()
     }
 }
 
+void MpvItem::captureCurrentSeekThumbnail()
+{
+    if (!m_mpv || m_thumbnailRoot.isEmpty() || !std::isfinite(m_position)) {
+        return;
+    }
+    const int bucket = std::max(0, static_cast<int>(m_position / 30.0) * 30);
+    const QString path =
+        QDir(m_thumbnailRoot).filePath(QStringLiteral("%1.jpg").arg(bucket));
+    if (QFileInfo::exists(path)) {
+        m_pendingThumbnailBuckets.remove(bucket);
+        m_thumbnailBuckets.insert(bucket);
+        emit seekThumbnailsChanged();
+        return;
+    }
+    if (!sendCommandAsync({
+            QByteArrayLiteral("screenshot-to-file"),
+            QFile::encodeName(path),
+            QByteArrayLiteral("video"),
+        })) {
+        m_pendingThumbnailBuckets.remove(bucket);
+        return;
+    }
+    QTimer::singleShot(250, this, [this, bucket, path]() {
+        m_pendingThumbnailBuckets.remove(bucket);
+        if (QFileInfo::exists(path)) {
+            m_thumbnailBuckets.insert(bucket);
+            emit seekThumbnailsChanged();
+        }
+    });
+}
+
 void MpvItem::requestRender()
 {
     update();
@@ -462,11 +653,31 @@ bool MpvItem::sendCommand(const QList<QByteArray> &arguments)
     if (result >= 0) {
         return true;
     }
-    const QString message = QStringLiteral("libmpv command failed: %1")
-                                .arg(QString::fromUtf8(m_api->errorText(result)));
+    const QString commandName =
+        QString::fromUtf8(arguments.value(0)).left(64);
+    const QString commandTarget =
+        QString::fromUtf8(arguments.value(1)).left(128);
+    const QString message =
+        QStringLiteral("libmpv command failed (%1 %2): %3")
+            .arg(commandName, commandTarget,
+                 QString::fromUtf8(m_api->errorText(result)));
     setStatus(message);
     emit playbackError(QStringLiteral("mpv_command"), message);
     return false;
+}
+
+bool MpvItem::sendCommandAsync(const QList<QByteArray> &arguments)
+{
+    if (!m_mpv || !m_api || arguments.isEmpty()) {
+        return false;
+    }
+    std::vector<const char *> command;
+    command.reserve(static_cast<std::size_t>(arguments.size()) + 1);
+    for (const QByteArray &argument : arguments) {
+        command.push_back(argument.constData());
+    }
+    command.push_back(nullptr);
+    return m_api->commandAsync(m_mpv, m_asyncCommandId++, command.data()) >= 0;
 }
 
 void MpvItem::initializeMpv()
@@ -674,5 +885,72 @@ void MpvItem::applyPreferences(const QVariantMap &preferences)
                                      ? QByteArrayLiteral("no")
                                      : QByteArrayLiteral("auto-safe");
         sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("hwdec"), value});
+    }
+    const QString audioOutput =
+        preferences.value(QStringLiteral("audio_output")).toString().trimmed();
+    if (!audioOutput.isEmpty() && audioOutput != QStringLiteral("auto")) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("audio-device"),
+                     audioOutput.toUtf8()});
+    }
+    const QStringList passthrough =
+        preferences.value(QStringLiteral("audio_passthrough")).toStringList();
+    sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("audio-spdif"),
+                 passthrough.join(u',').toUtf8()});
+    const QString downmix =
+        preferences.value(QStringLiteral("audio_downmix")).toString().trimmed();
+    if (downmix == QStringLiteral("stereo") || downmix == QStringLiteral("5.1")) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("audio-channels"),
+                     downmix.toUtf8()});
+    } else {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("audio-channels"),
+                     QByteArrayLiteral("auto-safe")});
+    }
+    const QString hdr =
+        preferences.value(QStringLiteral("hdr_handling")).toString().trimmed();
+    if (hdr == QStringLiteral("passthrough")) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("target-colorspace-hint"),
+                     QByteArrayLiteral("yes")});
+    } else if (hdr == QStringLiteral("off")) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("target-colorspace-hint"),
+                     QByteArrayLiteral("no")});
+    }
+    const QString toneMapping =
+        preferences.value(QStringLiteral("tone_mapping")).toString().trimmed();
+    if (toneMapping != QStringLiteral("auto") && !toneMapping.isEmpty()) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("tone-mapping"),
+                     toneMapping.toUtf8()});
+    } else if (hdr == QStringLiteral("off")) {
+        sendCommand({QByteArrayLiteral("set"), QByteArrayLiteral("tone-mapping"),
+                     QByteArrayLiteral("bt.2446a")});
+    }
+    const QVariantMap style =
+        preferences.value(QStringLiteral("subtitle_style")).toMap();
+    QList<QPair<QByteArray, QByteArray>> subtitleOptions;
+    const auto appendStringOption =
+        [&style, &subtitleOptions](const QString &key, const QByteArray &option) {
+            if (style.contains(key)) {
+                subtitleOptions.append({option, style.value(key).toString().toUtf8()});
+            }
+        };
+    const auto appendNumberOption =
+        [&style, &subtitleOptions](const QString &key, const QByteArray &option) {
+            if (style.contains(key)) {
+                subtitleOptions.append({
+                    option,
+                    QByteArray::number(style.value(key).toDouble()),
+                });
+            }
+        };
+    appendStringOption(QStringLiteral("font"), QByteArrayLiteral("sub-font"));
+    appendNumberOption(QStringLiteral("size"), QByteArrayLiteral("sub-font-size"));
+    appendNumberOption(QStringLiteral("position"), QByteArrayLiteral("sub-pos"));
+    appendStringOption(QStringLiteral("color"), QByteArrayLiteral("sub-color"));
+    appendNumberOption(QStringLiteral("border_size"), QByteArrayLiteral("sub-border-size"));
+    appendStringOption(QStringLiteral("border_color"), QByteArrayLiteral("sub-border-color"));
+    appendStringOption(QStringLiteral("background_color"), QByteArrayLiteral("sub-back-color"));
+    for (const auto &option : subtitleOptions) {
+        if (!option.second.isEmpty()) {
+            sendCommand({QByteArrayLiteral("set"), option.first, option.second});
+        }
     }
 }
