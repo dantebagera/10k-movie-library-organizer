@@ -37,6 +37,9 @@ from services.curation_routes import register_curation_routes
 from services.frontend_routes import register_frontend_routes
 from services.iptv_provider_manager import IPTVProviderManager
 from services.iptv_routes import register_iptv_routes
+from services.player_config import PlayerConfig
+from services.player_routes import register_player_routes
+from services.player_runtime import PlayerRuntime
 from services.metadata_migration import MetadataMigrationCoordinator
 from services.identity_audit import IdentityAuditCoordinator
 from services.identity_decision import (
@@ -194,6 +197,14 @@ def _save_config(data):
         pass
 
 _cfg = _load_config()
+try:
+    _APP_VERSION = str(
+        _json.loads(Path(_BASE_DIR, 'package.json').read_text(encoding='utf-8')).get('version') or ''
+    ).strip()
+except (OSError, ValueError):
+    _APP_VERSION = ''
+_player_config = PlayerConfig(_cfg.get('player'))
+_player_runtime = PlayerRuntime(Path(_BASE_DIR, 'runtime', 'player'), _APP_VERSION)
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1
 OLLAMA_CANDIDATE_LIMIT_MAX = 50
@@ -314,6 +325,12 @@ def _get_iptv_provider_manager():
 
 
 register_iptv_routes(app, _get_iptv_provider_manager)
+register_player_routes(
+    app,
+    _player_config,
+    _player_runtime,
+    lambda: _save_config(_all_config()),
+)
 _plex_cache     = {}   # _norm(file_path) -> {plex_title, plex_year, plex_genres}
 _plex_unmatched = {}   # _norm(path) -> {rating_key, plex_title}  (Plex has file but no metadata)
 _plex_matched_by_fname   = {}  # filename.lower() -> matched entry   (path-mismatch fallback)
@@ -2197,6 +2214,7 @@ def _all_config():
         'download_default_quality': _download_default_quality,
         'download_indexer_mode': _download_indexer_mode,
         'download_trusted_indexers': _download_trusted_indexers,
+        'player': _player_config.storage_payload(),
     }
     if _ai_control_trusted_indexers_configured:
         config['ai_control_trusted_indexers'] = _ai_control_config['trusted_indexers']

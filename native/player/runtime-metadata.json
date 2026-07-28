@@ -1,0 +1,70 @@
+{
+  "schema": "cinema-paradiso-player-build-v1",
+  "bundle_version": "0.1.0-qt6.10.3-mpv20260610-lgpl",
+  "player_version": "0.1.0",
+  "ipc_protocol_version": 1,
+  "mpv_version": "git-48e6c35c0e05",
+  "mpv_commit": "48e6c35c0e056d9e4ff04b98e012416697736d8a",
+  "mpv_dll": "libmpv-2.dll",
+  "qt_version": "6.10.3",
+  "architecture": "x86_64",
+  "build_flags": [
+    "mpv: -Dgpl=false -Dlibmpv=true -Dlua=disabled -Djavascript=disabled",
+    "FFmpeg: --disable-gpl --enable-version3",
+    "Qt dynamic linking",
+    "MSVC 2022 x64"
+  ],
+  "compatible_cp_versions": [
+    "2.8.1"
+  ],
+  "sources": [
+    {
+      "name": "Cinema Paradiso Player",
+      "url": "https://github.com/dantebagera/cinema-paradiso",
+      "revision": "Cinema Paradiso 2.8.1 source distribution"
+    },
+    {
+      "name": "Qt",
+      "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/",
+      "revision": "6.10.3 msvc2022_64"
+    },
+    {
+      "name": "mpv",
+      "url": "https://github.com/mpv-player/mpv",
+      "revision": "48e6c35c0e056d9e4ff04b98e012416697736d8a"
+    },
+    {
+      "name": "FFmpeg",
+      "url": "https://github.com/FFmpeg/FFmpeg",
+      "revision": "c6309b5c63add7ad0ec221fafefc32bdcd6f8b91"
+    },
+    {
+      "name": "mpv-winbuild-cmake",
+      "url": "https://github.com/shinchiro/mpv-winbuild-cmake",
+      "revision": "5efd298cb51513c2410e4e9029b5e56b83c2aaac with committed LGPL patch"
+    }
+  ],
+  "licenses": [
+    {
+      "component": "Qt",
+      "spdx": "LGPL-3.0-only",
+      "path": "licenses/Qt-LGPL-3.0.txt",
+      "source": "https://www.qt.io/development/open-source-lgpl-obligations"
+    },
+    {
+      "component": "mpv",
+      "spdx": "LGPL-2.1-or-later",
+      "path": "licenses/mpv-LGPL-2.1.txt",
+      "source": "https://github.com/mpv-player/mpv"
+    },
+    {
+      "component": "FFmpeg",
+      "spdx": "LGPL-3.0-or-later",
+      "path": "licenses/FFmpeg-LGPL-3.0.txt",
+      "source": "https://ffmpeg.org/legal.html"
+    }
+  ],
+  "pinned_sha256": {
+    "libmpv-2.dll": "0A76BD542BBA2D85ABEFCC7CD1005269085E1B5815B4E8BAEC62FF4EA4246675"
+  }
+}

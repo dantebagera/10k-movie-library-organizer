@@ -4,6 +4,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from tests.player_runtime_fixture import create_player_runtime_bundle
+
 
 class PortableReleasePackagingTests(unittest.TestCase):
     @staticmethod
@@ -55,25 +57,41 @@ class PortableReleasePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             project = Path(root) / "project"
             qbt = Path(root) / "qbt"
+            player = create_player_runtime_bundle(
+                Path(root) / "player",
+                app_version="9.9.9",
+            )
             out = Path(root) / "out"
             project.mkdir()
             qbt.mkdir()
             (project / "package.json").write_text('{"version":"9.9.9"}', encoding="utf-8")
             (project / "README.md").write_text("Cinema Paradiso", encoding="utf-8")
-            (project / "config.json").write_text("secret", encoding="utf-8")
+            (project / "config.json").write_text(
+                '{"opensubtitles_api_key":"secret","media":"C:\\\\Users\\\\dante\\\\Movies\\\\private.mkv"}',
+                encoding="utf-8",
+            )
             (project / "res_cache.json").write_text("cache", encoding="utf-8")
             (project / "cp-server.stdout.log").write_text("local log", encoding="utf-8")
             (project / "cp-server.stderr.log").write_text("local error log", encoding="utf-8")
             (project / "data").mkdir()
             (project / "data" / "state.json").write_text("user", encoding="utf-8")
+            (project / "data" / "playback-history.db").write_bytes(b"history")
+            (project / "cache").mkdir()
+            (project / "cache" / "downloaded-subtitles.srt").write_text("subtitle", encoding="utf-8")
             (project / "runtime").mkdir()
             (project / "runtime" / "old.exe").write_bytes(b"old")
             (qbt / "qbittorrent.exe").write_bytes(b"exe")
 
-            zip_path = build_release_zip(project, qbt_source=qbt, output_dir=out)
+            zip_path = build_release_zip(
+                project,
+                qbt_source=qbt,
+                player_source=player,
+                output_dir=out,
+            )
 
             with zipfile.ZipFile(zip_path) as archive:
                 names = set(archive.namelist())
+                archive_payload = b"\n".join(archive.read(name) for name in names)
 
         self.assertEqual(zip_path.name, "Cinema-Paradiso-9.9.9-Portable.zip")
         self.assertTrue(any(name.endswith("README.md") for name in names))
@@ -82,6 +100,12 @@ class PortableReleasePackagingTests(unittest.TestCase):
         self.assertFalse(any(name.endswith(".log") for name in names))
         self.assertFalse(any("/data/" in name for name in names))
         self.assertFalse(any(name.endswith("runtime/old.exe") for name in names))
+        self.assertNotIn(b"opensubtitles_api_key", archive_payload)
+        self.assertNotIn(b"playback-history", archive_payload)
+        self.assertNotIn(b"downloaded-subtitles", archive_payload)
+        self.assertNotIn(b"C:\\Users\\dante", archive_payload)
+        self.assertTrue(any(name.endswith("runtime/player/current.json") for name in names))
+        self.assertTrue(any(name.endswith("runtime/player/versions/player-test-1/cp-player.exe") for name in names))
 
     def test_copy_ffmpeg_runtime_builds_expected_layout_and_manifest(self):
         from tools.build_portable_release import copy_ffmpeg_runtime
@@ -99,6 +123,44 @@ class PortableReleasePackagingTests(unittest.TestCase):
             self.assertTrue((destination / "bin" / "ffprobe.exe").is_file())
             self.assertEqual(manifest["license"], "GPLv3")
         self.assertEqual(manifest["bundled_for"], f"Cinema Paradiso {self.current_app_version()}")
+
+    def test_copy_player_runtime_requires_hashes_licenses_and_only_copies_inventory(self):
+        from tools.build_portable_release import copy_player_runtime
+
+        with tempfile.TemporaryDirectory() as root:
+            source = create_player_runtime_bundle(
+                Path(root) / "source",
+                app_version="9.9.9",
+            )
+            (source / "config.json").write_text("secret", encoding="utf-8")
+            destination = Path(root) / "release" / "runtime" / "player"
+
+            manifest = copy_player_runtime(
+                source,
+                destination,
+                app_version="9.9.9",
+            )
+
+            version_root = destination / "versions" / manifest["bundle_version"]
+            self.assertTrue((version_root / "cp-player.exe").is_file())
+            self.assertTrue((version_root / "licenses" / "Qt-LGPL-3.0.txt").is_file())
+            self.assertFalse((version_root / "config.json").exists())
+            selector = json.loads((destination / "current.json").read_text(encoding="utf-8"))
+            self.assertEqual(selector["bundle_version"], manifest["bundle_version"])
+
+    def test_release_fails_without_pinned_player_runtime(self):
+        from tools.build_portable_release import build_release_zip
+
+        with tempfile.TemporaryDirectory() as root:
+            project = Path(root) / "project"
+            qbt = Path(root) / "qbt"
+            project.mkdir()
+            qbt.mkdir()
+            (project / "package.json").write_text('{"version":"9.9.9"}', encoding="utf-8")
+            (qbt / "qbittorrent.exe").write_bytes(b"exe")
+
+            with self.assertRaises(FileNotFoundError):
+                build_release_zip(project, qbt_source=qbt, output_dir=Path(root) / "out")
 
 
 if __name__ == "__main__":

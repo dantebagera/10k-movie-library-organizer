@@ -1,11 +1,20 @@
 import argparse
 import json
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from services.player_runtime import (
+    PLAYER_SELECTOR_SCHEMA,
+    validate_player_manifest,
+)
+
+
 QBT_VERSION = "5.2.2"
 FFMPEG_VERSION = "8.1.1"
 EXCLUDED_QBT_NAMES = {
@@ -105,10 +114,71 @@ def copy_ffmpeg_runtime(source, destination, version=FFMPEG_VERSION, app_version
     return manifest
 
 
-def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_dir=None):
+def resolve_player_bundle_source(project_root, player_source=None):
+    if player_source:
+        return Path(player_source).resolve()
+    runtime_root = Path(project_root).resolve() / "runtime" / "player"
+    selector_path = runtime_root / "current.json"
+    try:
+        selector = json.loads(selector_path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            "The pinned native player runtime is missing. "
+            "Provide --player-source or assemble runtime/player/current.json."
+        ) from error
+    if selector.get("schema") != PLAYER_SELECTOR_SCHEMA:
+        raise ValueError(f"Invalid native player selector: {selector_path}")
+    bundle_version = str(selector.get("bundle_version") or "").strip()
+    if not bundle_version or Path(bundle_version).name != bundle_version:
+        raise ValueError(f"Invalid native player bundle version: {selector_path}")
+    return (runtime_root / "versions" / bundle_version).resolve()
+
+
+def copy_player_runtime(source, destination, app_version=None):
+    source = Path(source).resolve()
+    destination = Path(destination).resolve()
+    manifest = validate_player_manifest(
+        source,
+        app_version=app_version or read_project_version(),
+        verify_hashes=True,
+    )
+    bundle_version = manifest["bundle_version"]
+    version_destination = destination / "versions" / bundle_version
+    if version_destination.exists():
+        shutil.rmtree(version_destination)
+    version_destination.mkdir(parents=True, exist_ok=True)
+    for relative_text in manifest["required_files"]:
+        relative = Path(*relative_text.replace("\\", "/").split("/"))
+        source_file = source / relative
+        destination_file = version_destination / relative
+        destination_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, destination_file)
+    shutil.copy2(
+        source / "cinema-paradiso-player.json",
+        version_destination / "cinema-paradiso-player.json",
+    )
+    selector = {
+        "schema": PLAYER_SELECTOR_SCHEMA,
+        "bundle_version": bundle_version,
+    }
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "current.json").write_text(
+        json.dumps(selector, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    validate_player_manifest(
+        version_destination,
+        app_version=app_version or read_project_version(),
+        verify_hashes=True,
+    )
+    return manifest
+
+
+def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_dir=None, player_source=None):
     project_root = Path(project_root).resolve()
     app_version = read_project_version(project_root)
     qbt_source = Path(qbt_source or (project_root / "data" / "qbittorrent" / "versions" / QBT_VERSION)).resolve()
+    player_source = resolve_player_bundle_source(project_root, player_source)
     default_ffmpeg_source = project_root / "runtime" / "ffmpeg"
     ffmpeg_source = Path(ffmpeg_source).resolve() if ffmpeg_source else (default_ffmpeg_source.resolve() if default_ffmpeg_source.exists() else None)
     output_dir = Path(output_dir or (project_root / "release")).resolve()
@@ -145,6 +215,11 @@ def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_
         QBT_VERSION,
         app_version=app_version,
     )
+    copy_player_runtime(
+        player_source,
+        staging / "runtime" / "player",
+        app_version=app_version,
+    )
     if ffmpeg_source:
         copy_ffmpeg_runtime(
             ffmpeg_source,
@@ -167,9 +242,18 @@ def main():
     parser.add_argument("--project-root", default=Path(__file__).resolve().parents[1])
     parser.add_argument("--qbt-source", default=None)
     parser.add_argument("--ffmpeg-source", default=None)
+    parser.add_argument("--player-source", default=None)
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args()
-    print(build_release_zip(args.project_root, args.qbt_source, args.ffmpeg_source, args.output_dir))
+    print(
+        build_release_zip(
+            args.project_root,
+            qbt_source=args.qbt_source,
+            ffmpeg_source=args.ffmpeg_source,
+            player_source=args.player_source,
+            output_dir=args.output_dir,
+        )
+    )
 
 
 if __name__ == "__main__":

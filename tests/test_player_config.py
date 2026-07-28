@@ -1,0 +1,119 @@
+import unittest
+
+from services.player_config import (
+    DEFAULT_KEYBOARD_SHORTCUTS,
+    PlayerConfig,
+    PlayerConfigError,
+)
+
+
+class PlayerConfigTests(unittest.TestCase):
+    def test_existing_installations_default_to_os_player(self):
+        config = PlayerConfig()
+
+        self.assertEqual(config.public_payload()["mode"], "os_default")
+        self.assertEqual(config.public_payload()["completion_threshold"], 0.92)
+        self.assertEqual(config.public_payload()["minimum_resume_seconds"], 120)
+        self.assertFalse(config.public_payload()["auto_subtitle_search"])
+
+    def test_credentials_are_stored_but_never_returned(self):
+        config = PlayerConfig()
+        public = config.update({
+            "providers": {
+                "opensubtitles": {
+                    "enabled": True,
+                    "username": "dante",
+                    "api_key": "open-secret",
+                    "password": "account-secret",
+                },
+                "subdl": {
+                    "enabled": True,
+                    "api_key": "subdl-secret",
+                },
+            },
+        })
+
+        serialized_public = str(public)
+        self.assertNotIn("dante", serialized_public)
+        self.assertNotIn("open-secret", serialized_public)
+        self.assertNotIn("account-secret", serialized_public)
+        self.assertNotIn("subdl-secret", serialized_public)
+        self.assertTrue(public["providers"]["opensubtitles"]["api_key_configured"])
+        self.assertTrue(public["providers"]["opensubtitles"]["username_configured"])
+        self.assertTrue(public["providers"]["opensubtitles"]["password_configured"])
+        self.assertTrue(public["providers"]["subdl"]["api_key_configured"])
+        stored = config.storage_payload()
+        self.assertEqual(stored["providers"]["opensubtitles"]["api_key"], "open-secret")
+        self.assertEqual(stored["providers"]["opensubtitles"]["username"], "dante")
+        self.assertEqual(stored["providers"]["subdl"]["api_key"], "subdl-secret")
+
+    def test_blank_write_only_credentials_preserve_saved_values(self):
+        config = PlayerConfig({
+            "providers": {
+                "opensubtitles": {"api_key": "keep-me"},
+            },
+        })
+
+        config.update({"providers": {"opensubtitles": {"api_key": ""}}})
+
+        self.assertEqual(
+            config.storage_payload()["providers"]["opensubtitles"]["api_key"],
+            "keep-me",
+        )
+
+    def test_credentials_require_explicit_clear(self):
+        config = PlayerConfig({
+            "providers": {
+                "opensubtitles": {"api_key": "remove-me"},
+            },
+        })
+
+        config.update({
+            "providers": {
+                "opensubtitles": {"clear_secrets": ["api_key"]},
+            },
+        })
+
+        self.assertFalse(
+            config.public_payload()["providers"]["opensubtitles"]["api_key_configured"]
+        )
+
+    def test_preferences_validate_ranges_and_enums(self):
+        config = PlayerConfig()
+
+        with self.assertRaises(PlayerConfigError):
+            config.update({"mode": "parallel-player"})
+        with self.assertRaises(PlayerConfigError):
+            config.update({"completion_threshold": 0.2})
+        with self.assertRaises(PlayerConfigError):
+            config.update({"minimum_resume_seconds": -1})
+        self.assertEqual(config.public_payload()["mode"], "os_default")
+
+    def test_shortcut_update_uses_known_actions_only(self):
+        config = PlayerConfig()
+
+        payload = config.update({"keyboard_shortcuts": {"play_pause": "K"}})
+
+        self.assertEqual(payload["keyboard_shortcuts"]["play_pause"], "K")
+        self.assertEqual(
+            payload["keyboard_shortcuts"]["subtitle_search"],
+            DEFAULT_KEYBOARD_SHORTCUTS["subtitle_search"],
+        )
+        with self.assertRaises(PlayerConfigError):
+            config.update({"keyboard_shortcuts": {"launch_iptv": "T"}})
+
+    def test_reset_restores_os_default_and_clears_provider_secrets(self):
+        config = PlayerConfig()
+        config.update({
+            "mode": "built_in",
+            "providers": {"subdl": {"api_key": "secret"}},
+        })
+
+        payload = config.reset()
+
+        self.assertEqual(payload["mode"], "os_default")
+        self.assertFalse(payload["providers"]["subdl"]["api_key_configured"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -50,6 +50,7 @@ winapp/
 # Portable release artifacts
 runtime/qbittorrent/
 runtime/ffmpeg/
+runtime/player/
 release/
 *.zip
 

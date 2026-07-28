@@ -291,6 +291,113 @@ test('Settings selects a free Ollama cloud model and tests that exact model', as
   await expect.poll(() => savedModel).toBe('gemma4:31b-cloud');
 });
 
+test('Settings keeps OS playback default, redacts provider secrets, and verifies the native runtime', async ({ page }) => {
+  let savedPlayer = null;
+  const publicPlayerConfig = {
+    mode: 'os_default',
+    preferred_audio_languages: ['original', 'en'],
+    preferred_subtitle_languages: ['en'],
+    prefer_forced_subtitles: false,
+    prefer_hearing_impaired_subtitles: false,
+    resume_enabled: true,
+    minimum_resume_seconds: 120,
+    completion_threshold: 0.92,
+    auto_mark_completed_watched: true,
+    hardware_decoding: 'safe_auto',
+    hdr_handling: 'auto',
+    audio_output: 'auto',
+    audio_passthrough: [],
+    subtitle_storage: 'cache',
+    auto_subtitle_search: false,
+    keyboard_shortcuts: { play_pause: 'Space', subtitle_search: 'D' },
+    providers: {
+      opensubtitles: {
+        enabled: false,
+        username_configured: false,
+        api_key_configured: false,
+        password_configured: false
+      },
+      subdl: { enabled: false, api_key_configured: false }
+    }
+  };
+  await page.route('**/api/player/config', async (route) => {
+    if (route.request().method() === 'PUT') {
+      savedPlayer = route.request().postDataJSON();
+      await route.fulfill({ json: {
+        ...publicPlayerConfig,
+        mode: savedPlayer.mode,
+        providers: {
+          opensubtitles: {
+            enabled: savedPlayer.providers.opensubtitles.enabled,
+            username_configured: Boolean(savedPlayer.providers.opensubtitles.username),
+            api_key_configured: Boolean(savedPlayer.providers.opensubtitles.api_key),
+            password_configured: Boolean(savedPlayer.providers.opensubtitles.password)
+          },
+          subdl: {
+            enabled: savedPlayer.providers.subdl.enabled,
+            api_key_configured: Boolean(savedPlayer.providers.subdl.api_key)
+          }
+        }
+      } });
+      return;
+    }
+    await route.fulfill({ json: publicPlayerConfig });
+  });
+  await page.route('**/api/player/status', (route) => route.fulfill({ json: {
+    state: 'missing',
+    ready: false,
+    detail: 'The built-in player runtime is not installed. OS-default playback remains available.',
+    player_version: '',
+    mpv_version: '',
+    qt_version: '',
+    architecture: '',
+    notices: [],
+    os_fallback_available: true
+  } }));
+  await page.route('**/api/player/verify', (route) => route.fulfill({ json: {
+    state: 'ready',
+    ready: true,
+    detail: 'The built-in player runtime is ready.',
+    player_version: '0.1.0',
+    mpv_version: 'git-48e6c35c0e05',
+    qt_version: '6.10.3',
+    architecture: 'x86_64',
+    notices: [
+      { component: 'Qt', spdx: 'LGPL-3.0-only' },
+      { component: 'mpv', spdx: 'LGPL-2.1-or-later' }
+    ],
+    os_fallback_available: true
+  } }));
+
+  await page.goto('/settings', { waitUntil: 'domcontentloaded' });
+
+  const playerCard = page.locator('.player-settings-card');
+  await expect(page.getByText('IPTV and movie-card streaming keep their existing players.', { exact: false })).toBeVisible();
+  await expect(page.getByLabel('Local Library playback mode')).toHaveValue('os_default');
+  await expect(playerCard).toContainText('Operating-system fallback is available.');
+  await page.getByLabel('Local Library playback mode').selectOption('built_in');
+  await page.getByLabel('OpenSubtitles API key', { exact: true }).fill('browser-secret');
+  await page.getByRole('button', { name: 'Save player' }).click();
+
+  await expect.poll(() => savedPlayer?.mode).toBe('built_in');
+  expect(savedPlayer.providers.opensubtitles.api_key).toBe('browser-secret');
+  await expect(page.getByLabel('OpenSubtitles API key', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('OpenSubtitles API key', { exact: true })).toHaveAttribute('placeholder', /Saved/);
+  await expect(playerCard).not.toContainText('browser-secret');
+
+  await page.getByRole('button', { name: 'Verify player' }).click();
+  await expect(playerCard).toContainText('Cinema Paradiso Player is ready.');
+  await expect(playerCard).toContainText('0.1.0');
+  await expect(playerCard).toContainText('6.10.3');
+  await expect(playerCard).toContainText('LGPL-3.0-only');
+  if (process.env.CP_CAPTURE_PLAYER_EVIDENCE === '1') {
+    await playerCard.evaluate((element) => element.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: 'test-results/player-phase1-settings-card-top.png' });
+    await playerCard.locator('.settings-action-grid').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'test-results/player-phase1-settings-card-bottom.png' });
+  }
+});
+
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
   await mockCardParityApis(page);
   await page.route('**/api/library?view=files', async (route) => {

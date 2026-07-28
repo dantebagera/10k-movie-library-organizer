@@ -84,8 +84,84 @@ const emptySettingsState = {
     trusted_indexers_configured: false,
     ollama_curated_lists: false,
     indexers: []
+  },
+  player: {
+    mode: 'os_default',
+    preferred_audio_languages: ['original', 'en'],
+    preferred_subtitle_languages: ['en'],
+    prefer_forced_subtitles: false,
+    prefer_hearing_impaired_subtitles: false,
+    resume_enabled: true,
+    minimum_resume_seconds: 120,
+    completion_threshold: 0.92,
+    auto_mark_completed_watched: true,
+    hardware_decoding: 'safe_auto',
+    hdr_handling: 'auto',
+    audio_output: 'auto',
+    audio_passthrough: [],
+    subtitle_storage: 'cache',
+    auto_subtitle_search: false,
+    keyboard_shortcuts: {},
+    providers: {
+      opensubtitles: {
+        enabled: false,
+        username: '',
+        api_key: '',
+        password: '',
+        username_configured: false,
+        api_key_configured: false,
+        password_configured: false
+      },
+      subdl: {
+        enabled: false,
+        api_key: '',
+        api_key_configured: false
+      }
+    }
   }
 };
+
+const emptyPlayerRuntime = {
+  state: 'missing',
+  ready: false,
+  detail: '',
+  player_version: '',
+  mpv_version: '',
+  qt_version: '',
+  architecture: '',
+  notices: [],
+  os_fallback_available: true
+};
+
+function playerForm(payload = {}) {
+  const providers = payload.providers || {};
+  const opensubtitles = providers.opensubtitles || {};
+  const subdl = providers.subdl || {};
+  return {
+    ...emptySettingsState.player,
+    ...payload,
+    preferred_audio_languages: payload.preferred_audio_languages || emptySettingsState.player.preferred_audio_languages,
+    preferred_subtitle_languages: payload.preferred_subtitle_languages || emptySettingsState.player.preferred_subtitle_languages,
+    audio_passthrough: payload.audio_passthrough || [],
+    keyboard_shortcuts: payload.keyboard_shortcuts || {},
+    providers: {
+      opensubtitles: {
+        enabled: Boolean(opensubtitles.enabled),
+        username: '',
+        api_key: '',
+        password: '',
+        username_configured: Boolean(opensubtitles.username_configured),
+        api_key_configured: Boolean(opensubtitles.api_key_configured),
+        password_configured: Boolean(opensubtitles.password_configured)
+      },
+      subdl: {
+        enabled: Boolean(subdl.enabled),
+        api_key: '',
+        api_key_configured: Boolean(subdl.api_key_configured)
+      }
+    }
+  };
+}
 
 function iptvProviderForm(provider = null) {
   if (!provider) return { ...emptySettingsState.iptv, name: '' };
@@ -122,6 +198,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
   });
   const [ollamaCustomModel, setOllamaCustomModel] = useState(false);
   const [ollamaExactModel, setOllamaExactModel] = useState('');
+  const [playerRuntime, setPlayerRuntime] = useState(emptyPlayerRuntime);
   const editedFieldsRef = useRef(new Set());
   const ollamaModelGroups = buildOllamaModelGroups(ollamaModelCatalog, forms.ollama.model);
 
@@ -146,10 +223,12 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         iptvApi.providers(),
         fetchJson('/api/ollama/config'),
         ollamaModelsRequest,
-        fetchJson('/api/ai-control/config')
+        fetchJson('/api/ai-control/config'),
+        fetchJson('/api/player/config'),
+        fetchJson('/api/player/status')
       ]);
       if (cancelled) return;
-      const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, ollamaModels, aiControl] = requests;
+      const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, ollamaModels, aiControl, player, playerStatus] = requests;
       const loadedIPTVProviders = iptv.status === 'fulfilled' ? (iptv.value.providers || []) : [];
       const loadedIPTVProviderId = loadedIPTVProviders.some((provider) => provider.provider_id === iptv.value?.last_selected_provider_id)
         ? iptv.value.last_selected_provider_id
@@ -204,7 +283,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           trusted_indexers_configured: Boolean(aiControl.value.trusted_indexers_configured),
           ollama_curated_lists: Boolean(aiControl.value.ollama_curated_lists),
           indexers: aiControl.value.indexers || []
-        } : emptySettingsState.aiControl
+        } : emptySettingsState.aiControl,
+        player: player.status === 'fulfilled'
+          ? playerForm(player.value)
+          : playerForm()
       };
       setIPTVProviders(loadedIPTVProviders);
       setSelectedIPTVProviderId(loadedIPTVProviderId);
@@ -219,6 +301,9 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       });
       if (ollamaModels.status === 'fulfilled') {
         setOllamaModelCatalog(ollamaModels.value);
+      }
+      if (playerStatus.status === 'fulfilled') {
+        setPlayerRuntime(playerStatus.value);
       }
       const failed = requests.filter((request) => request.status === 'rejected');
       if (failed.length) {
@@ -238,6 +323,37 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     setForms((state) => ({
       ...state,
       [section]: { ...state[section], [field]: value }
+    }));
+  }
+
+  function updatePlayerProvider(provider, field, value) {
+    editedFieldsRef.current.add('player.providers');
+    setForms((state) => ({
+      ...state,
+      player: {
+        ...state.player,
+        providers: {
+          ...state.player.providers,
+          [provider]: {
+            ...state.player.providers[provider],
+            [field]: value
+          }
+        }
+      }
+    }));
+  }
+
+  function updatePlayerShortcut(action, value) {
+    editedFieldsRef.current.add('player.keyboard_shortcuts');
+    setForms((state) => ({
+      ...state,
+      player: {
+        ...state.player,
+        keyboard_shortcuts: {
+          ...state.player.keyboard_shortcuts,
+          [action]: value
+        }
+      }
     }));
   }
 
@@ -620,6 +736,100 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     }
   }
 
+  async function savePlayer(event) {
+    event.preventDefault();
+    setActionState('player-save', true);
+    const player = forms.player;
+    try {
+      const saved = await fetchJson('/api/player/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: player.mode,
+          preferred_audio_languages: player.preferred_audio_languages,
+          preferred_subtitle_languages: player.preferred_subtitle_languages,
+          prefer_forced_subtitles: Boolean(player.prefer_forced_subtitles),
+          prefer_hearing_impaired_subtitles: Boolean(player.prefer_hearing_impaired_subtitles),
+          resume_enabled: Boolean(player.resume_enabled),
+          minimum_resume_seconds: Number(player.minimum_resume_seconds),
+          completion_threshold: Number(player.completion_threshold),
+          auto_mark_completed_watched: Boolean(player.auto_mark_completed_watched),
+          hardware_decoding: player.hardware_decoding,
+          hdr_handling: player.hdr_handling,
+          audio_output: player.audio_output,
+          audio_passthrough: player.audio_passthrough,
+          subtitle_storage: player.subtitle_storage,
+          auto_subtitle_search: Boolean(player.auto_subtitle_search),
+          keyboard_shortcuts: player.keyboard_shortcuts,
+          providers: {
+            opensubtitles: {
+              enabled: Boolean(player.providers.opensubtitles.enabled),
+              username: player.providers.opensubtitles.username,
+              api_key: player.providers.opensubtitles.api_key,
+              password: player.providers.opensubtitles.password
+            },
+            subdl: {
+              enabled: Boolean(player.providers.subdl.enabled),
+              api_key: player.providers.subdl.api_key
+            }
+          }
+        })
+      });
+      setForms((state) => ({ ...state, player: playerForm(saved) }));
+      setCardStatus(
+        'player',
+        'success',
+        'Local playback settings saved.',
+        saved.mode === 'built_in'
+          ? 'Local Library Play will use Cinema Paradiso Player after the core playback phase is installed.'
+          : 'Local Library Play remains with the operating-system default player.'
+      );
+      notify('Local playback settings saved');
+    } catch (error) {
+      setCardStatus('player', 'error', 'Local playback settings not saved.', error.message);
+    } finally {
+      setActionState('player-save', false);
+    }
+  }
+
+  async function verifyPlayer() {
+    setActionState('player-verify', true);
+    setCardStatus('player', 'neutral', 'Verifying native player files.', 'Checking the pinned manifest and every required SHA-256 hash.');
+    try {
+      const status = await fetchJson('/api/player/verify', { method: 'POST' });
+      setPlayerRuntime(status);
+      setCardStatus(
+        'player',
+        status.ready ? 'success' : 'error',
+        status.ready ? 'Cinema Paradiso Player is ready.' : `Player runtime is ${status.state}.`,
+        status.detail
+      );
+    } catch (error) {
+      setCardStatus('player', 'error', 'Player verification failed.', error.message);
+    } finally {
+      setActionState('player-verify', false);
+    }
+  }
+
+  async function resetPlayer() {
+    if (!window.confirm('Reset all local playback preferences and remove saved subtitle-provider credentials?')) return;
+    setActionState('player-reset', true);
+    try {
+      const saved = await fetchJson('/api/player/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reset: true })
+      });
+      setForms((state) => ({ ...state, player: playerForm(saved) }));
+      setCardStatus('player', 'success', 'Player preferences reset.', 'Operating-system default playback is active and provider credentials were removed.');
+      notify('Player preferences reset');
+    } catch (error) {
+      setCardStatus('player', 'error', 'Player preferences not reset.', error.message);
+    } finally {
+      setActionState('player-reset', false);
+    }
+  }
+
   async function syncIPTV() {
     if (!selectedIPTVProviderId) return;
     setActionState('iptv-sync', true);
@@ -760,6 +970,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
 
   const summary = [
     { key: 'library', label: 'Library roots', ready: (forms.library.directories || []).some((path) => path.trim()), tone: 'blue' },
+    { key: 'player', label: 'Local playback', ready: forms.player.mode === 'os_default' || Boolean(playerRuntime.ready), tone: 'gold' },
     { key: 'plex', label: 'Plex', ready: Boolean(forms.plex.url && forms.plex.token), tone: 'cyan' },
     { key: 'prowlarr', label: 'Prowlarr', ready: Boolean(forms.prowlarr.url && forms.prowlarr.key), tone: 'gold' },
     { key: 'qbittorrent', label: 'qBittorrent', ready: forms.qbittorrent.mode === 'system' || Boolean(forms.qbittorrent.installed), tone: 'gold' },
@@ -867,6 +1078,213 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           </div>
         </form>
       </div>
+
+      <div className="settings-section-heading">
+        <div>
+          <h3>Local playback</h3>
+          <p>Cinema Paradiso Player applies only to local Library files. IPTV and movie-card streaming keep their existing players.</p>
+        </div>
+      </div>
+
+      <form className="settings-panel player-settings-card" onSubmit={savePlayer}>
+        <SettingsPanelHeader
+          icon={MonitorPlay}
+          title="Cinema Paradiso Player"
+          label="Desktop local files"
+          text="Choose the operating-system player or CP's pinned Qt/libmpv runtime, then configure resume, tracks, subtitles, audio, and keyboard behavior."
+        />
+
+        <div className={cx('player-runtime-status', `player-runtime-${playerRuntime.state || 'missing'}`)}>
+          <div>
+            <strong>{playerRuntime.ready ? 'Ready' : (playerRuntime.state || 'missing')}</strong>
+            <span>{playerRuntime.detail || 'Runtime status is unavailable.'}</span>
+          </div>
+          <dl>
+            <div><dt>CP Player</dt><dd>{playerRuntime.player_version || 'Not installed'}</dd></div>
+            <div><dt>libmpv</dt><dd>{playerRuntime.mpv_version || 'Not installed'}</dd></div>
+            <div><dt>Qt</dt><dd>{playerRuntime.qt_version || 'Not installed'}</dd></div>
+            <div><dt>Architecture</dt><dd>{playerRuntime.architecture || 'Not detected'}</dd></div>
+          </dl>
+          <small>{playerRuntime.os_fallback_available ? 'Operating-system fallback is available.' : 'Operating-system fallback is unavailable.'}</small>
+          {(playerRuntime.notices || []).length > 0 && (
+            <ul>
+              {playerRuntime.notices.map((notice) => (
+                <li key={`${notice.component}-${notice.spdx}`}>{notice.component}: {notice.spdx}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="player-settings-columns">
+          <section className="player-settings-group">
+            <h4>Playback and resume</h4>
+            <label className="dialog-field">
+              <span>Local Library playback mode</span>
+              <select value={forms.player.mode} onChange={(event) => updateField('player', 'mode', event.target.value)}>
+                <option value="os_default">Operating-system default player</option>
+                <option value="built_in">Cinema Paradiso Player</option>
+              </select>
+            </label>
+            <div className="settings-two-column">
+              <label className="dialog-field">
+                <span>Minimum resume position (seconds)</span>
+                <input type="number" min="0" max="3600" value={forms.player.minimum_resume_seconds} onChange={(event) => updateField('player', 'minimum_resume_seconds', event.target.value)} />
+              </label>
+              <label className="dialog-field">
+                <span>Completion threshold (0.50–1.00)</span>
+                <input type="number" min="0.5" max="1" step="0.01" value={forms.player.completion_threshold} onChange={(event) => updateField('player', 'completion_threshold', event.target.value)} />
+              </label>
+            </div>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.resume_enabled} onChange={(event) => updateField('player', 'resume_enabled', event.target.checked)} />
+              <span><strong>Resume unfinished local movies</strong><small>Progress remains specific to the exact local file.</small></span>
+            </label>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.auto_mark_completed_watched} onChange={(event) => updateField('player', 'auto_mark_completed_watched', event.target.checked)} />
+              <span><strong>Mark completed movies watched</strong><small>Uses Cinema Paradiso’s existing watched-state owner.</small></span>
+            </label>
+          </section>
+
+          <section className="player-settings-group">
+            <h4>Tracks and rendering</h4>
+            <label className="dialog-field">
+              <span>Preferred audio languages, in order</span>
+              <input
+                value={(forms.player.preferred_audio_languages || []).join(', ')}
+                onChange={(event) => updateField('player', 'preferred_audio_languages', event.target.value.split(',').map((value) => value.trim()).filter(Boolean))}
+                placeholder="original, ar, en"
+              />
+            </label>
+            <label className="dialog-field">
+              <span>Preferred subtitle languages, in order</span>
+              <input
+                value={(forms.player.preferred_subtitle_languages || []).join(', ')}
+                onChange={(event) => updateField('player', 'preferred_subtitle_languages', event.target.value.split(',').map((value) => value.trim()).filter(Boolean))}
+                placeholder="ar, en"
+              />
+            </label>
+            <div className="settings-two-column">
+              <label className="dialog-field">
+                <span>Hardware decoding</span>
+                <select value={forms.player.hardware_decoding} onChange={(event) => updateField('player', 'hardware_decoding', event.target.value)}>
+                  <option value="safe_auto">Safe automatic</option>
+                  <option value="off">Off</option>
+                  <option value="advanced">Advanced</option>
+                </select>
+              </label>
+              <label className="dialog-field">
+                <span>HDR handling</span>
+                <select value={forms.player.hdr_handling} onChange={(event) => updateField('player', 'hdr_handling', event.target.value)}>
+                  <option value="auto">Automatic</option>
+                  <option value="off">Tone map to SDR</option>
+                  <option value="passthrough">Display passthrough</option>
+                </select>
+              </label>
+            </div>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.prefer_forced_subtitles} onChange={(event) => updateField('player', 'prefer_forced_subtitles', event.target.checked)} />
+              <span><strong>Prefer forced subtitles</strong><small>Prioritize forced tracks when language ranking is otherwise equal.</small></span>
+            </label>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.prefer_hearing_impaired_subtitles} onChange={(event) => updateField('player', 'prefer_hearing_impaired_subtitles', event.target.checked)} />
+              <span><strong>Prefer hearing-impaired subtitles</strong><small>Prioritize accessibility tracks when available.</small></span>
+            </label>
+          </section>
+
+          <section className="player-settings-group">
+            <h4>Audio and subtitle storage</h4>
+            <label className="dialog-field">
+              <span>Audio output</span>
+              <input value={forms.player.audio_output} onChange={(event) => updateField('player', 'audio_output', event.target.value)} placeholder="auto" />
+            </label>
+            <label className="dialog-field">
+              <span>Audio passthrough codecs</span>
+              <input
+                value={(forms.player.audio_passthrough || []).join(', ')}
+                onChange={(event) => updateField('player', 'audio_passthrough', event.target.value.split(',').map((value) => value.trim()).filter(Boolean))}
+                placeholder="ac3, eac3, dts, truehd"
+              />
+            </label>
+            <label className="dialog-field">
+              <span>Downloaded subtitle storage</span>
+              <select value={forms.player.subtitle_storage} onChange={(event) => updateField('player', 'subtitle_storage', event.target.value)}>
+                <option value="cache">Cinema Paradiso cache</option>
+                <option value="beside_movie">Beside the movie file</option>
+              </select>
+            </label>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.auto_subtitle_search} onChange={(event) => updateField('player', 'auto_subtitle_search', event.target.checked)} />
+              <span><strong>Search providers automatically</strong><small>Disabled by default. Manual subtitle search remains available in the player.</small></span>
+            </label>
+          </section>
+
+          <section className="player-settings-group">
+            <h4>Subtitle providers</h4>
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.providers.opensubtitles.enabled} onChange={(event) => updatePlayerProvider('opensubtitles', 'enabled', event.target.checked)} />
+              <span><strong>OpenSubtitles</strong><small>Credentials stay in the backend and are never returned to this page.</small></span>
+            </label>
+            <SecretField
+              label="OpenSubtitles username"
+              value={forms.player.providers.opensubtitles.username}
+              revealed={revealed.playerOpenSubtitlesUsername}
+              onReveal={() => setRevealed((state) => ({ ...state, playerOpenSubtitlesUsername: !state.playerOpenSubtitlesUsername }))}
+              onChange={(value) => updatePlayerProvider('opensubtitles', 'username', value)}
+              placeholder={forms.player.providers.opensubtitles.username_configured ? 'Saved — enter a value to replace' : 'Not configured'}
+            />
+            <SecretField
+              label="OpenSubtitles API key"
+              value={forms.player.providers.opensubtitles.api_key}
+              revealed={revealed.playerOpenSubtitlesKey}
+              onReveal={() => setRevealed((state) => ({ ...state, playerOpenSubtitlesKey: !state.playerOpenSubtitlesKey }))}
+              onChange={(value) => updatePlayerProvider('opensubtitles', 'api_key', value)}
+              placeholder={forms.player.providers.opensubtitles.api_key_configured ? 'Saved — enter a value to replace' : 'Not configured'}
+            />
+            <SecretField
+              label="OpenSubtitles password"
+              value={forms.player.providers.opensubtitles.password}
+              revealed={revealed.playerOpenSubtitlesPassword}
+              onReveal={() => setRevealed((state) => ({ ...state, playerOpenSubtitlesPassword: !state.playerOpenSubtitlesPassword }))}
+              onChange={(value) => updatePlayerProvider('opensubtitles', 'password', value)}
+              placeholder={forms.player.providers.opensubtitles.password_configured ? 'Saved — enter a value to replace' : 'Not configured'}
+            />
+            <label className="settings-checkbox-field">
+              <input type="checkbox" checked={forms.player.providers.subdl.enabled} onChange={(event) => updatePlayerProvider('subdl', 'enabled', event.target.checked)} />
+              <span><strong>SubDL</strong><small>One provider failing will not block the other provider.</small></span>
+            </label>
+            <SecretField
+              label="SubDL API key"
+              value={forms.player.providers.subdl.api_key}
+              revealed={revealed.playerSubdlKey}
+              onReveal={() => setRevealed((state) => ({ ...state, playerSubdlKey: !state.playerSubdlKey }))}
+              onChange={(value) => updatePlayerProvider('subdl', 'api_key', value)}
+              placeholder={forms.player.providers.subdl.api_key_configured ? 'Saved — enter a value to replace' : 'Not configured'}
+            />
+          </section>
+        </div>
+
+        <details className="player-shortcuts">
+          <summary>Keyboard shortcuts</summary>
+          <p>Shortcuts are ignored while a text field is focused. Escape closes the active overlay or exits fullscreen.</p>
+          <div>
+            {Object.entries(forms.player.keyboard_shortcuts || {}).map(([action, shortcut]) => (
+              <label className="dialog-field" key={action}>
+                <span>{playerShortcutLabel(action)}</span>
+                <input value={shortcut} onChange={(event) => updatePlayerShortcut(action, event.target.value)} />
+              </label>
+            ))}
+          </div>
+        </details>
+
+        <SettingsInlineStatus status={statuses.player} />
+        <div className="settings-action-grid">
+          <button type="submit" className="btn btn-primary" disabled={saving['player-save']}>
+            {saving['player-save'] ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Save player
+          </button>
+          <ActionButton loading={saving['player-verify']} icon={ShieldCheck} label="Verify player" onClick={verifyPlayer} />
+          <ActionButton loading={saving['player-reset']} icon={RefreshCcw} label="Reset preferences" onClick={resetPlayer} />
+        </div>
+      </form>
 
       <div className="settings-section-heading">
         <div>
@@ -1449,6 +1867,13 @@ function serviceLabel(service) {
   }[service] || service;
 }
 
+function playerShortcutLabel(action) {
+  return action
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 function SettingsPanelHeader({ icon: Icon, title, label, text }) {
   return (
     <header className="settings-panel-header">
@@ -1501,17 +1926,17 @@ function integrationText(title) {
   }[title] || '';
 }
 
-function SecretField({ label, value, revealed, onReveal, onChange }) {
+function SecretField({ label, value, revealed, onReveal, onChange, placeholder = '' }) {
   return (
-    <label className="dialog-field secret-field">
+    <div className="dialog-field secret-field">
       <span>{label}</span>
       <span className="secret-input-wrap">
-        <input type={revealed ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete="off" />
+        <input aria-label={label} type={revealed ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete="off" placeholder={placeholder} />
         <button type="button" className="secret-toggle" onClick={onReveal} aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}>
           {revealed ? <EyeOff size={15} /> : <Eye size={15} />}
         </button>
       </span>
-    </label>
+    </div>
   );
 }
 
