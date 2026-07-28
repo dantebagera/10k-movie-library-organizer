@@ -1,0 +1,187 @@
+diff --git a/cmake/packages_check.cmake b/cmake/packages_check.cmake
+index acf8ccb..b1302e1 100644
+--- a/cmake/packages_check.cmake
++++ b/cmake/packages_check.cmake
+@@ -37,7 +37,7 @@ if(TARGET_CPU STREQUAL "x86_64")
+     set(openssl_target "mingw64")
+     set(openssl_ec_opt "enable-ec_nistp_64_gcc_128")
+     set(libvpx_target "x86_64-win64-gcc")
+-    set(mpv_gl "-Dgl=enabled -Degl-angle=enabled")
++    set(mpv_gl "-Dgl=enabled -Degl-angle=disabled")
+     set(xxhash_dispatch "-DDISPATCH=ON")
+     set(xxhash_cflags "-DXXH_X86DISPATCH_ALLOW_AVX=1")
+     set(nvcodec_headers "nvcodec-headers")
+diff --git a/packages/ffmpeg.cmake b/packages/ffmpeg.cmake
+index 252c687..6d4ca20 100644
+--- a/packages/ffmpeg.cmake
++++ b/packages/ffmpeg.cmake
+@@ -1,8 +1,6 @@
+ ExternalProject_Add(ffmpeg
+     DEPENDS
+         amf-headers
+-        avisynth-headers
+-        ${nvcodec_headers}
+         bzip2
+         lame
+         lcms2
+@@ -11,8 +9,6 @@ ExternalProject_Add(ffmpeg
+         libsrt
+         libass
+         libbluray
+-        libdvdnav
+-        libdvdread
+         libmodplug
+         libpng
+         libsoxr
+@@ -26,14 +22,10 @@ ExternalProject_Add(ffmpeg
+         opus
+         speex
+         vorbis
+-        x264
+-        ${ffmpeg_x265}
+-        xvidcore
+         libxml2
+         libvpl
+         libopenmpt
+         libjxl
+-        shaderc
+         libplacebo
+         libzvbi
+         libaribcaption
+@@ -42,8 +34,6 @@ ExternalProject_Add(ffmpeg
+         dav1d
+         vapoursynth
+         ${ffmpeg_uavs3d}
+-        ${ffmpeg_davs2}
+-        rubberband
+         libva
+         openal-soft
+     GIT_REPOSITORY https://github.com/FFmpeg/FFmpeg.git
+@@ -59,14 +49,11 @@ ExternalProject_Add(ffmpeg
+         --pkg-config-flags=--static
+         --enable-cross-compile
+         --enable-runtime-cpudetect
+-        --enable-gpl
++        --disable-gpl
+         --enable-version3
+-        --enable-avisynth
+         --enable-vapoursynth
+         --enable-libass
+         --enable-libbluray
+-        --enable-libdvdnav
+-        --enable-libdvdread
+         --enable-libfreetype
+         --enable-libfribidi
+         --enable-libfontconfig
+@@ -80,17 +67,12 @@ ExternalProject_Add(ffmpeg
+         --enable-libspeex
+         --enable-libvorbis
+         --enable-libbs2b
+-        --enable-librubberband
+         --enable-libvpx
+         --enable-libwebp
+-        --enable-libx264
+-        --enable-libx265
+         --enable-libaom
+         --enable-libsvtav1
+         --enable-libdav1d
+-        ${ffmpeg_davs2_cmd}
+         ${ffmpeg_uavs3d_cmd}
+-        --enable-libxvid
+         --enable-libzimg
+         --enable-openssl
+         --enable-libxml2
+@@ -100,10 +82,8 @@ ExternalProject_Add(ffmpeg
+         --enable-libvpl
+         --enable-libjxl
+         --enable-libplacebo
+-        --enable-libshaderc
+         --enable-libzvbi
+         --enable-libaribcaption
+-        ${ffmpeg_cuda}
+         --enable-amf
+         --enable-openal
+         --enable-opengl
+diff --git a/packages/mpv.cmake b/packages/mpv.cmake
+index 51920c9..6505f22 100644
+--- a/packages/mpv.cmake
++++ b/packages/mpv.cmake
+@@ -6,16 +6,11 @@ ExternalProject_Add(mpv
+         lcms2
+         libarchive
+         libass
+-        libdvdnav
+-        libdvdread
+         libiconv
+         libjpeg
+         libpng
+-        luajit
+-        rubberband
+         uchardet
+         openal-soft
+-        mujs
+         vulkan
+         shaderc
+         libplacebo
+@@ -40,15 +35,16 @@ ExternalProject_Add(mpv
+         -Db_lto=true
+         ${mpv_lto_mode}
+         -Dlibmpv=true
+-        -Dpdf-build=enabled
+-        -Dlua=enabled
+-        -Djavascript=enabled
++        -Dgpl=false
++        -Dpdf-build=disabled
++        -Dlua=disabled
++        -Djavascript=disabled
+         -Dsdl2-gamepad=enabled
+         -Dlibarchive=enabled
+         -Dlibbluray=enabled
+-        -Ddvdnav=enabled
++        -Ddvdnav=disabled
+         -Duchardet=enabled
+-        -Drubberband=enabled
++        -Drubberband=disabled
+         -Dlcms2=enabled
+         -Dopenal=enabled
+         -Dspirv-cross=enabled
+@@ -73,7 +69,6 @@ ExternalProject_Add_Step(mpv copy-binary
+     DEPENDEES strip-binary
+     COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/mpv.exe                           ${CMAKE_CURRENT_BINARY_DIR}/mpv-package/mpv.exe
+     COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/mpv.com                           ${CMAKE_CURRENT_BINARY_DIR}/mpv-package/mpv.com
+-    COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/mpv.pdf                           ${CMAKE_CURRENT_BINARY_DIR}/mpv-package/doc/manual.pdf
+     COMMAND ${CMAKE_COMMAND} -E copy ${MINGW_INSTALL_PREFIX}/etc/fonts/fonts.conf   ${CMAKE_CURRENT_BINARY_DIR}/mpv-package/mpv/fonts.conf
+     ${mpv_copy_debug}
+     COMMAND ${CMAKE_COMMAND} -E copy <BINARY_DIR>/libmpv-2.dll          ${CMAKE_CURRENT_BINARY_DIR}/mpv-dev/libmpv-2.dll
+diff --git a/packages/spirv-cross.cmake b/packages/spirv-cross.cmake
+index d49b9d3..d6d4b0a 100644
+--- a/packages/spirv-cross.cmake
++++ b/packages/spirv-cross.cmake
+@@ -3,7 +3,7 @@ ExternalProject_Add(spirv-cross
+     SOURCE_DIR ${SOURCE_LOCATION}
+     GIT_CLONE_FLAGS "--filter=tree:0"
+     GIT_REMOTE_NAME origin
+-    GIT_TAG main
++    GIT_TAG 146679ff8255a6068518685599d7fb8761d1b570
+     UPDATE_COMMAND ""
+     PATCH_COMMAND ${EXEC} git am --3way ${CMAKE_CURRENT_SOURCE_DIR}/spirv-cross-*.patch
+     CONFIGURE_COMMAND ${EXEC} CONF=1 cmake -H<SOURCE_DIR> -B<BINARY_DIR>
+@@ -31,2 +31 @@
+ force_rebuild_git(spirv-cross)
+-cleanup(spirv-cross install)
+diff --git a/packages/vulkan.cmake b/packages/vulkan.cmake
+index d868473..d4505ca 100644
+--- a/packages/vulkan.cmake
++++ b/packages/vulkan.cmake
+@@ -5,7 +5,7 @@ ExternalProject_Add(vulkan
+     GIT_CLONE_FLAGS "--filter=tree:0"
+     UPDATE_COMMAND ""
+     GIT_REMOTE_NAME origin
+-    GIT_TAG main
++    GIT_TAG 1338b8ee2ad29446297e7368370eecabd4890bec
+     PATCH_COMMAND ${EXEC} git am --3way ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-*.patch
+     CONFIGURE_COMMAND ${EXEC} CONF=1 cmake -H<SOURCE_DIR> -B<BINARY_DIR>
+         -G Ninja
+@@ -30,2 +30 @@
+ force_rebuild_git(vulkan)
+-cleanup(vulkan install)

@@ -1,0 +1,55 @@
+{
+  "schema": "cp-player-phase0-runtime-lock-v2",
+  "purpose": "Audited Phase 0 runtime candidate; production packaging still requires the complete source, relinking, notices, and license bundle.",
+  "qt": {
+    "version": "6.10.3",
+    "architecture": "win64_msvc2022_64",
+    "source": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/",
+    "verification": "aqtinstall 3.3.0 verified the official repository archive hashes",
+    "license": "LGPL-3.0-only or commercial, module dependent",
+    "production_disposition": "accepted_dynamic_link_candidate",
+    "remaining_obligations": "Inventory deployed modules and provide complete notices, corresponding source or offer, and relinking instructions."
+  },
+  "libmpv": {
+    "build_recipe": {
+      "repository": "https://github.com/shinchiro/mpv-winbuild-cmake.git",
+      "tag": "20260610",
+      "revision": "5efd298cb51513c2410e4e9029b5e56b83c2aaac",
+      "patch": "runtime/mpv-winbuild-cmake-lgpl.patch"
+    },
+    "mpv_git_revision": "48e6c35c0e056d9e4ff04b98e012416697736d8a",
+    "ffmpeg_git_revision": "c6309b5c63add7ad0ec221fafefc32bdcd6f8b91",
+    "libplacebo_git_revision": "4c426e466814536def653cb23f1d1c287ea7a7f5",
+    "vulkan_loader_base_revision": "1338b8ee2ad29446297e7368370eecabd4890bec",
+    "spirv_cross_base_revision": "146679ff8255a6068518685599d7fb8761d1b570",
+    "build_environment": {
+      "distribution": "Ubuntu 22.04 under WSL2",
+      "target": "x86_64-w64-mingw32",
+      "cpu_baseline": "x86-64",
+      "cross_compiler": "GCC 14.3.1 20251205",
+      "cmake": "3.31.10",
+      "meson": "1.11.2"
+    },
+    "configuration": {
+      "mpv": "-Dgpl=false -Dlibmpv=true -Dlua=disabled -Djavascript=disabled -Ddvdnav=disabled -Drubberband=disabled",
+      "ffmpeg": "--disable-gpl --enable-version3",
+      "removed_gpl_or_unused_dependencies": [
+        "avisynth",
+        "libdavs2",
+        "libdvdnav",
+        "libdvdread",
+        "librubberband",
+        "libx264",
+        "libx265",
+        "libxvid"
+      ]
+    },
+    "dll_name": "libmpv-2.dll",
+    "dll_size": 114018318,
+    "dll_sha256": "0A76BD542BBA2D85ABEFCC7CD1005269085E1B5815B4E8BAEC62FF4EA4246675",
+    "mpv_license": "LGPL-2.1-or-later with gpl=false",
+    "ffmpeg_license_probe": "GNU Lesser General Public License version 3 or later",
+    "production_disposition": "accepted_phase0_candidate",
+    "runtime_verification": "H.264, HEVC 10-bit HDR headers, AAC, AC-3, DTS, TrueHD, SRT, ASS, external SRT, and HDMV PGS passed in the Qt 6.10.3 desktop matrix."
+  }
+}
