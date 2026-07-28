@@ -105,6 +105,30 @@ class PlayerProtocolTests(unittest.TestCase):
         with self.assertRaises(PlayerProtocolError):
             validate_message({**load, "media": {"path": "E:\\Movies\\Movie.mkv"}})
 
+    def test_resume_choice_is_bounded_to_resume_or_restart(self):
+        self.assertEqual(
+            validate_message(message("resume.choice", choice="resume"))["choice"],
+            "resume",
+        )
+        self.assertEqual(
+            validate_message(message("resume.choice", choice="restart"))["choice"],
+            "restart",
+        )
+        with self.assertRaises(PlayerProtocolError):
+            validate_message(message("resume.choice", choice="skip"))
+
+    def test_playback_settings_bounds_subtitle_delay(self):
+        self.assertEqual(
+            validate_message(
+                message("playback.settings", subtitle_delay_ms=-250)
+            )["subtitle_delay_ms"],
+            -250,
+        )
+        with self.assertRaises(PlayerProtocolError):
+            validate_message(
+                message("playback.settings", subtitle_delay_ms=4_000_000)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

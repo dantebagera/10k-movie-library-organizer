@@ -42,6 +42,7 @@ from services.player_catalog import resolve_library_media
 from services.player_manager import PlayerManager
 from services.player_routes import register_player_routes
 from services.player_runtime import PlayerRuntime
+from services.playback_history import PlaybackHistoryService, PlaybackHistoryStore
 from services.metadata_migration import MetadataMigrationCoordinator
 from services.identity_audit import IdentityAuditCoordinator
 from services.identity_decision import (
@@ -207,6 +208,14 @@ except (OSError, ValueError):
     _APP_VERSION = ''
 _player_config = PlayerConfig(_cfg.get('player'))
 _player_runtime = PlayerRuntime(Path(_BASE_DIR, 'runtime', 'player'), _APP_VERSION)
+_playback_history_store = PlaybackHistoryStore(
+    lambda: _catalog_repository().store,
+)
+_playback_history = PlaybackHistoryService(
+    _playback_history_store,
+    _player_config,
+    lambda: _curation_store(),
+)
 _player_manager = PlayerManager(
     _player_config,
     _player_runtime,
@@ -215,6 +224,7 @@ _player_manager = PlayerManager(
         path_key,
         get_movies_dirs(),
     ),
+    playback_history=_playback_history,
 )
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1
@@ -341,6 +351,7 @@ register_player_routes(
     _player_config,
     _player_runtime,
     _player_manager,
+    _playback_history,
     lambda: _save_config(_all_config()),
 )
 _plex_cache     = {}   # _norm(file_path) -> {plex_title, plex_year, plex_genres}

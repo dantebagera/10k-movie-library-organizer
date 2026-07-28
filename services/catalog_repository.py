@@ -392,6 +392,18 @@ class CatalogRepository:
                 self.store.canonical.rebuild(connection)
             else:
                 self.store.canonical.sync_changes(connection, name)
+            if name == "app_metadata/files.json":
+                connection.execute("""
+                    DELETE FROM playback_history
+                    WHERE path_key NOT IN (SELECT path_key FROM media_files)
+                """)
+            if name in {
+                "app_metadata/files.json",
+                "app_metadata/tmdb_metadata.json",
+                "app_metadata/plex_metadata.json",
+                "app_metadata/manual_matches.json",
+            }:
+                self._sync_playback_movie_keys(connection)
             self._bump_generation(connection, (name,))
             self._cache.pop(name, None)
         self.schedule_export(name)
@@ -466,6 +478,16 @@ class CatalogRepository:
             for key, record in records.items():
                 self._upsert_record(connection, name, key, record)
             self.store.canonical.sync_changes(connection, name, records.keys())
+            if name in {
+                "app_metadata/files.json",
+                "app_metadata/tmdb_metadata.json",
+                "app_metadata/plex_metadata.json",
+                "app_metadata/manual_matches.json",
+            }:
+                self._sync_playback_movie_keys(
+                    connection,
+                    None if name == "app_metadata/tmdb_metadata.json" else records.keys(),
+                )
             self._bump_generation(connection, (name,))
             self._cache.pop(name, None)
         self.schedule_export(name)
@@ -544,11 +566,25 @@ class CatalogRepository:
             cursor = connection.execute(
                 f"DELETE FROM {table} WHERE {key_column} IN ({placeholders})", keys
             )
+            if name == "app_metadata/files.json":
+                connection.execute(
+                    f"DELETE FROM playback_history WHERE path_key IN ({placeholders})",
+                    keys,
+                )
             if name in {"app_metadata/plex_metadata.json", "app_metadata/manual_matches.json"}:
                 for key in keys:
                     connection.execute("DELETE FROM media_identity_keys WHERE path_key = ?", (key,))
                     self.store._import_media_identity_keys(connection, key)
             self.store.canonical.sync_changes(connection, name, keys)
+            if name in {
+                "app_metadata/plex_metadata.json",
+                "app_metadata/manual_matches.json",
+                "app_metadata/tmdb_metadata.json",
+            }:
+                self._sync_playback_movie_keys(
+                    connection,
+                    None if name == "app_metadata/tmdb_metadata.json" else keys,
+                )
             self._bump_generation(connection, (name,))
             self._cache.pop(name, None)
             changed = cursor.rowcount
@@ -600,6 +636,11 @@ class CatalogRepository:
                 )
                 changed_documents.add(name)
             self.store.canonical.rebuild(connection)
+            connection.execute(
+                "UPDATE playback_history SET path_key=? WHERE path_key=?",
+                (new_key, old_key),
+            )
+            self._sync_playback_movie_keys(connection, (new_key,))
             self._bump_generation(connection, changed_documents)
             for name in changed_documents:
                 self._cache.pop(name, None)
@@ -626,6 +667,10 @@ class CatalogRepository:
             removed = connection.execute(
                 f"DELETE FROM media_files WHERE path_key IN ({placeholders})", path_keys
             ).rowcount
+            connection.execute(
+                f"DELETE FROM playback_history WHERE path_key IN ({placeholders})",
+                path_keys,
+            )
             connection.execute(f"DELETE FROM plex_files WHERE path_key IN ({placeholders})", path_keys)
             connection.execute(f"DELETE FROM manual_matches WHERE path_key IN ({placeholders})", path_keys)
             connection.execute(
@@ -656,6 +701,27 @@ class CatalogRepository:
         for name in changed_documents:
             self.schedule_export(name)
         return removed
+
+    @staticmethod
+    def _sync_playback_movie_keys(connection, path_keys=None):
+        path_keys = [str(key) for key in (path_keys or []) if str(key)]
+        where = ""
+        parameters = ()
+        if path_keys:
+            placeholders = ",".join("?" for _ in path_keys)
+            where = f" WHERE path_key IN ({placeholders})"
+            parameters = tuple(path_keys)
+        connection.execute(
+            """
+            UPDATE playback_history
+            SET movie_key=(
+                SELECT movie_key
+                FROM canonical_movie_files
+                WHERE canonical_movie_files.path_key=playback_history.path_key
+            )
+            """ + where,
+            parameters,
+        )
 
     def schedule_export(self, name):
         if not self.auto_export:

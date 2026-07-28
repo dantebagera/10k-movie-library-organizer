@@ -229,6 +229,87 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('false');
 });
 
+test('Continue Watching uses compact uncropped posters and centralized resume restart remove actions', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  const poster = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="#18181b"/><circle cx="300" cy="350" r="170" fill="#d4af37"/><text x="300" y="720" text-anchor="middle" fill="white" font-size="60">CP</text></svg>'
+  );
+  const items = Array.from({ length: 10 }, (_, index) => ({
+    path_key: `e:\\movies\\continue-${index}.mkv`,
+    movie_key: `tmdb:${1000 + index}`,
+    title: `Continue Movie ${index + 1}`,
+    year: '2026',
+    poster_url: poster,
+    position_ms: 300000,
+    duration_ms: 600000,
+    progress: 0.5,
+    remaining_seconds: 300,
+    last_played_at: 1000 - index
+  }));
+  let visibleItems = [...items];
+  const playRequests = [];
+  const clearRequests = [];
+
+  await page.route('**/api/player/continue-watching**', (route) => route.fulfill({
+    json: { items: visibleItems }
+  }));
+  await page.route('**/api/player/play', async (route) => {
+    playRequests.push(route.request().postDataJSON());
+    await route.fulfill({ json: { ok: true, mode: 'built_in', fallback: false } });
+  });
+  await page.route('**/api/player/progress/clear', async (route) => {
+    const payload = route.request().postDataJSON();
+    clearRequests.push(payload);
+    visibleItems = visibleItems.filter((item) => item.path_key !== payload.path_key);
+    await route.fulfill({ json: { ok: true, removed: true } });
+  });
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  const rail = page.getByRole('region', { name: 'Continue Watching movies' });
+  await expect(page.getByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  await expect(rail.locator('.continue-movie-card')).toHaveCount(10);
+  const posterImage = rail.locator('.continue-movie-poster img').first();
+  await expect(posterImage).toHaveCSS('object-fit', 'contain');
+  await expect(rail.locator('.continue-movie-card').first()).toHaveCSS('width', '156px');
+  await expect(rail.locator('.continue-movie-poster').first()).toHaveCSS('height', '234px');
+
+  const expandedComplete = await rail.evaluate((viewport) => {
+    const right = viewport.getBoundingClientRect().right;
+    return [...viewport.querySelectorAll('.continue-movie-card')]
+      .filter((card) => card.getBoundingClientRect().right <= right + 0.5).length;
+  });
+  expect(expandedComplete).toBeGreaterThanOrEqual(8);
+  expect(expandedComplete).toBeLessThanOrEqual(9);
+  if (process.env.CP_E2E_EVIDENCE_PATH) {
+    await page.screenshot({
+      path: process.env.CP_E2E_EVIDENCE_PATH,
+      fullPage: true
+    });
+  }
+
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  const collapsedComplete = await rail.evaluate((viewport) => {
+    const right = viewport.getBoundingClientRect().right;
+    return [...viewport.querySelectorAll('.continue-movie-card')]
+      .filter((card) => card.getBoundingClientRect().right <= right + 0.5).length;
+  });
+  expect(collapsedComplete).toBeGreaterThanOrEqual(9);
+
+  await page.getByRole('button', { name: 'Play Continue Movie 1', exact: true }).click();
+  await expect.poll(() => playRequests.length).toBe(1);
+  expect(playRequests[0]).toEqual({ path_key: items[0].path_key, restart: false });
+
+  await rail.locator('.continue-movie-card').first().locator('.continue-movie-menu summary').click();
+  await page.getByRole('button', { name: 'Restart' }).click();
+  await expect.poll(() => playRequests.length).toBe(2);
+  expect(playRequests[1]).toEqual({ path_key: items[0].path_key, restart: true });
+
+  await rail.locator('.continue-movie-card').nth(1).locator('.continue-movie-menu summary').click();
+  await rail.locator('.continue-movie-card').nth(1).getByRole('button', { name: 'Remove' }).click();
+  await expect.poll(() => clearRequests.length).toBe(1);
+  await expect(rail.locator('.continue-movie-card')).toHaveCount(9);
+});
+
 test('Downloads shows qBittorrent without migration-only review records', async ({ page }) => {
   await page.goto('/downloads', { waitUntil: 'domcontentloaded' });
 
@@ -458,7 +539,10 @@ test('local Library playback uses the centralized player route without changing 
   await movieCard.click();
   await movieCard.getByRole('button', { name: 'Play', exact: true }).click();
 
-  await expect.poll(() => localPlaybackRequest).toEqual({ path_key: parityLibraryItem.path });
+  await expect.poll(() => localPlaybackRequest).toEqual({
+    path_key: parityLibraryItem.path,
+    restart: false
+  });
   expect(streamingRequestCount).toBe(0);
   await expect(page.getByText('Playing in Cinema Paradiso Player', { exact: true })).toBeVisible();
 });

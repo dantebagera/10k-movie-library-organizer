@@ -1,4 +1,4 @@
-import { ChevronDown, Film, Play, Star } from 'lucide-react';
+import { ChevronDown, Film, MoreHorizontal, Play, RotateCcw, Star, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 function cx(...classes) {
@@ -203,6 +203,69 @@ export function UnifiedMovieCard({
           {expandedFooter}
         </div>
       ) : null}
+    </article>
+  );
+}
+
+export function ContinueMovieCard({
+  title,
+  posterUrl,
+  progress = 0,
+  remainingLabel,
+  onResume,
+  onRestart,
+  onRemove
+}) {
+  const displayTitle = title || 'Untitled';
+  const boundedProgress = Math.max(0, Math.min(1, Number(progress) || 0));
+
+  return (
+    <article className="continue-movie-card">
+      <UnifiedMoviePoster
+        title={displayTitle}
+        posterUrl={posterUrl}
+        className="continue-movie-poster"
+        showPlayOverlay
+        onPlay={onResume}
+      >
+        <details className="continue-movie-menu" onClick={stopCardToggle}>
+          <summary role="button" aria-label={`More options for ${displayTitle}`} title="More options">
+            <MoreHorizontal size={17} />
+          </summary>
+          <div>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open');
+                onRestart();
+              }}
+            >
+              <RotateCcw size={14} /> Restart
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.currentTarget.closest('details')?.removeAttribute('open');
+                onRemove();
+              }}
+            >
+              <X size={14} /> Remove
+            </button>
+          </div>
+        </details>
+      </UnifiedMoviePoster>
+      <div
+        className="continue-movie-progress"
+        role="progressbar"
+        aria-label={`${displayTitle} playback progress`}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(boundedProgress * 100)}
+      >
+        <span style={{ width: `${boundedProgress * 100}%` }} />
+      </div>
+      <h3 dir="auto" title={displayTitle}>{displayTitle}</h3>
+      <p>{remainingLabel}</p>
     </article>
   );
 }

@@ -1,13 +1,13 @@
 import {
-  AlertTriangle, Bell, Film, HardDrive, Link as LinkIcon, Loader2, MonitorPlay,
+  AlertTriangle, Bell, ChevronLeft, ChevronRight, Film, HardDrive, Link as LinkIcon, Loader2, MonitorPlay,
   Play, ScanSearch, Search, Sparkles, Trash2, Wand2, X
 } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import headerCropUrl from '../../assets/header.png';
 import Rating from '../../components/Rating.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import { OwnedFileDetailsButton, PosterEditButton, PosterStateControls } from '../../components/SharedMovieCards.jsx';
-import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
+import { ContinueMovieCard, UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
 import { cx, formatCount, movieKey, sortFollowedReleases } from '../../utils/appUtils.js';
 import { canonicalOwnedMovie, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
 import { getQualityLabel } from '../../utils/libraryUtils.js';
@@ -37,7 +37,11 @@ export default function HomeWorkspace(props) {
     userLists,
     onToggleSystemList,
     onEditPoster,
-    onOpenFileDetails
+    onOpenFileDetails,
+    continueWatching = [],
+    onResumeWatching,
+    onRestartWatching,
+    onRemoveWatching
   } = props;
   const [releaseDrawerOpen, setReleaseDrawerOpen] = useState(false);
 
@@ -55,6 +59,15 @@ export default function HomeWorkspace(props) {
           </p>
         </div>
       </section>
+
+      {continueWatching.length > 0 && (
+        <ContinueWatchingRail
+          items={continueWatching}
+          onResume={onResumeWatching}
+          onRestart={onRestartWatching}
+          onRemove={onRemoveWatching}
+        />
+      )}
 
       <HealthPanel stats={stats} loading={loading.stats} onOpenCleanup={onOpenCleanup} />
       <ReleasePanel
@@ -144,6 +157,68 @@ export default function HomeWorkspace(props) {
         />
       )}
     </div>
+  );
+}
+
+function remainingLabel(seconds) {
+  const minutes = Math.max(1, Math.ceil((Number(seconds) || 0) / 60));
+  if (minutes < 60) return `${minutes} min remaining`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} hr ${remainder} min remaining` : `${hours} hr remaining`;
+}
+
+function ContinueWatchingRail({ items, onResume, onRestart, onRemove }) {
+  const viewportRef = useRef(null);
+
+  function scrollBy(direction) {
+    viewportRef.current?.scrollBy({ left: direction * 680, behavior: 'smooth' });
+  }
+
+  function handleWheel(event) {
+    if (!viewportRef.current || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.preventDefault();
+    viewportRef.current.scrollLeft += event.deltaY;
+  }
+
+  return (
+    <section className="continue-watching-panel" aria-labelledby="continue-watching-heading">
+      <div className="section-heading">
+        <div>
+          <p className="screen-kicker">Your screening room</p>
+          <h3 id="continue-watching-heading">Continue Watching</h3>
+        </div>
+        <div className="continue-watching-controls">
+          <button type="button" onClick={() => scrollBy(-1)} aria-label="Scroll Continue Watching left">
+            <ChevronLeft size={18} />
+          </button>
+          <button type="button" onClick={() => scrollBy(1)} aria-label="Scroll Continue Watching right">
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+      <div
+        className="continue-watching-viewport"
+        ref={viewportRef}
+        onWheel={handleWheel}
+        tabIndex="0"
+        role="region"
+        aria-label="Continue Watching movies"
+      >
+        {items.map((item) => (
+          <ContinueMovieCard
+            key={item.path_key}
+            title={item.title}
+            posterUrl={item.poster_url}
+            progress={item.progress}
+            remainingLabel={remainingLabel(item.remaining_seconds)}
+            onResume={() => onResume(item)}
+            onRestart={() => onRestart(item)}
+            onRemove={() => onRemove(item)}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 

@@ -82,7 +82,8 @@ class CatalogSchemaV9Test(unittest.TestCase):
         tables = [
             row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                "AND name <> 'playback_history' ORDER BY name"
             )
         ]
         return {
@@ -117,8 +118,8 @@ class CatalogSchemaV9Test(unittest.TestCase):
                 }
             finally:
                 connection.close()
-        self.assertEqual(CATALOG_SCHEMA_VERSION, 9)
-        self.assertEqual(version, 9)
+        self.assertEqual(CATALOG_SCHEMA_VERSION, 10)
+        self.assertEqual(version, 10)
         self.assertEqual(columns, MEDIA_FILE_V9_COLUMNS)
         self.assertIn("idx_media_files_facts_stale", indexes)
 
@@ -154,7 +155,7 @@ class CatalogSchemaV9Test(unittest.TestCase):
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])
         self.assertEqual(store.last_migration_report["from_version"], 8)
-        self.assertEqual(store.last_migration_report["to_version"], 9)
+        self.assertEqual(store.last_migration_report["to_version"], 10)
 
     def test_each_v9_failure_checkpoint_rolls_back_schema_and_all_data(self):
         checkpoints = (
@@ -278,6 +279,7 @@ class CatalogSchemaV9Test(unittest.TestCase):
                 connection.close()
             with (
                 patch.object(store, "_migrate_v8_to_v9") as migration,
+                patch.object(store, "_migrate_v9_to_v10") as playback_migration,
                 patch("services.media_file_facts.probe_media_file") as probe,
             ):
                 store.initialize()
@@ -287,6 +289,7 @@ class CatalogSchemaV9Test(unittest.TestCase):
             finally:
                 connection.close()
         migration.assert_not_called()
+        playback_migration.assert_not_called()
         probe.assert_not_called()
         self.assertEqual(before, after)
         self.assertIsNone(store.last_migration_report)

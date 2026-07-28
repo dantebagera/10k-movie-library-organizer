@@ -18,6 +18,8 @@ class PlayerBridge final : public QObject
     Q_PROPERTY(QString connectionStatus READ connectionStatus NOTIFY connectionStatusChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectionStatusChanged)
     Q_PROPERTY(QVariantMap shortcuts READ shortcuts NOTIFY preferencesChanged)
+    Q_PROPERTY(bool resumeDecisionPending READ resumeDecisionPending NOTIFY resumeChanged)
+    Q_PROPERTY(qint64 resumePositionMs READ resumePositionMs NOTIFY resumeChanged)
 
 public:
     explicit PlayerBridge(QObject *parent = nullptr);
@@ -28,6 +30,8 @@ public:
     QString connectionStatus() const;
     bool connected() const;
     QVariantMap shortcuts() const;
+    bool resumeDecisionPending() const;
+    qint64 resumePositionMs() const;
 
     bool configurationValid() const;
     QString configurationError() const;
@@ -36,11 +40,14 @@ public:
 
     Q_INVOKABLE void requestClose();
     Q_INVOKABLE void requestSubtitleSearch();
+    Q_INVOKABLE void chooseResume();
+    Q_INVOKABLE void chooseRestart();
 
 signals:
     void mediaChanged();
     void connectionStatusChanged();
     void preferencesChanged();
+    void resumeChanged();
     void closeWindowRequested();
 
 private slots:
@@ -54,6 +61,7 @@ private slots:
     void handlePausedChanged();
     void handleTracksChanged();
     void sendProgress();
+    void sendPlaybackSettings();
 
 private:
     static constexpr int ProtocolVersion = 1;
@@ -79,9 +87,13 @@ private:
     quint64 m_sendSequence = 1;
     quint64 m_lastReceivedSequence = 0;
     double m_resumeSeconds = 0.0;
+    bool m_resumeDecisionPending = false;
     QString m_title;
     QString m_year;
     QString m_posterReference;
+    QString m_audioTrackFingerprint;
+    QString m_subtitleTrackFingerprint;
+    double m_subtitleDelaySeconds = 0.0;
     QString m_connectionStatus = QStringLiteral("Preparing secure player session");
     QVariantMap m_shortcuts;
     bool m_loadAccepted = false;

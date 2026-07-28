@@ -271,6 +271,7 @@ function ArchiveApp() {
   const [libraryFilterRequest, setLibraryFilterRequest] = useState(null);
   const [libraryFileRequest, setLibraryFileRequest] = useState(null);
   const [homeLists, setHomeLists] = useState([]);
+  const [continueWatching, setContinueWatching] = useState([]);
   const workspaceRef = useRef(null);
   const activeSectionRef = useRef(activeSection);
   const sectionScrollPositionsRef = useRef({});
@@ -350,6 +351,22 @@ function ArchiveApp() {
     window.addEventListener('cp-curation-changed', loadHomeLists);
     return () => window.removeEventListener('cp-curation-changed', loadHomeLists);
   }, [loadHomeLists]);
+
+  const loadContinueWatching = useCallback(async () => {
+    try {
+      const data = await fetchJson('/api/player/continue-watching?limit=50');
+      setContinueWatching(data.items || []);
+    } catch {
+      // Playback history is optional while the OS player remains selected.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection !== 'home') return undefined;
+    loadContinueWatching();
+    const timer = window.setInterval(loadContinueWatching, 15000);
+    return () => window.clearInterval(timer);
+  }, [activeSection, loadContinueWatching]);
 
   async function toggleHomeSystemList(systemType, movie, owned) {
     const payload = discoverMoviePayload(movie, owned);
@@ -646,13 +663,14 @@ function ArchiveApp() {
     }
   }
 
-  async function playLocal(path) {
+  async function playLocal(path, options = {}) {
     try {
       const result = await fetchJson('/api/player/play', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path_key: path })
+        body: JSON.stringify({ path_key: path, restart: Boolean(options.restart) })
       });
+      if (options.restart) await loadContinueWatching();
       notify(
         result.fallback
           ? 'Cinema Paradiso Player was unavailable. Opened the OS player.'
@@ -661,8 +679,24 @@ function ArchiveApp() {
             : 'Opening in the OS player',
         result.fallback ? 'neutral' : 'success'
       );
+      return result;
     } catch (error) {
       notify(`Could not play file: ${error.message}`, 'error');
+      return null;
+    }
+  }
+
+  async function removeContinueWatching(item) {
+    try {
+      await fetchJson('/api/player/progress/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path_key: item.path_key })
+      });
+      setContinueWatching((current) => current.filter((entry) => entry.path_key !== item.path_key));
+      notify(`${item.title} removed from Continue Watching`, 'neutral');
+    } catch (error) {
+      notify(`Could not remove progress: ${error.message}`, 'error');
     }
   }
 
@@ -830,8 +864,12 @@ function ArchiveApp() {
               userLists={homeLists}
               onToggleSystemList={toggleHomeSystemList}
               onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
-              onOpenFileDetails={openOwnedFileDetails}
-              />
+               onOpenFileDetails={openOwnedFileDetails}
+               continueWatching={continueWatching}
+               onResumeWatching={(item) => playLocal(item.path_key)}
+               onRestartWatching={(item) => playLocal(item.path_key, { restart: true })}
+               onRemoveWatching={removeContinueWatching}
+               />
             </Suspense>
           </div>
         )}

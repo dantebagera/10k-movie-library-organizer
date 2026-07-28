@@ -126,7 +126,7 @@ class MediaAssetServiceTest(unittest.TestCase):
         finally:
             connection.close()
 
-        self.assertEqual(schema, 9)
+        self.assertEqual(schema, 10)
         self.assertEqual(after, before)
         self.assertEqual(self.repository.generation("media"), generation)
 

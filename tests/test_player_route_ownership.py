@@ -14,7 +14,10 @@ class PlayerRouteOwnershipTests(unittest.TestCase):
 
     def test_one_frontend_local_play_action_owns_player_route(self):
         self.assertEqual(self.app_source.count("'/api/player/play'"), 1)
-        self.assertIn("body: JSON.stringify({ path_key: path })", self.app_source)
+        self.assertIn(
+            "body: JSON.stringify({ path_key: path, restart: Boolean(options.restart) })",
+            self.app_source,
+        )
         self.assertNotIn("'/api/open-file'", self.app_source)
         self.assertNotIn("@app.route('/api/open-file'", self.backend)
 

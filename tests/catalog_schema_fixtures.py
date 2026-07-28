@@ -1,6 +1,20 @@
 from services.catalog_store import MEDIA_FILE_FACT_COLUMNS
 
 
+def drop_v10_playback_history(connection):
+    connection.execute("DROP INDEX IF EXISTS idx_playback_history_movie")
+    connection.execute("DROP INDEX IF EXISTS idx_playback_history_recent")
+    connection.execute("DROP TABLE IF EXISTS playback_history")
+
+
+def downgrade_catalog_to_v9(store):
+    with store.transaction() as connection:
+        drop_v10_playback_history(connection)
+        connection.execute(
+            "UPDATE catalog_meta SET value='9' WHERE key='schema_version'"
+        )
+
+
 def downgrade_media_files_to_v8(connection):
     """Remove version 9 file-facts columns from an isolated fixture."""
     columns = {
@@ -20,6 +34,7 @@ def downgrade_media_files_to_v8(connection):
 
 def downgrade_catalog_to_v8(store):
     with store.transaction() as connection:
+        drop_v10_playback_history(connection)
         downgrade_media_files_to_v8(connection)
         connection.execute(
             "UPDATE catalog_meta SET value='8' WHERE key='schema_version'"
@@ -29,6 +44,7 @@ def downgrade_catalog_to_v8(store):
 def downgrade_catalog_to_v7(store):
     """Turn an isolated version 9 fixture into the exact version 7 relation shape."""
     with store.transaction() as connection:
+        drop_v10_playback_history(connection)
         downgrade_media_files_to_v8(connection)
         connection.execute("DROP TABLE movie_keywords")
         connection.execute("DROP TABLE keywords")

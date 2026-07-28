@@ -13,6 +13,7 @@ from services.player_protocol import (
 )
 from services.player_runtime import PlayerRuntimeError
 from services.player_windows_pipe import WindowsNamedPipeServer
+from services.playback_history import PlaybackHistoryError
 
 
 PLAYER_STARTUP_TIMEOUT_SECONDS = 10
@@ -57,15 +58,24 @@ def launch_player_process(executable, environment):
 
 
 class PlayerSession:
-    def __init__(self, session_id, process, transport, on_event):
+    def __init__(
+        self,
+        session_id,
+        process,
+        transport,
+        on_event,
+        playback_context=None,
+    ):
         self.session_id = session_id
         self.process = process
         self.transport = transport
         self.on_event = on_event
+        self.playback_context = playback_context
         self.last_sequence = 0
         self.closed = threading.Event()
         self._send_sequence = 1
         self._reader = None
+        self._closed_event_received = False
 
     def send(self, message_type, **payload):
         message = {
@@ -102,10 +112,22 @@ class PlayerSession:
                 self.last_sequence = sequence
                 self.on_event(self, validated)
                 if validated["type"] == "closed":
+                    self._closed_event_received = True
                     break
         except (PlayerProtocolError, OSError, RuntimeError):
             pass
         finally:
+            if not self._closed_event_received:
+                try:
+                    self.on_event(self, {
+                        "type": "closed",
+                        "protocol": PLAYER_PROTOCOL_VERSION,
+                        "session_id": self.session_id,
+                        "sequence": self.last_sequence + 1,
+                        "reason": "transport_closed",
+                    })
+                except (OSError, RuntimeError):
+                    pass
             self.closed.set()
             self.transport.close()
 
@@ -139,6 +161,7 @@ class PlayerManager:
         os_opener=None,
         transport_factory=None,
         process_launcher=None,
+        playback_history=None,
         startup_timeout=PLAYER_STARTUP_TIMEOUT_SECONDS,
     ):
         self.player_config = player_config
@@ -147,6 +170,7 @@ class PlayerManager:
         self.os_opener = os_opener or getattr(os, "startfile", None)
         self.transport_factory = transport_factory or WindowsNamedPipeServer
         self.process_launcher = process_launcher or launch_player_process
+        self.playback_history = playback_history
         self.startup_timeout = float(startup_timeout)
         self._lock = threading.RLock()
         self._active = None
@@ -161,14 +185,14 @@ class PlayerManager:
                 "last_event": dict(self._last_event),
             }
 
-    def play(self, path_key):
+    def play(self, path_key, *, restart=False):
         media = self.media_resolver(path_key)
         mode = self.player_config.public_payload()["mode"]
         if mode == "os_default":
             self._open_with_os(media["path"])
             return {"ok": True, "mode": "os_default", "fallback": False}
         try:
-            return self._launch_built_in(media)
+            return self._launch_built_in(media, restart=restart)
         except (PlayerRuntimeError, PlayerProtocolError, PlayerLaunchError, OSError, RuntimeError, TimeoutError):
             self._open_with_os(media["path"])
             return {
@@ -193,7 +217,7 @@ class PlayerManager:
         except OSError as error:
             raise PlayerLaunchError("The operating-system player could not open the file") from error
 
-    def _launch_built_in(self, media):
+    def _launch_built_in(self, media, *, restart=False):
         runtime = self.player_runtime.resolve_bundle(verify_hashes=True)
         executable = runtime["bundle_root"] / "cp-player.exe"
         self.close_active()
@@ -231,11 +255,43 @@ class PlayerManager:
                 session_id=session_id,
                 token=token,
             )
-            session = PlayerSession(session_id, process, transport, self._handle_event)
+            playback_context = (
+                self.playback_history.begin_session(media, restart=restart)
+                if self.playback_history
+                else None
+            )
+            session = PlayerSession(
+                session_id,
+                process,
+                transport,
+                self._handle_event,
+                playback_context=playback_context,
+            )
             session.send(
                 "load",
                 media=media,
-                start_position_ms=0,
+                start_position_ms=(
+                    playback_context["start_position_ms"]
+                    if playback_context
+                    else 0
+                ),
+                playback_state={
+                    "audio_track_fingerprint": (
+                        playback_context.get("audio_track_fingerprint") or ""
+                        if playback_context
+                        else ""
+                    ),
+                    "subtitle_track_fingerprint": (
+                        playback_context.get("subtitle_track_fingerprint") or ""
+                        if playback_context
+                        else ""
+                    ),
+                    "subtitle_delay_ms": (
+                        playback_context.get("subtitle_delay_ms", 0)
+                        if playback_context
+                        else 0
+                    ),
+                },
                 preferences=safe_player_preferences(
                     self.player_config.storage_payload()
                 ),
@@ -259,6 +315,11 @@ class PlayerManager:
                 "mode": "built_in",
                 "fallback": False,
                 "session_id": session_id,
+                "start_position_ms": (
+                    playback_context["start_position_ms"]
+                    if playback_context
+                    else 0
+                ),
             }
         except Exception:
             transport.close()
@@ -267,6 +328,13 @@ class PlayerManager:
             raise
 
     def _handle_event(self, session, message):
+        if self.playback_history:
+            try:
+                self.playback_history.handle_event(session, message)
+            except (PlaybackHistoryError, OSError, RuntimeError):
+                # Playback remains available if a history write is temporarily
+                # unavailable; the next bounded event can retry it.
+                pass
         safe_event = {
             "type": message["type"],
             "sequence": message.get("sequence", 0),

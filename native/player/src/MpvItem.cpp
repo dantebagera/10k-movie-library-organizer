@@ -174,6 +174,7 @@ double MpvItem::position() const { return m_position; }
 double MpvItem::duration() const { return m_duration; }
 double MpvItem::volume() const { return m_volume; }
 double MpvItem::speed() const { return m_speed; }
+double MpvItem::subtitleDelay() const { return m_subtitleDelay; }
 QString MpvItem::status() const { return m_status; }
 QVariantList MpvItem::audioTracks() const { return m_audioTracks; }
 QVariantList MpvItem::subtitleTracks() const { return m_subtitleTracks; }
@@ -208,6 +209,15 @@ bool MpvItem::openTrustedLocalPath(const QString &path, const QVariantMap &prefe
 void MpvItem::togglePause()
 {
     sendCommand({QByteArrayLiteral("cycle"), QByteArrayLiteral("pause")});
+}
+
+void MpvItem::setPaused(bool paused)
+{
+    sendCommand({
+        QByteArrayLiteral("set"),
+        QByteArrayLiteral("pause"),
+        paused ? QByteArrayLiteral("yes") : QByteArrayLiteral("no"),
+    });
 }
 
 void MpvItem::seekAbsolute(double seconds)
@@ -289,6 +299,15 @@ void MpvItem::adjustSubtitleDelay(double seconds)
     });
 }
 
+void MpvItem::setSubtitleDelay(double seconds)
+{
+    sendCommand({
+        QByteArrayLiteral("set"),
+        QByteArrayLiteral("sub-delay"),
+        QByteArray::number(std::clamp(seconds, -3600.0, 3600.0), 'f', 3),
+    });
+}
+
 void MpvItem::adjustAudioDelay(double seconds)
 {
     sendCommand({
@@ -358,6 +377,10 @@ void MpvItem::processEvents()
                        && property->format == MPV_FORMAT_DOUBLE) {
                 m_speed = *static_cast<double *>(property->data);
                 emit speedChanged();
+            } else if (name == QByteArrayLiteral("sub-delay")
+                       && property->format == MPV_FORMAT_DOUBLE) {
+                m_subtitleDelay = *static_cast<double *>(property->data);
+                emit subtitleDelayChanged();
             }
             continue;
         }
@@ -468,6 +491,7 @@ void MpvItem::initializeMpv()
     m_api->observeProperty(m_mpv, 4, "volume", MPV_FORMAT_DOUBLE);
     m_api->observeProperty(m_mpv, 5, "mute", MPV_FORMAT_FLAG);
     m_api->observeProperty(m_mpv, 6, "speed", MPV_FORMAT_DOUBLE);
+    m_api->observeProperty(m_mpv, 7, "sub-delay", MPV_FORMAT_DOUBLE);
     m_api->setWakeupCallback(m_mpv, &MpvItem::wakeup, this);
     m_available = true;
     setStatus(QStringLiteral("Native renderer ready"));

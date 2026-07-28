@@ -122,8 +122,8 @@ class CatalogSchemaUpgradeChainTest(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(CATALOG_SCHEMA_VERSION, 9)
-        self.assertEqual(version, 9)
+        self.assertEqual(CATALOG_SCHEMA_VERSION, 10)
+        self.assertEqual(version, 10)
         self.assertEqual(credit_columns, [
             "snapshot_key", "credit_type", "position", "person_key",
             "credited_name", "character", "profile_url", "job",
@@ -234,7 +234,7 @@ class CatalogSchemaUpgradeChainTest(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(version, 9)
+        self.assertEqual(version, 10)
         self.assertEqual(after_credits, before_credits)
         self.assertEqual(source_json, after_source_json)
         self.assertEqual(after_preserved, preserved)
@@ -322,7 +322,7 @@ class CatalogSchemaUpgradeChainTest(unittest.TestCase):
             "snapshot_key", "credit_type", "position", "person_key",
             "character", "profile_url", "credited_name",
         ])
-        self.assertEqual(version, 9)
+        self.assertEqual(version, 10)
         self.assertEqual(after_credits, before_credits)
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])

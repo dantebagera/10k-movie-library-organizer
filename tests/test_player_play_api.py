@@ -23,7 +23,7 @@ class PlayerPlayApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["mode"], "os_default")
-        play.assert_called_once_with(r"E:\Movies\Movie.mkv")
+        play.assert_called_once_with(r"E:\Movies\Movie.mkv", restart=False)
 
     def test_play_rejects_arbitrary_path_field_before_manager(self):
         with patch.object(app._player_manager, "play") as play:
@@ -37,6 +37,26 @@ class PlayerPlayApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         play.assert_not_called()
+
+    def test_restart_is_explicit_and_forwarded_to_the_single_player_route(self):
+        with patch.object(
+            app._player_manager,
+            "play",
+            return_value={"ok": True, "mode": "built_in", "fallback": False},
+        ) as play:
+            response = self.client.post(
+                "/api/player/play",
+                json={"path_key": "catalog-key", "restart": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        play.assert_called_once_with("catalog-key", restart=True)
+
+        invalid = self.client.post(
+            "/api/player/play",
+            json={"path_key": "catalog-key", "restart": "yes"},
+        )
+        self.assertEqual(invalid.status_code, 400)
 
     def test_play_maps_catalog_and_launch_failures_without_exposing_paths(self):
         with patch.object(
@@ -69,6 +89,33 @@ class PlayerPlayApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_continue_watching_and_clear_use_playback_history_owner(self):
+        item = {
+            "path_key": r"e:\movies\movie.mkv",
+            "title": "Movie",
+            "position_ms": 5000,
+            "duration_ms": 10000,
+        }
+        with patch.object(
+            app._playback_history,
+            "continue_watching",
+            return_value=[item],
+        ) as listing:
+            response = self.client.get("/api/player/continue-watching?limit=12")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["items"], [item])
+        listing.assert_called_once_with(limit=12)
+
+        with patch.object(app._playback_history, "clear", return_value=True) as clear:
+            removed = self.client.post(
+                "/api/player/progress/clear",
+                json={"path_key": item["path_key"]},
+            )
+        self.assertEqual(removed.status_code, 200)
+        self.assertTrue(removed.get_json()["removed"])
+        clear.assert_called_once_with(item["path_key"])
 
 
 if __name__ == "__main__":

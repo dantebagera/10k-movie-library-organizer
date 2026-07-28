@@ -990,6 +990,7 @@ kbd {
   grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.72fr);
   grid-template-areas:
     "hero hero"
+    "continue continue"
     "health releases"
     "movies inspector";
   gap: 18px;
@@ -1002,6 +1003,7 @@ kbd {
 .hero-panel,
 .health-panel,
 .release-panel,
+.continue-watching-panel,
 .movie-rail,
 .inspector {
   border: 1px solid var(--border);
@@ -2352,6 +2354,57 @@ kbd {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.continue-watching-panel {
+  grid-area: continue;
+  min-width: 0;
+  padding: 20px;
+}
+
+.continue-watching-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.continue-watching-controls button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel-black);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.continue-watching-controls button:hover,
+.continue-watching-controls button:focus-visible {
+  border-color: var(--projector-gold);
+  color: var(--projector-gold);
+  outline: none;
+}
+
+.continue-watching-viewport {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 2px 2px 12px;
+  scrollbar-color: #d4af3766 transparent;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
+}
+
+.continue-watching-viewport:focus-visible {
+  border-radius: var(--radius-md);
+  outline: 1px solid #d4af3777;
+  outline-offset: 3px;
+}
+
+.continue-watching-viewport .continue-movie-card {
+  scroll-snap-align: start;
 }
 
 .person-search-actions .btn {

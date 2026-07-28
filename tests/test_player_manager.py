@@ -112,6 +112,26 @@ class EventTransport:
         self.closed = True
 
 
+class FakePlaybackHistory:
+    def __init__(self, start_position_ms=0):
+        self.start_position_ms = start_position_ms
+        self.started = []
+        self.events = []
+        self.received = threading.Event()
+
+    def begin_session(self, media, restart=False):
+        self.started.append((dict(media), restart))
+        return {
+            "media": dict(media),
+            "revision": 7,
+            "start_position_ms": self.start_position_ms,
+        }
+
+    def handle_event(self, session, message):
+        self.events.append((session.playback_context, dict(message)))
+        self.received.set()
+
+
 class PlayerManagerTests(unittest.TestCase):
     @staticmethod
     def media(path):
@@ -240,6 +260,41 @@ class PlayerManagerTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertEqual(opened, [str(media_path), str(media_path)])
 
+    def test_history_owner_supplies_resume_position_and_receives_session_events(self):
+        with tempfile.TemporaryDirectory() as root:
+            bundle = Path(root) / "bundle"
+            bundle.mkdir()
+            (bundle / "cp-player.exe").write_bytes(b"exe")
+            media_path = Path(root) / "Movie.mkv"
+            media_path.write_bytes(b"fixture")
+            config = PlayerConfig({"mode": "built_in"})
+            launch_state = {}
+            process = FakeProcess()
+            history = FakePlaybackHistory(start_position_ms=4200)
+
+            def launcher(executable, environment):
+                launch_state["environment"] = environment
+                return process
+
+            transport = HandshakeTransport("pipe", launch_state)
+            manager = PlayerManager(
+                config,
+                FakeRuntime(bundle),
+                lambda path_key: self.media(media_path),
+                os_opener=lambda path: self.fail("OS fallback was not expected"),
+                transport_factory=lambda name: transport,
+                process_launcher=launcher,
+                playback_history=history,
+            )
+
+            result = manager.play("catalog-key")
+            self.assertTrue(history.received.wait(2))
+
+        self.assertEqual(result["start_position_ms"], 4200)
+        self.assertEqual(transport.sent[0]["start_position_ms"], 4200)
+        self.assertFalse(history.started[0][1])
+        self.assertEqual(history.events[-1][1]["type"], "closed")
+
     def test_session_ignores_duplicate_and_out_of_order_events(self):
         session_id = "session-1"
         events = []
@@ -281,6 +336,24 @@ class PlayerManagerTests(unittest.TestCase):
         self.assertTrue(session.closed.wait(2))
 
         self.assertEqual([event["sequence"] for event in events], [3, 4])
+
+    def test_unexpected_process_exit_emits_one_synthetic_closed_event(self):
+        session_id = "session-crash"
+        events = []
+        process = FakeProcess()
+        process.terminated = True
+        session = PlayerSession(
+            session_id,
+            process,
+            EventTransport([]),
+            lambda _session, message: events.append(message),
+        )
+
+        session.start_reader()
+        self.assertTrue(session.closed.wait(2))
+
+        self.assertEqual([event["type"] for event in events], ["closed"])
+        self.assertEqual(events[0]["reason"], "transport_closed")
 
     def test_safe_preferences_never_include_provider_credentials(self):
         payload = PlayerConfig({

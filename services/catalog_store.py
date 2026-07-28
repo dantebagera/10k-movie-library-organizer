@@ -23,7 +23,13 @@ from services.media_file_facts import (
 from services.smart_match import parse_release_filename
 
 
-CATALOG_SCHEMA_VERSION = 9
+CATALOG_SCHEMA_VERSION = 10
+
+PLAYBACK_HISTORY_COLUMNS = [
+    "path_key", "movie_key", "position_ms", "duration_ms", "last_played_at",
+    "completed_at", "audio_track_fingerprint", "subtitle_track_fingerprint",
+    "subtitle_delay_ms", "revision",
+]
 
 MEDIA_FILE_V8_COLUMNS = [
     "path_key", "path", "filename", "library_root", "size", "added_time",
@@ -338,6 +344,28 @@ class CatalogStore:
             )
         self._validate_v8_schema_relations(connection)
 
+    def _validate_v10_schema(self, connection, *, require_version=True):
+        if require_version and self._catalog_schema_version(connection) != 10:
+            raise CatalogError("Catalogue schema version is not 10")
+        self._validate_v9_schema(connection, require_version=False)
+        if self._table_columns(connection, "playback_history") != PLAYBACK_HISTORY_COLUMNS:
+            raise CatalogError("Version 10 playback history schema is incomplete")
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_playback_history_movie",
+            "idx_playback_history_recent",
+        }
+        if not required.issubset(indexes):
+            raise CatalogError(
+                "Version 10 playback history indexes are incomplete: "
+                + ", ".join(sorted(required - indexes))
+            )
+
     def _validate_v8_schema_relations(self, connection):
         expected_credit_columns = [
             "snapshot_key", "credit_type", "position", "person_key",
@@ -453,6 +481,60 @@ class CatalogStore:
             "unprobed_rows": int(connection.execute(
                 "SELECT COUNT(*) FROM media_files WHERE probe_status='unprobed'"
             ).fetchone()[0]),
+            "integrity_check": integrity,
+            "foreign_key_violations": len(foreign_keys),
+        }
+
+    def _migrate_v9_to_v10(self, connection):
+        if self._catalog_schema_version(connection) != 9:
+            raise CatalogError("Version 9 to 10 migration received the wrong source version")
+        self._validate_v9_schema(connection)
+        before = self._logical_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+        self._migration_checkpoint("before_v10_playback_history")
+        # This table intentionally has no media_files foreign key. The repository's
+        # full-document refresh replaces media rows in place, while playback history
+        # must survive for path keys that remain present. Repository path mutations
+        # explicitly migrate or remove history in the same transaction.
+        _execute_schema(connection, """
+            CREATE TABLE playback_history (
+                path_key TEXT PRIMARY KEY,
+                movie_key TEXT,
+                position_ms INTEGER NOT NULL DEFAULT 0 CHECK(position_ms >= 0),
+                duration_ms INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
+                last_played_at REAL NOT NULL DEFAULT 0 CHECK(last_played_at >= 0),
+                completed_at REAL,
+                audio_track_fingerprint TEXT,
+                subtitle_track_fingerprint TEXT,
+                subtitle_delay_ms INTEGER NOT NULL DEFAULT 0,
+                revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0)
+            );
+            CREATE INDEX idx_playback_history_movie
+                ON playback_history(movie_key, last_played_at DESC);
+            CREATE INDEX idx_playback_history_recent
+                ON playback_history(last_played_at DESC, path_key);
+        """)
+        self._migration_checkpoint("before_v10_schema_version_update")
+        connection.execute(
+            "UPDATE catalog_meta SET value='10' WHERE key='schema_version'"
+        )
+        self._migration_checkpoint("during_v10_final_validation")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or foreign_keys:
+            raise CatalogError(
+                f"Version 10 final integrity failed: integrity={integrity}, "
+                f"foreign_keys={len(foreign_keys)}"
+            )
+        self._validate_v10_schema(connection)
+        after = self._logical_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+        if after != before:
+            raise CatalogError("Version 10 migration changed pre-existing media file data")
+        return {
+            "from_version": 9,
+            "to_version": 10,
+            "media_files_digest_before": before,
+            "media_files_digest_after": after,
+            "playback_history_rows": 0,
             "integrity_check": integrity,
             "foreign_key_violations": len(foreign_keys),
         }
@@ -574,11 +656,15 @@ class CatalogStore:
                 if starting_schema == 8:
                     migration_reports.append(self._migrate_v8_to_v9(connection))
                     starting_schema = 9
-                elif starting_schema != 9:
+                if starting_schema == 9:
+                    migration_reports.append(self._migrate_v9_to_v10(connection))
+                    starting_schema = 10
+                elif starting_schema != 10:
                     raise CatalogError(
-                        f"Unsupported catalogue schema version {starting_schema}; expected 6, 7, 8, or 9"
+                        f"Unsupported catalogue schema version {starting_schema}; "
+                        "expected 6, 7, 8, 9, or 10"
                     )
-                self._validate_v9_schema(connection)
+                self._validate_v10_schema(connection)
 
             _execute_schema(connection, """
                 CREATE TABLE IF NOT EXISTS catalog_meta (
@@ -751,6 +837,19 @@ class CatalogStore:
                     raw_json TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS playback_history (
+                    path_key TEXT PRIMARY KEY,
+                    movie_key TEXT,
+                    position_ms INTEGER NOT NULL DEFAULT 0 CHECK(position_ms >= 0),
+                    duration_ms INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
+                    last_played_at REAL NOT NULL DEFAULT 0 CHECK(last_played_at >= 0),
+                    completed_at REAL,
+                    audio_track_fingerprint TEXT,
+                    subtitle_track_fingerprint TEXT,
+                    subtitle_delay_ms INTEGER NOT NULL DEFAULT 0,
+                    revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_media_files_tmdb_id ON media_files(tmdb_id);
                 CREATE INDEX IF NOT EXISTS idx_media_files_imdb_id ON media_files(imdb_id);
                 CREATE INDEX IF NOT EXISTS idx_media_files_plex_guid ON media_files(plex_guid);
@@ -764,6 +863,10 @@ class CatalogStore:
                 CREATE INDEX IF NOT EXISTS idx_list_items_identity ON list_items(identity_key);
                 CREATE INDEX IF NOT EXISTS idx_list_items_tmdb ON list_items(tmdb_id);
                 CREATE INDEX IF NOT EXISTS idx_followed_identity ON followed_releases(identity_key);
+                CREATE INDEX IF NOT EXISTS idx_playback_history_movie
+                    ON playback_history(movie_key, last_played_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_playback_history_recent
+                    ON playback_history(last_played_at DESC, path_key);
             """)
             connection.execute("DROP TABLE IF EXISTS download_jobs")
             if not connection.execute(
@@ -825,7 +928,7 @@ class CatalogStore:
                     "INSERT INTO catalog_meta(key, value) VALUES('schema_version', ?)",
                     (str(CATALOG_SCHEMA_VERSION),),
                 )
-                self._validate_v9_schema(connection)
+                self._validate_v10_schema(connection)
         if migration_reports:
             report = {
                 **migration_reports[0],

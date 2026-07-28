@@ -14,6 +14,8 @@ MESSAGE_TYPES = {
     "ready",
     "playback.state",
     "progress",
+    "resume.choice",
+    "playback.settings",
     "tracks.changed",
     "subtitle.search",
     "subtitle.results",
@@ -141,6 +143,22 @@ def validate_message(message, *, expected_type=None, session_id=None, token=None
         _bounded_number(message.get("start_position_ms", 0), "start_position_ms")
         if not isinstance(message.get("preferences", {}), dict):
             raise PlayerProtocolError("Player preferences must be an object")
+        playback_state = message.get("playback_state", {})
+        if not isinstance(playback_state, dict):
+            raise PlayerProtocolError("Player playback state must be an object")
+        for field in ("audio_track_fingerprint", "subtitle_track_fingerprint"):
+            _bounded_string(
+                playback_state.get(field, ""),
+                f"playback_state.{field}",
+                maximum=512,
+                allow_empty=True,
+            )
+        _bounded_number(
+            playback_state.get("subtitle_delay_ms", 0),
+            "playback_state.subtitle_delay_ms",
+            minimum=-60 * 60 * 1000,
+            maximum=60 * 60 * 1000,
+        )
     elif message_type == "ready":
         if not isinstance(message.get("accepted", False), bool):
             raise PlayerProtocolError("Player ready state is invalid")
@@ -154,6 +172,16 @@ def validate_message(message, *, expected_type=None, session_id=None, token=None
             raise PlayerProtocolError("Player paused state is invalid")
     elif message_type == "tracks.changed":
         _validate_tracks(message.get("tracks"))
+    elif message_type == "resume.choice":
+        if message.get("choice") not in {"resume", "restart"}:
+            raise PlayerProtocolError("Player resume choice is invalid")
+    elif message_type == "playback.settings":
+        _bounded_number(
+            message.get("subtitle_delay_ms"),
+            "subtitle_delay_ms",
+            minimum=-60 * 60 * 1000,
+            maximum=60 * 60 * 1000,
+        )
     elif message_type == "error":
         _bounded_string(message.get("code", ""), "error.code", maximum=128)
         _bounded_string(message.get("message", ""), "error.message", maximum=1024)

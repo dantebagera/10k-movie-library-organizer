@@ -53,6 +53,18 @@ class NativePlayerSourceTests(unittest.TestCase):
             self.assertIn(shortcut, qml)
         self.assertIn("Generated from design/player-theme.json", generated_theme)
 
+    def test_resume_prompt_keeps_the_choice_inside_the_native_cp_interface(self):
+        qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
+        bridge = (PLAYER_ROOT / "src" / "PlayerBridge.cpp").read_text(encoding="utf-8")
+
+        self.assertIn('text: "Continue watching?"', qml)
+        self.assertIn("playerBridge.chooseResume()", qml)
+        self.assertIn("playerBridge.chooseRestart()", qml)
+        self.assertIn('QStringLiteral("resume.choice")', bridge)
+        self.assertIn("m_player->setPaused(true)", bridge)
+        self.assertIn('QStringLiteral("playback.settings")', bridge)
+        self.assertIn("m_player->setSubtitleDelay", bridge)
+
     def test_subtitle_provider_credentials_do_not_enter_the_helper(self):
         native_source = "\n".join(
             path.read_text(encoding="utf-8")

@@ -107,6 +107,10 @@ def main():
     parser.add_argument("--allow-no-audio", action="store_true")
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
+    parser.add_argument("--exercise-resume", action="store_true")
+    parser.add_argument("--restore-audio-fingerprint", default="")
+    parser.add_argument("--restore-subtitle-fingerprint", default="")
+    parser.add_argument("--restore-subtitle-delay-ms", type=int, default=0)
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args()
 
@@ -177,7 +181,12 @@ def main():
                         "movie_key": "fixture:phase2",
                         "poster_reference": "",
                     },
-                    start_position_ms=500,
+                    start_position_ms=4000 if args.exercise_resume else 0,
+                    playback_state={
+                        "audio_track_fingerprint": args.restore_audio_fingerprint,
+                        "subtitle_track_fingerprint": args.restore_subtitle_fingerprint,
+                        "subtitle_delay_ms": args.restore_subtitle_delay_ms,
+                    },
                     preferences={
                         "preferred_audio_languages": ["eng", "fra"],
                         "preferred_subtitle_languages": ["eng", "spa"],
@@ -190,6 +199,60 @@ def main():
             if not ready.get("accepted"):
                 raise RuntimeError("The production player rejected the fixture.")
             events.append(ready)
+
+            if args.exercise_resume:
+                window = None
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not window:
+                    window = find_visible_window(process.pid)
+                    if not window:
+                        time.sleep(0.1)
+                if not window:
+                    raise RuntimeError("The resume prompt window was not visible.")
+                receive_until(
+                    transport,
+                    process,
+                    events,
+                    lambda event: event["type"] == "playback.state"
+                    and event.get("state") == "paused",
+                    5,
+                )
+                if args.screenshot:
+                    from PIL import ImageGrab
+
+                    time.sleep(0.3)
+                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
+                    resume_path = args.screenshot.with_name(
+                        f"{args.screenshot.stem}-resume-prompt{args.screenshot.suffix}"
+                    )
+                    rectangle = wintypes.RECT()
+                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
+                    ImageGrab.grab(
+                        bbox=(
+                            rectangle.left,
+                            rectangle.top,
+                            rectangle.right,
+                            rectangle.bottom,
+                        ),
+                        all_screens=True,
+                    ).save(resume_path)
+                send_window_key(window, 0x0D)
+                receive_until(
+                    transport,
+                    process,
+                    events,
+                    lambda event: event["type"] == "resume.choice"
+                    and event.get("choice") == "resume",
+                    3,
+                )
+                receive_until(
+                    transport,
+                    process,
+                    events,
+                    lambda event: event["type"] == "progress"
+                    and event.get("position_ms", 0) >= 3500,
+                    3,
+                )
 
             deadline = time.monotonic() + max(1.0, args.observe_seconds)
             while time.monotonic() < deadline:
@@ -378,6 +441,26 @@ def main():
         raise RuntimeError("Production helper did not report a subtitle track.")
     if not all(track.get("fingerprint") for track in tracks):
         raise RuntimeError("Production helper returned a track without a fingerprint.")
+    if args.restore_audio_fingerprint and not any(
+        track.get("selected")
+        and track.get("fingerprint") == args.restore_audio_fingerprint
+        for track in tracks
+    ):
+        raise RuntimeError("Production helper did not restore the requested audio track.")
+    if args.restore_subtitle_fingerprint and not any(
+        track.get("selected")
+        and track.get("fingerprint") == args.restore_subtitle_fingerprint
+        for track in tracks
+    ):
+        raise RuntimeError("Production helper did not restore the requested subtitle track.")
+    settings = [
+        event for event in events if event["type"] == "playback.settings"
+    ]
+    if args.restore_subtitle_delay_ms and not any(
+        abs(int(event.get("subtitle_delay_ms", 0)) - args.restore_subtitle_delay_ms) <= 1
+        for event in settings
+    ):
+        raise RuntimeError("Production helper did not restore the requested subtitle delay.")
     if process.returncode != 0:
         raise RuntimeError(f"Production helper exited with code {process.returncode}.")
 
@@ -397,6 +480,11 @@ def main():
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
         "controls_exercised": bool(args.exercise_controls),
+        "resume_exercised": bool(args.exercise_resume),
+        "track_restore_exercised": bool(
+            args.restore_audio_fingerprint or args.restore_subtitle_fingerprint
+        ),
+        "subtitle_delay_restore_ms": args.restore_subtitle_delay_ms,
     }
     print(json.dumps(report, indent=2))
 

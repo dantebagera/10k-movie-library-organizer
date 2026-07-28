@@ -88,5 +88,8 @@ def resolve_library_media(repository, path_key, library_roots):
         "path": path,
         "title": title[:512] or Path(path).stem[:512],
         "year": year[:16],
+        "tmdb_id": str(canonical.get("tmdb_id") or candidate.get("tmdb_id") or "")[:64],
+        "imdb_id": str(canonical.get("imdb_id") or candidate.get("imdb_id") or "")[:64],
+        "release_date": str(canonical.get("release_date") or "")[:32],
         "poster_reference": poster_reference,
     }

@@ -103,7 +103,8 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (!mpv.paused && !root.seeking && !audioPanelOpen && !subtitlePanelOpen
-                    && !chapterPanelOpen && !subtitleSearchOpen)
+                    && !chapterPanelOpen && !subtitleSearchOpen
+                    && !playerBridge.resumeDecisionPending)
                 controlsVisible = false
         }
     }
@@ -114,16 +115,18 @@ ApplicationWindow {
         onTriggered: toastText = ""
     }
 
-    Shortcut { sequence: playerBridge.shortcuts.play_pause || "Space"; onActivated: { mpv.togglePause(); root.showControls() } }
-    Shortcut { sequence: playerBridge.shortcuts.seek_backward || "Left"; onActivated: { mpv.seekRelative(-10); root.showControls() } }
-    Shortcut { sequence: playerBridge.shortcuts.seek_forward || "Right"; onActivated: { mpv.seekRelative(10); root.showControls() } }
-    Shortcut { sequence: playerBridge.shortcuts.seek_backward_long || "Shift+Left"; onActivated: { mpv.seekRelative(-60); root.showControls() } }
-    Shortcut { sequence: playerBridge.shortcuts.seek_forward_long || "Shift+Right"; onActivated: { mpv.seekRelative(60); root.showControls() } }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.play_pause || "Space"; onActivated: { mpv.togglePause(); root.showControls() } }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.seek_backward || "Left"; onActivated: { mpv.seekRelative(-10); root.showControls() } }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.seek_forward || "Right"; onActivated: { mpv.seekRelative(10); root.showControls() } }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.seek_backward_long || "Shift+Left"; onActivated: { mpv.seekRelative(-60); root.showControls() } }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: playerBridge.shortcuts.seek_forward_long || "Shift+Right"; onActivated: { mpv.seekRelative(60); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.volume_up || "Up"; onActivated: { mpv.setVolume(mpv.volume + 5); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.volume_down || "Down"; onActivated: { mpv.setVolume(mpv.volume - 5); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.mute || "M"; onActivated: { mpv.toggleMute(); root.showControls() } }
     Shortcut { sequence: playerBridge.shortcuts.fullscreen || "F"; onActivated: root.toggleFullscreen() }
-    Shortcut { sequence: "Enter"; onActivated: root.toggleFullscreen() }
+    Shortcut { enabled: !playerBridge.resumeDecisionPending; sequence: "Enter"; onActivated: root.toggleFullscreen() }
+    Shortcut { enabled: playerBridge.resumeDecisionPending; sequence: "Return"; onActivated: playerBridge.chooseResume() }
+    Shortcut { enabled: playerBridge.resumeDecisionPending; sequence: "R"; onActivated: playerBridge.chooseRestart() }
     Shortcut {
         sequence: "Escape"
         onActivated: {
@@ -540,6 +543,52 @@ ApplicationWindow {
                             padding: 12
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        z: 20
+        width: Math.min(560, root.width - 56)
+        height: 260
+        anchors.centerIn: parent
+        visible: playerBridge.resumeDecisionPending
+        color: PlayerTheme.panelBlack
+        radius: PlayerTheme.radiusExtraLarge
+        border.color: PlayerTheme.projectorGold
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 28
+            spacing: 14
+            Text {
+                text: "Continue watching?"
+                color: PlayerTheme.textStrong
+                font.pixelSize: 24
+                font.weight: Font.DemiBold
+            }
+            Text {
+                Layout.fillWidth: true
+                text: "Cinema Paradiso saved your place at "
+                      + root.formatTime(playerBridge.resumePositionMs / 1000) + "."
+                color: PlayerTheme.textSoft
+                font.pixelSize: 15
+                wrapMode: Text.WordWrap
+            }
+            Item { Layout.fillHeight: true }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignRight
+                spacing: 10
+                CpButton {
+                    text: "Start over"
+                    onClicked: playerBridge.chooseRestart()
+                }
+                CpButton {
+                    text: "Resume from " + root.formatTime(playerBridge.resumePositionMs / 1000)
+                    highlighted: true
+                    onClicked: playerBridge.chooseResume()
                 }
             }
         }

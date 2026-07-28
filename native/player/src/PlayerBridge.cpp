@@ -85,6 +85,8 @@ bool PlayerBridge::connected() const
     return m_socket.state() == QLocalSocket::ConnectedState;
 }
 QVariantMap PlayerBridge::shortcuts() const { return m_shortcuts; }
+bool PlayerBridge::resumeDecisionPending() const { return m_resumeDecisionPending; }
+qint64 PlayerBridge::resumePositionMs() const { return qRound64(m_resumeSeconds * 1000.0); }
 bool PlayerBridge::configurationValid() const { return m_configurationError.isEmpty(); }
 QString PlayerBridge::configurationError() const { return m_configurationError; }
 
@@ -99,6 +101,8 @@ void PlayerBridge::attachPlayer(MpvItem *player)
     connect(player, &MpvItem::playbackError, this, &PlayerBridge::handlePlaybackError);
     connect(player, &MpvItem::pausedChanged, this, &PlayerBridge::handlePausedChanged);
     connect(player, &MpvItem::tracksChanged, this, &PlayerBridge::handleTracksChanged);
+    connect(player, &MpvItem::subtitleDelayChanged,
+            this, &PlayerBridge::sendPlaybackSettings);
 }
 
 void PlayerBridge::connectToBackend()
@@ -138,6 +142,34 @@ void PlayerBridge::requestSubtitleSearch()
     if (m_loadAccepted) {
         sendMessage(QStringLiteral("subtitle.search"));
     }
+}
+
+void PlayerBridge::chooseResume()
+{
+    if (!m_resumeDecisionPending || !m_player) {
+        return;
+    }
+    m_player->seekAbsolute(m_resumeSeconds);
+    m_resumeDecisionPending = false;
+    emit resumeChanged();
+    QJsonObject payload;
+    payload.insert(QStringLiteral("choice"), QStringLiteral("resume"));
+    sendMessage(QStringLiteral("resume.choice"), payload);
+    m_player->setPaused(false);
+}
+
+void PlayerBridge::chooseRestart()
+{
+    if (!m_resumeDecisionPending || !m_player) {
+        return;
+    }
+    m_player->seekAbsolute(0.0);
+    m_resumeDecisionPending = false;
+    emit resumeChanged();
+    QJsonObject payload;
+    payload.insert(QStringLiteral("choice"), QStringLiteral("restart"));
+    sendMessage(QStringLiteral("resume.choice"), payload);
+    m_player->setPaused(false);
 }
 
 void PlayerBridge::handleConnected()
@@ -203,13 +235,36 @@ void PlayerBridge::handleDisconnected()
 
 void PlayerBridge::handleFileLoaded()
 {
-    if (m_resumeSeconds > 0.0 && m_player) {
-        m_player->seekAbsolute(m_resumeSeconds);
+    if (m_player) {
+        for (const QVariant &value : m_player->audioTracks()) {
+            const QVariantMap track = value.toMap();
+            if (!m_audioTrackFingerprint.isEmpty()
+                && track.value(QStringLiteral("fingerprint")).toString()
+                    == m_audioTrackFingerprint) {
+                m_player->selectAudioTrack(track.value(QStringLiteral("id")).toInt());
+                break;
+            }
+        }
+        if (m_subtitleTrackFingerprint == QStringLiteral("disabled")) {
+            m_player->disableSubtitles();
+        } else {
+            for (const QVariant &value : m_player->subtitleTracks()) {
+                const QVariantMap track = value.toMap();
+                if (!m_subtitleTrackFingerprint.isEmpty()
+                    && track.value(QStringLiteral("fingerprint")).toString()
+                        == m_subtitleTrackFingerprint) {
+                    m_player->selectSubtitleTrack(track.value(QStringLiteral("id")).toInt());
+                    break;
+                }
+            }
+        }
+        m_player->setSubtitleDelay(m_subtitleDelaySeconds);
     }
     sendPlaybackState(m_player && m_player->paused()
                           ? QStringLiteral("paused")
                           : QStringLiteral("playing"));
     sendTracks();
+    sendPlaybackSettings();
     sendProgress();
     m_progressTimer.start();
 }
@@ -290,10 +345,21 @@ bool PlayerBridge::handleLoad(const QJsonObject &message)
     const QString poster = media.value(QStringLiteral("poster_reference")).toString().trimmed();
     const QFileInfo file(path);
     const double startMs = message.value(QStringLiteral("start_position_ms")).toDouble(-1.0);
+    const QJsonObject playbackState =
+        message.value(QStringLiteral("playback_state")).toObject();
+    const QString audioFingerprint =
+        playbackState.value(QStringLiteral("audio_track_fingerprint")).toString();
+    const QString subtitleFingerprint =
+        playbackState.value(QStringLiteral("subtitle_track_fingerprint")).toString();
+    const double subtitleDelayMs =
+        playbackState.value(QStringLiteral("subtitle_delay_ms")).toDouble(0.0);
     if (pathKey.isEmpty() || pathKey.size() > 4096 || title.isEmpty() || title.size() > 512
         || year.size() > 16 || poster.size() > 4096 || path.size() > 32768
         || !file.isAbsolute() || !file.exists() || !file.isFile()
         || !std::isfinite(startMs) || startMs < 0.0
+        || audioFingerprint.size() > 512 || subtitleFingerprint.size() > 512
+        || !std::isfinite(subtitleDelayMs)
+        || subtitleDelayMs < -3600000.0 || subtitleDelayMs > 3600000.0
         || !message.value(QStringLiteral("preferences")).isObject()) {
         return false;
     }
@@ -304,7 +370,12 @@ bool PlayerBridge::handleLoad(const QJsonObject &message)
     m_year = year;
     m_posterReference = poster;
     m_resumeSeconds = startMs / 1000.0;
+    m_audioTrackFingerprint = audioFingerprint;
+    m_subtitleTrackFingerprint = subtitleFingerprint;
+    m_subtitleDelaySeconds = subtitleDelayMs / 1000.0;
+    m_resumeDecisionPending = m_resumeSeconds > 0.0;
     emit mediaChanged();
+    emit resumeChanged();
 
     const QVariantMap preferences =
         message.value(QStringLiteral("preferences")).toObject().toVariantMap();
@@ -345,6 +416,9 @@ bool PlayerBridge::handleLoad(const QJsonObject &message)
     }
     m_shortcuts = validatedShortcuts;
     emit preferencesChanged();
+    if (m_resumeDecisionPending) {
+        m_player->setPaused(true);
+    }
     if (!m_player->openTrustedLocalPath(file.absoluteFilePath(), preferences)) {
         return false;
     }
@@ -417,6 +491,19 @@ void PlayerBridge::sendTracks()
     QJsonObject payload;
     payload.insert(QStringLiteral("tracks"), tracks);
     sendMessage(QStringLiteral("tracks.changed"), payload);
+}
+
+void PlayerBridge::sendPlaybackSettings()
+{
+    if (!m_loadAccepted || !m_player) {
+        return;
+    }
+    QJsonObject payload;
+    payload.insert(
+        QStringLiteral("subtitle_delay_ms"),
+        qRound64(m_player->subtitleDelay() * 1000.0)
+    );
+    sendMessage(QStringLiteral("playback.settings"), payload);
 }
 
 void PlayerBridge::setConnectionStatus(const QString &status)

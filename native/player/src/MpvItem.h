@@ -21,6 +21,7 @@ class MpvItem : public QQuickFramebufferObject
     Q_PROPERTY(double duration READ duration NOTIFY durationChanged)
     Q_PROPERTY(double volume READ volume NOTIFY volumeChanged)
     Q_PROPERTY(double speed READ speed NOTIFY speedChanged)
+    Q_PROPERTY(double subtitleDelay READ subtitleDelay NOTIFY subtitleDelayChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY audioTracksChanged)
     Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY subtitleTracksChanged)
@@ -39,6 +40,7 @@ public:
     double duration() const;
     double volume() const;
     double speed() const;
+    double subtitleDelay() const;
     QString status() const;
     QVariantList audioTracks() const;
     QVariantList subtitleTracks() const;
@@ -46,6 +48,7 @@ public:
 
     bool openTrustedLocalPath(const QString &path, const QVariantMap &preferences);
     Q_INVOKABLE void togglePause();
+    Q_INVOKABLE void setPaused(bool paused);
     Q_INVOKABLE void seekAbsolute(double seconds);
     Q_INVOKABLE void seekRelative(double seconds);
     Q_INVOKABLE void setVolume(double value);
@@ -55,6 +58,7 @@ public:
     Q_INVOKABLE void selectSubtitleTrack(int id);
     Q_INVOKABLE void disableSubtitles();
     Q_INVOKABLE void adjustSubtitleDelay(double seconds);
+    Q_INVOKABLE void setSubtitleDelay(double seconds);
     Q_INVOKABLE void adjustAudioDelay(double seconds);
     Q_INVOKABLE void shutdownPlayback();
 
@@ -66,6 +70,7 @@ signals:
     void durationChanged();
     void volumeChanged();
     void speedChanged();
+    void subtitleDelayChanged();
     void statusChanged();
     void audioTracksChanged();
     void subtitleTracksChanged();
@@ -105,6 +110,7 @@ private:
     double m_duration = 0.0;
     double m_volume = 100.0;
     double m_speed = 1.0;
+    double m_subtitleDelay = 0.0;
     QString m_status = QStringLiteral("Initializing Cinema Paradiso Player");
     QVariantList m_audioTracks;
     QVariantList m_subtitleTracks;
