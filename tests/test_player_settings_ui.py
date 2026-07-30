@@ -46,6 +46,14 @@ class PlayerSettingsUiTests(unittest.TestCase):
         self.assertIn("api_key: ''", self.settings)
         self.assertIn("playerForm(saved)", self.settings)
 
+    def test_opensubtitles_authentication_mode_is_explicit_and_clears_account_secrets(self):
+        self.assertIn("OpenSubtitles authentication", self.settings)
+        self.assertIn("API key only — consumer quota", self.settings)
+        self.assertIn("OpenSubtitles account — personal quota", self.settings)
+        self.assertIn("authentication_mode: 'api_key_only'", self.settings)
+        self.assertIn("['username', 'password']", self.settings)
+        self.assertIn("disabled={forms.player.providers.opensubtitles.authentication_mode === 'api_key_only'}", self.settings)
+
     def test_player_scope_explicitly_excludes_iptv_and_streaming(self):
         self.assertIn(
             "IPTV and movie-card streaming keep their existing players.",

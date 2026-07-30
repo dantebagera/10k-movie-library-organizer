@@ -3,13 +3,14 @@ import re
 import threading
 
 
-PLAYER_CONFIG_VERSION = 1
+PLAYER_CONFIG_VERSION = 2
 PLAYER_MODES = {"built_in", "os_default"}
 HARDWARE_DECODING_MODES = {"safe_auto", "off", "advanced"}
 HDR_MODES = {"auto", "off", "passthrough"}
 TONE_MAPPING_MODES = {"auto", "bt.2446a", "mobius", "reinhard", "hable"}
 AUDIO_DOWNMIX_MODES = {"auto", "stereo", "5.1"}
 SUBTITLE_STORAGE_MODES = {"cache", "beside_movie"}
+OPENSUBTITLES_AUTHENTICATION_MODES = {"api_key_only", "account"}
 SECRET_FIELDS = {
     "opensubtitles": {"username", "api_key", "password"},
     "subdl": {"api_key"},
@@ -95,6 +96,7 @@ def default_player_config():
         "providers": {
             "opensubtitles": {
                 "enabled": False,
+                "authentication_mode": "api_key_only",
                 "username": "",
                 "api_key": "",
                 "password": "",
@@ -345,6 +347,18 @@ class PlayerConfig:
                 provider["enabled"] = _coerce_bool(
                     provider_changes["enabled"], f"{provider_name}.enabled"
                 )
+            if (
+                provider_name == "opensubtitles"
+                and "authentication_mode" in provider_changes
+            ):
+                authentication_mode = str(
+                    provider_changes["authentication_mode"] or ""
+                ).strip()
+                if authentication_mode not in OPENSUBTITLES_AUTHENTICATION_MODES:
+                    raise PlayerConfigError(
+                        "opensubtitles.authentication_mode is not supported"
+                    )
+                provider["authentication_mode"] = authentication_mode
             for secret_field in SECRET_FIELDS[provider_name]:
                 if secret_field not in provider_changes:
                     continue
@@ -361,3 +375,17 @@ class PlayerConfig:
                     if secret_field not in SECRET_FIELDS[provider_name]:
                         raise PlayerConfigError("clear_secrets contains an unknown credential")
                     provider[secret_field] = ""
+            if provider_name == "opensubtitles":
+                if "authentication_mode" not in provider_changes and (
+                    initial_load
+                    or "username" in provider_changes
+                    or "password" in provider_changes
+                ):
+                    provider["authentication_mode"] = (
+                        "account"
+                        if provider["username"] and provider["password"]
+                        else "api_key_only"
+                    )
+                if provider["authentication_mode"] == "api_key_only":
+                    provider["username"] = ""
+                    provider["password"] = ""

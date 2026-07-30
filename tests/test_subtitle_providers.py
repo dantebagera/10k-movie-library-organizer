@@ -1,7 +1,11 @@
 import json
 import unittest
 
-from services.subtitle_service import OpenSubtitlesProvider, SubDLProvider
+from services.subtitle_service import (
+    OpenSubtitlesProvider,
+    SubtitleProviderError,
+    SubDLProvider,
+)
 
 
 class FakeResponse:
@@ -51,6 +55,11 @@ class RecordingOpener:
                         "files": [{"file_id": 99, "file_name": "movie.srt"}],
                     },
                 }],
+            }).encode())
+        if url.endswith("/api/v1/login"):
+            return FakeResponse(json.dumps({
+                "token": "account-token",
+                "base_url": "api.opensubtitles.com",
             }).encode())
         if url.endswith("/api/v1/download"):
             return FakeResponse(json.dumps({
@@ -109,6 +118,43 @@ class SubtitleProviderAdapterTests(unittest.TestCase):
         self.assertEqual(name, "movie.srt")
         search_request = opener.requests[0][0]
         self.assertEqual(search_request.get_header("Api-key"), "secret")
+        download_request = opener.requests[1][0]
+        self.assertIsNone(download_request.get_header("Authorization"))
+        self.assertFalse(any(
+            request.full_url.endswith("/api/v1/login")
+            for request, _timeout in opener.requests
+        ))
+
+    def test_opensubtitles_account_mode_logs_in_and_uses_bearer_token(self):
+        opener = RecordingOpener()
+        provider = OpenSubtitlesProvider({
+            "authentication_mode": "account",
+            "api_key": "secret",
+            "username": "account-user",
+            "password": "account-password",
+        }, opener)
+
+        payload, name = provider.download({"file_id": "99"})
+
+        self.assertEqual(payload, b"subtitle")
+        self.assertEqual(name, "movie.srt")
+        self.assertTrue(opener.requests[0][0].full_url.endswith("/api/v1/login"))
+        download_request = opener.requests[1][0]
+        self.assertEqual(
+            download_request.get_header("Authorization"),
+            "Bearer account-token",
+        )
+
+    def test_opensubtitles_account_mode_never_falls_back_without_credentials(self):
+        provider = OpenSubtitlesProvider({
+            "authentication_mode": "account",
+            "api_key": "secret",
+        }, RecordingOpener())
+
+        with self.assertRaises(SubtitleProviderError) as raised:
+            provider.download({"file_id": "99"})
+
+        self.assertEqual(raised.exception.code, "not_configured")
 
     def test_subdl_normalizes_search_and_uses_header_for_download_key(self):
         opener = RecordingOpener()

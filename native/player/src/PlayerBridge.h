@@ -1,9 +1,11 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QHash>
 #include <QLocalSocket>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QTimer>
 #include <QVariantList>
 
@@ -24,6 +26,9 @@ class PlayerBridge final : public QObject
     Q_PROPERTY(QVariantList subtitleResults READ subtitleResults NOTIFY subtitleSearchChanged)
     Q_PROPERTY(QString subtitleSearchStatus READ subtitleSearchStatus NOTIFY subtitleSearchChanged)
     Q_PROPERTY(QString subtitleSearchError READ subtitleSearchError NOTIFY subtitleSearchChanged)
+    Q_PROPERTY(bool selectedSubtitleCanSave READ selectedSubtitleCanSave NOTIFY subtitleSaveChanged)
+    Q_PROPERTY(QString subtitleSaveStatus READ subtitleSaveStatus NOTIFY subtitleSaveChanged)
+    Q_PROPERTY(QString subtitleSaveError READ subtitleSaveError NOTIFY subtitleSaveChanged)
 
 public:
     explicit PlayerBridge(QObject *parent = nullptr);
@@ -40,6 +45,9 @@ public:
     QVariantList subtitleResults() const;
     QString subtitleSearchStatus() const;
     QString subtitleSearchError() const;
+    bool selectedSubtitleCanSave() const;
+    QString subtitleSaveStatus() const;
+    QString subtitleSaveError() const;
 
     bool configurationValid() const;
     QString configurationError() const;
@@ -49,6 +57,7 @@ public:
     Q_INVOKABLE void requestClose();
     Q_INVOKABLE void requestSubtitleSearch();
     Q_INVOKABLE void requestSubtitleDownload(const QString &resultId);
+    Q_INVOKABLE void requestSaveSelectedSubtitle();
     Q_INVOKABLE void chooseResume();
     Q_INVOKABLE void chooseRestart();
     Q_INVOKABLE void reportWindowState(int x, int y, int width, int height,
@@ -61,6 +70,7 @@ signals:
     void preferencesChanged();
     void resumeChanged();
     void subtitleSearchChanged();
+    void subtitleSaveChanged();
     void closeWindowRequested();
 
 private slots:
@@ -80,6 +90,8 @@ private:
     static constexpr int ProtocolVersion = 1;
     static constexpr qsizetype MaximumMessageBytes = 256 * 1024;
 
+    static QString normalizedLocalPath(const QString &path);
+    QString selectedSubtitleResultId() const;
     bool validateEnvelope(const QJsonObject &message, const QString &expectedType) const;
     bool handleLoad(const QJsonObject &message);
     void handleMessage(const QJsonObject &message);
@@ -109,6 +121,10 @@ private:
     QVariantList m_subtitleResults;
     QString m_subtitleSearchStatus = QStringLiteral("idle");
     QString m_subtitleSearchError;
+    QHash<QString, QString> m_subtitleResultIdsByPath;
+    QString m_lastSelectedSubtitleResultId;
+    QString m_subtitleSaveStatus = QStringLiteral("idle");
+    QString m_subtitleSaveError;
     double m_subtitleDelaySeconds = 0.0;
     QString m_connectionStatus = QStringLiteral("Preparing secure player session");
     QVariantMap m_shortcuts;

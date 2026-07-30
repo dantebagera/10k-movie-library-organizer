@@ -319,6 +319,10 @@ input:focus-visible {
     padding: 14px 10px 52px;
   }
 
+  .sidebar-collapsed .brand-lockup > div {
+    flex: 0 0 0;
+  }
+
   .sidebar-collapsed .brand-mark {
     width: 46px;
     height: 46px;
@@ -987,12 +991,7 @@ kbd {
 
 .home-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.72fr);
-  grid-template-areas:
-    "hero hero"
-    "continue continue"
-    "health releases"
-    "movies inspector";
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   width: 100%;
   max-width: var(--workspace-content-max-width);
@@ -1004,8 +1003,10 @@ kbd {
 .health-panel,
 .release-panel,
 .continue-watching-panel,
+.home-trailers-panel,
 .movie-rail,
-.inspector {
+.inspector,
+.coming-soon-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: linear-gradient(180deg, #121316f2, #0d0e10f5);
@@ -1013,7 +1014,6 @@ kbd {
 }
 
 .hero-panel {
-  grid-area: hero;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1125,13 +1125,40 @@ kbd {
 }
 
 .health-panel {
-  grid-area: health;
   padding: 20px;
 }
 
 .release-panel {
-  grid-area: releases;
   padding: 20px;
+}
+
+.home-status-grid,
+.home-media-grid,
+.home-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.72fr);
+  gap: 18px;
+  min-width: 0;
+}
+
+.home-status-grid > *,
+.home-media-grid > *,
+.home-main-grid > * {
+  min-width: 0;
+}
+
+.home-media-grid-trailers-only .home-trailers-panel {
+  grid-column: 1 / -1;
+}
+
+.home-side-stack {
+  position: sticky;
+  top: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
+  align-self: stretch;
+  min-width: 0;
 }
 
 .section-heading {
@@ -1490,7 +1517,6 @@ kbd {
 }
 
 .movie-rail {
-  grid-area: movies;
   padding: 20px;
   min-width: 0;
 }
@@ -1979,9 +2005,7 @@ kbd {
 }
 
 .inspector {
-  grid-area: inspector;
-  position: sticky;
-  top: 0;
+  position: relative;
   align-self: start;
   min-height: 520px;
   padding: 20px;
@@ -2357,9 +2381,160 @@ kbd {
 }
 
 .continue-watching-panel {
-  grid-area: continue;
   min-width: 0;
   padding: 20px;
+}
+
+.home-trailers-panel,
+.coming-soon-panel {
+  min-width: 0;
+  padding: 20px;
+}
+
+.home-trailers-heading {
+  align-items: flex-start;
+}
+
+.home-trailer-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-trailer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.home-video-card {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  align-content: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 7px;
+  text-align: left;
+  transition: border-color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.home-video-card:hover,
+.home-video-card:focus-visible {
+  border-color: #d4af3770;
+  background: #d4af370d;
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.home-video-thumbnail {
+  position: relative;
+  display: grid;
+  width: 100%;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: #050506;
+  box-shadow: var(--shadow-card);
+}
+
+.home-video-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.home-video-play {
+  position: absolute;
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid #ffffff88;
+  border-radius: 999px;
+  background: #050506b8;
+  color: #ff3535;
+  opacity: 0.88;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.home-video-card:hover .home-video-play,
+.home-video-card:focus-visible .home-video-play {
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+.home-video-card > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  line-height: 1.28;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.home-video-card > small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.home-video-card-skeleton {
+  min-height: 250px;
+}
+
+.home-feed-empty {
+  display: grid;
+  min-height: 228px;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--text-muted);
+  padding: 22px;
+  text-align: center;
+}
+
+.home-feed-empty strong {
+  color: var(--text-strong);
+}
+
+.home-feed-empty span {
+  max-width: 42ch;
+  font-size: 0.78rem;
+}
+
+.home-feed-stale {
+  display: block;
+  margin-top: 10px;
+  color: var(--archive-amber);
+  font-size: 0.72rem;
+}
+
+.continue-watching-controls button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.coming-soon-panel {
+  height: 100%;
+}
+
+.coming-soon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.upcoming-movie-card-skeleton {
+  aspect-ratio: 2 / 3;
 }
 
 .continue-watching-controls {
@@ -3326,7 +3501,7 @@ kbd {
 }
 
 .person-discover-button {
-  bottom: 6px;
+  top: 40px;
 }
 
 .person-bio-button:hover,
@@ -5380,8 +5555,8 @@ kbd {
 }
 
 .movie-expanded-people-grid .person-card .person-discover-button {
-  top: auto;
-  bottom: 18px;
+  top: 40px;
+  bottom: auto;
 }
 
 .movie-expanded-people-grid .person-card .person-avatar {
@@ -5508,18 +5683,42 @@ kbd {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: start;
+  cursor: pointer;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: linear-gradient(135deg, #121316 0%, #0d0e10 100%);
   padding: var(--space-3);
+  transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out);
 }
 
-.library-file-row-expanded {
+.library-file-row:hover,
+.library-file-row:focus-visible {
+  border-color: #d4af3740;
+  outline: none;
+}
+
+.library-file-row-expanded,
+.library-file-row-selected {
   border-color: #d4af375a;
   box-shadow: var(--shadow-card);
 }
 
 .file-row-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+  gap: 8px;
+}
+
+.file-selection-checkbox {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+  opacity: 1;
+}
+
+.file-row-copy {
   display: grid;
   min-width: 0;
   gap: 8px;
@@ -5562,6 +5761,7 @@ kbd {
 .file-row-actions {
   justify-content: flex-end;
   max-width: 480px;
+  cursor: default;
 }
 
 .file-row-expand svg {
@@ -5574,6 +5774,7 @@ kbd {
 
 .file-expanded-panel {
   grid-column: 1 / -1;
+  cursor: default;
 }
 
 .modal-backdrop {
@@ -5724,6 +5925,74 @@ kbd {
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+.trailer-session-recommendations {
+  margin-top: 12px;
+}
+
+.trailer-session-recommendations > div,
+.trailer-end-recommendations > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trailer-session-recommendations button,
+.trailer-end-recommendations button {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #111216;
+  color: var(--text-strong);
+  cursor: pointer;
+  text-align: left;
+}
+
+.trailer-session-recommendations button:hover,
+.trailer-session-recommendations button:focus-visible,
+.trailer-end-recommendations button:hover,
+.trailer-end-recommendations button:focus-visible {
+  border-color: #d4af3780;
+  outline: none;
+  background: #d4af3712;
+}
+
+.trailer-session-recommendations img,
+.trailer-end-recommendations img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 7px;
+  object-fit: cover;
+}
+
+.trailer-session-recommendations strong,
+.trailer-end-recommendations strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.trailer-end-recommendations {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  align-content: center;
+  padding: 28px;
+  background: #050506ed;
+  backdrop-filter: blur(8px);
+}
+
+.trailer-end-recommendations .screen-kicker {
+  margin-bottom: 12px;
+  font-size: 0.82rem;
 }
 
 .stream-loading-overlay {
@@ -7711,17 +7980,23 @@ kbd {
 }
 
 @media (max-width: 1280px) {
-  .home-grid {
+  .home-status-grid,
+  .home-media-grid,
+  .home-main-grid {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "hero"
-      "health"
-      "releases"
-      "movies"
-      "inspector";
   }
 
-  .inspector {
+  .home-media-grid-trailers-only .home-trailers-panel {
+    grid-column: auto;
+  }
+
+  .home-side-stack {
+    position: relative;
+  }
+}
+
+@media (max-height: 900px) {
+  .home-side-stack {
     position: relative;
   }
 }

@@ -81,6 +81,11 @@ class WorkspaceLayoutUiTest(unittest.TestCase):
         self.assertIn("SIDEBAR_COLLAPSED_STORAGE_KEY", APP)
         self.assertIn("aria-expanded={!collapsed}", APP)
         self.assertIn("collapsed={sidebarCollapsed}", APP)
+        self.assertIn(
+            ".sidebar-collapsed .brand-lockup > div {\n"
+            "    flex: 0 0 0;",
+            STYLES,
+        )
         self.assertIn("padding: 24px;", selector_rule(STYLES, ".workspace"))
 
 

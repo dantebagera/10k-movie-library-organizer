@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="gold" x1="5" y1="5" x2="27" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7D57A"/>
+      <stop offset=".52" stop-color="#D4AF37"/>
+      <stop offset="1" stop-color="#8C6418"/>
+    </linearGradient>
+  </defs>
+  <path d="M23.8 11.1V5.8l4.4 4.2-4.4 4.1v-3a10.8 10.8 0 1 0 1.1 8.1" fill="none" stroke="url(#gold)" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="16.2" y="21" text-anchor="middle" fill="#F7D57A" font-family="Segoe UI, sans-serif" font-size="10.5" font-weight="700">10</text>
+</svg>

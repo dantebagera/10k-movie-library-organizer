@@ -6,7 +6,7 @@ Cinema Paradiso is a self-hosted movie library manager for people with hundreds 
 
 Your library catalog, settings, and operational state stay on your machine. Optional services such as Plex, TMDB, Prowlarr, streaming providers, and Ollama cloud models are contacted only when configured for their corresponding features.
 
-**Current release: v2.8.1** - July 2026
+**Current release: v2.8.2** - July 2026
 
 ---
 
@@ -16,9 +16,17 @@ Your library catalog, settings, and operational state stay on your machine. Opti
 
 ![Cinema Paradiso Home](screenshots/react-home-desktop.png)
 
+### Continue Watching & New Trailers
+
+![Cinema Paradiso Continue Watching](screenshots/react-home-continue-watching.png)
+
 ### Library
 
 ![Cinema Paradiso Library](screenshots/react-library-movie-view.png)
+
+### Expanded Movie
+
+![Cinema Paradiso Expanded Movie](screenshots/react-expanded-movie-card.png)
 
 ### Library File View
 
@@ -28,45 +36,40 @@ Your library catalog, settings, and operational state stay on your machine. Opti
 
 ![Cinema Paradiso Movie Lists](screenshots/react-movie-lists-desktop.png)
 
-### Cleanup
-
-![Cleanup Workspace](screenshots/react-cleanup-desktop.png)
-
-### Identity Review
-
-![Cleanup Identity Review](screenshots/react-cleanup-identity-review.png)
-
 ### Discover Movies
 
 ![Discover Movies](screenshots/react-discover-desktop.png)
-
-### Browse Indexers
-
-![Browse Indexers](screenshots/react-discover-browse-loaded.png)
-
-### Ask AI
-
-![Ask AI Recommendations](screenshots/react-discover-ask-ai.png)
 
 ### AI Control
 
 ![Cinema Paradiso AI Control](screenshots/react-ai-control-desktop.png)
 
-### Downloads
+### IPTV
 
-![Downloads Workspace](screenshots/react-downloads-desktop.png)
+![Cinema Paradiso IPTV](screenshots/react-iptv-desktop.png)
 
-### Help
+### Native Player
 
-![Cinema Paradiso Help](screenshots/react-help-desktop.png)
+![Cinema Paradiso Native Player](screenshots/native-player-desktop.png)
 
-### Settings
+### Native Player Settings
 
 ![Cinema Paradiso Settings](screenshots/react-settings-desktop.png)
 
-### Styleguide
+---
 
-![Cinema Paradiso Styleguide](screenshots/styleguide-page-wide.png)
+## What Changed in v2.8.2
+
+Cinema Paradiso v2.8.2 adds a first-party native player and turns Home into a more cinematic, useful command center while keeping large movie grids complete and responsive.
+
+- **Native playback:** a bundled Qt Quick and libmpv player handles owned movies, audio and subtitle tracks, fullscreen playback, seek controls, and safe OS fallback.
+- **Continue Watching:** playback progress is stored in the existing catalog authority and presented as a compact screening-room rail on Home.
+- **Subtitle hub:** local tracks, OpenSubtitles searches, download, save-next-to-movie, preferred languages, delay, and per-title restoration live in one player workflow.
+- **Cinematic Home:** the hero, library health, release watchlist, Continue Watching, current trailers, trending movies, and upcoming releases now form one deliberate desktop experience.
+- **Complete card grids:** responsive row metrics keep all reachable results visible through bounded pagination instead of hiding cards to force a rectangle.
+- **Cleaner owned cards:** shared cards use concise quality and source labels; detailed physical file facts remain in Library File View.
+- **Faster AI Control:** owned-title lookup is batched and bounded TMDB page retrieval reduces preview latency without changing the Ollama skill contract.
+- **Version display:** the sidebar footer and portable package are rebuilt from the authoritative `2.8.2` package version.
 
 ---
 
@@ -169,7 +172,7 @@ AI Control is an experimental review workspace for natural-language commands.
 
 Downloads uses the original qBittorrent WebUI inside Cinema Paradiso. The embedded client is isolated from any qBittorrent installation already registered as the operating system's default torrent client.
 
-- The current public v2.8.1 portable release ZIP includes a tested bundled qBittorrent runtime.
+- The current public v2.8.2 portable release ZIP includes tested bundled qBittorrent, FFmpeg, and native-player runtimes.
 - Cinema Paradiso submissions are tagged `cinema-paradiso` and download to an incomplete staging folder.
 - Removing an unfinished CP submission in qBittorrent is treated as a normal cancellation; CP does not move its data or update the catalog.
 - At 100%, Cinema Paradiso pauses and removes the torrent without deleting its data, then moves the unchanged payload into the selected movie destination.
@@ -233,7 +236,7 @@ User lists, Watched and Watchlist states, edited collections, followed releases,
 
 ### Windows Quick Start
 
-For normal use, download the `Cinema-Paradiso-2.8.1-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent runtime.
+For normal use, download the `Cinema-Paradiso-2.8.2-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent, FFmpeg, and native-player runtimes.
 
 The GitHub Source ZIP remains developer-oriented. If you download the source ZIP or clone the repository, double-click `run.bat`.
 
@@ -287,7 +290,7 @@ Example:
 
 Only a movie library folder is required. Integrations are optional.
 
-The public v2.8.1 portable release uses bundled qBittorrent. Cinema Paradiso 2.8 keeps the embedded runtime portable and adds a user-triggered update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
+The public v2.8.2 portable release uses bundled qBittorrent, FFmpeg, and the first-party native player. Cinema Paradiso 2.8 keeps each runtime portable and retains the user-triggered qBittorrent update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
 
 ---
 

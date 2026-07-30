@@ -1,5 +1,32 @@
 # Changelog
 
+## v2.8.2 - July 2026
+
+Cinema Paradiso v2.8.2 adds first-party native playback, a Continue Watching screening room, and a more cinematic Home while tightening shared card and large-grid behavior.
+
+### Added
+
+- Bundled Qt Quick and libmpv native player with play/pause, seek, volume, speed, audio-track, subtitle-track, and fullscreen controls.
+- Continue Watching history backed by the existing SQL catalog authority and exposed as a compact Home rail.
+- Integrated subtitle search, download, save-next-to-movie, language preference, delay, and per-title restoration.
+- Home trailer rail sourced from the configured YouTube playlist.
+- Native-player settings, runtime status, keyboard shortcuts, and provider configuration.
+
+### Changed
+
+- Home now presents the cinematic hero, library health, release watchlist, Continue Watching, trailers, trending movies, and upcoming releases in one desktop hierarchy.
+- Movie grids calculate complete rows from their available width while keeping every bounded result reachable through pagination.
+- Owned movie cards use compact quality and source labels; detailed physical media facts remain in Library File View.
+- AI Control batches owned-title checks and retrieves bounded TMDB pages concurrently without changing its Ollama skill contract.
+- The sidebar version and portable archive now derive from the authoritative v2.8.2 package metadata.
+
+### Fixed
+
+- Native playback remains responsive during long sessions and closes cleanly without leaking player processes.
+- Playback launch, progress reporting, resume state, audio/subtitle restoration, and safe OS fallback are validated across the app-to-player protocol.
+- Discover, Library, Movie Lists, AI Control, and IPTV card owners follow the same shared expanded-card and grid contracts.
+- Home movie selection and trailer loading ignore stale results and preserve deterministic ordering.
+
 ## v2.8.1 - July 2026
 
 Cinema Paradiso v2.8.1 expands catalog search, completes bounded Discover pagination, and tightens shared movie-card and AI Control behavior.

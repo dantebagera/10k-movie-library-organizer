@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import app
@@ -24,6 +27,42 @@ class PlayerPlayApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["mode"], "os_default")
         play.assert_called_once_with(r"E:\Movies\Movie.mkv", restart=False)
+
+    def test_player_manager_wires_the_managed_poster_resolver(self):
+        repository = object()
+        with (
+            patch.object(app, "_catalog_repository", return_value=repository),
+            patch.object(app, "get_movies_dirs", return_value=[r"E:\Movies"]),
+            patch.object(app, "resolve_library_media", return_value={}) as resolve,
+        ):
+            app._player_manager.media_resolver("catalog-key")
+
+        resolve.assert_called_once_with(
+            repository,
+            "catalog-key",
+            [r"E:\Movies"],
+            local_poster_resolver=app._resolve_player_local_poster,
+        )
+
+    def test_managed_asset_reference_resolves_only_inside_the_asset_root(self):
+        checksum = "c" * 64
+        with tempfile.TemporaryDirectory() as root:
+            asset_root = Path(root) / "assets"
+            asset_root.mkdir()
+            poster = asset_root / f"{checksum}.jpg"
+            poster.write_bytes(b"poster")
+            service = SimpleNamespace(
+                assets_root=asset_root,
+                lookup=lambda **kwargs: {
+                    "local_path": str(poster),
+                } if kwargs.get("checksum") == checksum else None,
+            )
+            with patch.object(app, "_media_asset_service", return_value=service):
+                resolved = app._resolve_player_local_poster(
+                    f"/api/assets/{checksum}"
+                )
+
+        self.assertEqual(resolved, poster.resolve())
 
     def test_play_rejects_arbitrary_path_field_before_manager(self):
         with patch.object(app._player_manager, "play") as play:

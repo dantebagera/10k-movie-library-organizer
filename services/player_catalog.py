@@ -29,7 +29,40 @@ def _safe_poster_reference(value):
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
-def resolve_library_media(repository, path_key, library_roots):
+def _resolve_player_poster_reference(canonical, local_reference_resolver=None):
+    candidates = (
+        canonical.get("poster_url"),
+        canonical.get("remote_poster_url"),
+        canonical.get("poster_path"),
+    )
+    for candidate in candidates:
+        safe_reference = _safe_poster_reference(candidate)
+        if not safe_reference:
+            continue
+        if safe_reference.startswith("/api/"):
+            if not local_reference_resolver:
+                continue
+            try:
+                local_path = local_reference_resolver(safe_reference)
+                if not local_path:
+                    continue
+                resolved_path = Path(local_path).resolve()
+                if resolved_path.is_file():
+                    return resolved_path.as_uri()
+            except (OSError, RuntimeError, TypeError, ValueError):
+                continue
+            continue
+        return safe_reference
+    return ""
+
+
+def resolve_library_media(
+    repository,
+    path_key,
+    library_roots,
+    *,
+    local_poster_resolver=None,
+):
     if not isinstance(path_key, str):
         raise PlayerMediaError("A library file identity is required")
     raw_key = path_key.strip()
@@ -77,10 +110,9 @@ def resolve_library_media(repository, path_key, library_roots):
         or ""
     ).strip()
     movie_key = str(canonical.get("movie_key") or "").strip()
-    poster_reference = _safe_poster_reference(
-        canonical.get("poster_url")
-        or canonical.get("poster_path")
-        or ""
+    poster_reference = _resolve_player_poster_reference(
+        canonical,
+        local_reference_resolver=local_poster_resolver,
     )
     return {
         "path_key": requested_key,

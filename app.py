@@ -96,6 +96,7 @@ from services.media_file_facts import (
     probe_media_file,
     quality_display,
 )
+from services.youtube_playlist import YouTubePlaylistError, YouTubePlaylistFeed
 
 app = Flask(__name__)
 _process_started_at = time.perf_counter()
@@ -112,6 +113,8 @@ _startup_metrics = {
     'first_library_query_ms': 0.0,
 }
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HOME_TRAILERS_PLAYLIST_ID = "PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-"
+_home_trailers_feed = YouTubePlaylistFeed(HOME_TRAILERS_PLAYLIST_ID)
 _SLOW_ROUTE_MS = int(os.environ.get('CP_SLOW_ROUTE_MS', '250') or '250')
 _TEST_MODE = str(os.environ.get('CP_TEST_MODE', '') or '').strip() == '1'
 _TEST_RUNNER_PATH = Path(sys.argv[0] if sys.argv else '').as_posix().lower()
@@ -228,6 +231,7 @@ _player_manager = PlayerManager(
         _catalog_repository(),
         path_key,
         get_movies_dirs(),
+        local_poster_resolver=_resolve_player_local_poster,
     ),
     playback_history=_playback_history,
     subtitle_service=_subtitle_service,
@@ -415,6 +419,37 @@ def _media_asset_service():
         service = MediaAssetService(repository, metadata_root)
         _media_asset_service_cache[cache_key] = service
     return service
+
+
+def _resolve_player_local_poster(reference):
+    reference = str(reference or "").strip()
+    asset_match = re.fullmatch(r"/api/assets/([a-f0-9]{64})", reference)
+    if asset_match:
+        service = _media_asset_service()
+        asset = service.lookup(checksum=asset_match.group(1))
+        if not asset:
+            return None
+        path = Path(asset.get("local_path") or "").resolve()
+        try:
+            path.relative_to(service.assets_root.resolve())
+        except ValueError:
+            return None
+        return path if path.is_file() else None
+
+    prefix = "/api/library/posters/image/"
+    if reference.startswith(prefix):
+        filename = urllib.parse.unquote(reference[len(prefix):])
+        if not filename or Path(filename).name != filename:
+            return None
+        posters_root = Path(_metadata_store().posters_dir).resolve()
+        path = (posters_root / filename).resolve()
+        try:
+            path.relative_to(posters_root)
+        except ValueError:
+            return None
+        return path if path.is_file() else None
+    return None
+
 
 def _norm(path):
     """Normalise a file path for use as a cache key.
@@ -3244,8 +3279,7 @@ def _catalog_owned_movie(movie, *, store=None, metadata_snapshot=None, entries=N
     return exact
 
 
-def _find_owned_movie(movie):
-    match = _catalog_owned_movie(movie)
+def _owned_movie_match_payload(match):
     if not match:
         return None
     item = match['item']
@@ -3256,6 +3290,32 @@ def _find_owned_movie(movie):
         'resolution': item.get('resolution', 'Unknown'),
         'size_human': item.get('size_human', ''),
     }
+
+
+def _find_owned_movie(movie):
+    return _owned_movie_match_payload(_catalog_owned_movie(movie))
+
+
+def _find_owned_movies(movies):
+    movies = list(movies or [])
+    if not movies or not any(True for _ in _iter_movie_roots()):
+        return [None for _ in movies]
+    store = _metadata_store()
+    metadata_snapshot = store.snapshot()
+    identity_keys = []
+    for movie in movies:
+        identity_keys.extend(_ownership_keys(movie))
+    candidates = _current_catalog_store(store).ownership_candidates(identity_keys)
+    entries = _catalog_owned_entries(candidates, store, metadata_snapshot)
+    return [
+        _owned_movie_match_payload(_catalog_owned_movie(
+            movie,
+            store=store,
+            metadata_snapshot=metadata_snapshot,
+            entries=entries,
+        ))
+        for movie in movies
+    ]
 
 
 def NumberSafe(value):
@@ -4013,37 +4073,48 @@ def _ai_control_filter_person_credit_rows(rows, role='actor'):
     return filtered
 
 
+AI_CONTROL_TMDB_PAGE_WORKERS = 8
+
+
+def _ai_control_tmdb_page_url(parsed, base_query, page):
+    return urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urllib.parse.urlencode({**base_query, 'page': str(page)}),
+        parsed.fragment,
+    ))
+
+
 def _ai_control_tmdb_all_movie_pages(first_url):
     parsed = urllib.parse.urlsplit(first_url)
     base_query = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    first_data = _tmdb_fetch_provider_page(
+        _ai_control_tmdb_page_url(parsed, base_query, 1)
+    )
+    total_pages = min(
+        max(1, int(first_data.get('total_pages', 1) or 1)),
+        TMDB_PROVIDER_PAGE_LIMIT,
+    )
+    page_payloads = [first_data]
+    if total_pages > 1:
+        page_urls = [
+            _ai_control_tmdb_page_url(parsed, base_query, page)
+            for page in range(2, total_pages + 1)
+        ]
+        worker_count = min(AI_CONTROL_TMDB_PAGE_WORKERS, len(page_urls))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            page_payloads.extend(executor.map(_tmdb_fetch_provider_page, page_urls))
+
     movies = []
     seen = set()
-    page = 1
-    total_pages = 1
-    while page <= total_pages:
-        page_query = {**base_query, 'page': str(page)}
-        page_url = urllib.parse.urlunsplit((
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            urllib.parse.urlencode(page_query),
-            parsed.fragment,
-        ))
-        req = urllib.request.Request(page_url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = _json.loads(response.read().decode())
-        if page == 1:
-            total_pages = min(
-                max(1, int(data.get('total_pages', 1) or 1)),
-                TMDB_PROVIDER_PAGE_LIMIT,
-            )
+    for data in page_payloads:
         for row in data.get('results', []) or []:
             tmdb_id = str(row.get('id') or row.get('tmdb_id') or '').strip()
             if not tmdb_id or tmdb_id in seen:
                 continue
             seen.add(tmdb_id)
             movies.append(_ai_control_tmdb_movie_payload(row))
-        page += 1
     return movies
 
 
@@ -4266,7 +4337,7 @@ def ai_control_preview():
             tmdb_discover=_ai_control_tmdb_discover,
             tmdb_search=_ai_control_tmdb_search,
             person_movies=_ai_control_person_movies,
-            owned_movie_lookup=_find_owned_movie,
+            owned_movies_lookup=_find_owned_movies,
         )
         return jsonify(result)
     except Exception as error:
@@ -5368,6 +5439,22 @@ def identity_verification_enrich():
         return jsonify({'error': str(error)}), 500
 
 
+@app.route('/api/home/trailers')
+def home_trailers():
+    try:
+        return jsonify(_home_trailers_feed.get())
+    except YouTubePlaylistError as error:
+        return jsonify({
+            'error': str(error),
+            'playlist_id': HOME_TRAILERS_PLAYLIST_ID,
+            'source_url': (
+                'https://www.youtube.com/playlist?list='
+                f'{HOME_TRAILERS_PLAYLIST_ID}'
+            ),
+            'items': [],
+        }), 502
+
+
 @app.route('/api/stats')
 def library_stats():
     try:
@@ -5975,6 +6062,12 @@ def _tmdb_include_adult_value(value=None):
 
 
 TMDB_PROVIDER_PAGE_LIMIT = 500
+TMDB_PROVIDER_PAGE_SIZE = 20
+TMDB_LOGICAL_PAGE_SIZE_LIMIT = 100
+TMDB_PAGE_WINDOW_CACHE_TTL_SECONDS = 60
+TMDB_PAGE_WINDOW_CACHE_LIMIT = 256
+_tmdb_page_window_cache = {}
+_tmdb_page_window_cache_lock = threading.Lock()
 
 
 def _tmdb_requested_page(value):
@@ -5984,31 +6077,77 @@ def _tmdb_requested_page(value):
         return 1
 
 
+def _tmdb_requested_page_size(value, default=20):
+    try:
+        requested = int(value or default)
+    except (TypeError, ValueError):
+        requested = default
+    return min(TMDB_LOGICAL_PAGE_SIZE_LIMIT, max(1, requested))
+
+
 def _tmdb_page_contract(page_value, page_size_value=20):
     page = _tmdb_requested_page(page_value)
-    try:
-        requested_page_size = int(page_size_value or 20)
-    except (TypeError, ValueError):
-        requested_page_size = 20
-    page_size = 40 if requested_page_size >= 40 else 20
-    provider_pages = [page] if page_size == 20 else [(page - 1) * 2 + 1, (page - 1) * 2 + 2]
-    if provider_pages[0] > TMDB_PROVIDER_PAGE_LIMIT:
+    page_size = _tmdb_requested_page_size(page_size_value)
+    logical_start = (page - 1) * page_size
+    provider_offset = logical_start % TMDB_PROVIDER_PAGE_SIZE
+    first_provider_page = logical_start // TMDB_PROVIDER_PAGE_SIZE + 1
+    if first_provider_page > TMDB_PROVIDER_PAGE_LIMIT:
         raise ValueError(f'page exceeds the TMDB provider limit for page_size {page_size}')
-    return page, page_size, provider_pages
+    logical_end = logical_start + page_size
+    last_provider_page = min(
+        TMDB_PROVIDER_PAGE_LIMIT,
+        max(first_provider_page, (logical_end - 1) // TMDB_PROVIDER_PAGE_SIZE + 1),
+    )
+    provider_pages = list(range(first_provider_page, last_provider_page + 1))
+    return page, page_size, provider_pages, provider_offset
 
 
-def _tmdb_page_metadata(provider_total_pages, page_size):
+def _tmdb_page_metadata(provider_total_pages, page_size, provider_total_results=None):
     provider_total_pages = max(1, int(provider_total_pages or 1))
     reachable_provider_pages = min(provider_total_pages, TMDB_PROVIDER_PAGE_LIMIT)
-    total_pages = reachable_provider_pages
-    if page_size == 40:
-        total_pages = (reachable_provider_pages + 1) // 2
+    provider_capacity = reachable_provider_pages * TMDB_PROVIDER_PAGE_SIZE
+    try:
+        reported_total_results = max(0, int(provider_total_results))
+    except (TypeError, ValueError):
+        reported_total_results = provider_capacity
+    minimum_results_for_reported_pages = (reachable_provider_pages - 1) * TMDB_PROVIDER_PAGE_SIZE + 1
+    if provider_total_pages > 1 and reported_total_results < minimum_results_for_reported_pages:
+        reported_total_results = provider_capacity
+    reachable_results = min(provider_capacity, reported_total_results)
+    total_pages = max(1, (reachable_results + page_size - 1) // page_size)
     return {
         'page_size': page_size,
         'provider_total_pages': provider_total_pages,
         'provider_page_limit': TMDB_PROVIDER_PAGE_LIMIT,
         'total_pages': max(1, total_pages),
     }
+
+
+def _tmdb_fetch_provider_page(page_url):
+    if not _TEST_MODE:
+        now = time.monotonic()
+        with _tmdb_page_window_cache_lock:
+            cached = _tmdb_page_window_cache.get(page_url)
+            if cached and now - cached['fetched_at'] < TMDB_PAGE_WINDOW_CACHE_TTL_SECONDS:
+                return cached['data']
+
+    req = urllib.request.Request(page_url, headers={'Accept': 'application/json'})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        page_data = _json.loads(resp.read().decode())
+
+    if not _TEST_MODE:
+        with _tmdb_page_window_cache_lock:
+            if len(_tmdb_page_window_cache) >= TMDB_PAGE_WINDOW_CACHE_LIMIT:
+                oldest_url = min(
+                    _tmdb_page_window_cache,
+                    key=lambda key: _tmdb_page_window_cache[key]['fetched_at'],
+                )
+                _tmdb_page_window_cache.pop(oldest_url, None)
+            _tmdb_page_window_cache[page_url] = {
+                'fetched_at': time.monotonic(),
+                'data': page_data,
+            }
+    return page_data
 
 
 def _tmdb_fetch_page_window(first_url, provider_pages):
@@ -6022,9 +6161,7 @@ def _tmdb_fetch_page_window(first_url, provider_pages):
         page_url = first_url
         if index:
             page_url = re.sub(r'page=\d+', f'page={provider_page}', first_url)
-        req = urllib.request.Request(page_url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            page_data = _json.loads(resp.read().decode())
+        page_data = _tmdb_fetch_provider_page(page_url)
         if index == 0:
             data['total_pages'] = page_data.get('total_pages', 1)
             data['total_results'] = page_data.get('total_results', 0)
@@ -6237,7 +6374,7 @@ def tmdb_discover():
     keyword_id = request.args.get('keyword_id', '').strip()
     keyword_name = request.args.get('keyword_name', '').strip()
     try:
-        page, page_size, tmdb_pages = _tmdb_page_contract(
+        page, page_size, tmdb_pages, provider_offset = _tmdb_page_contract(
             request.args.get('page', '1'),
             request.args.get('page_size', '20'),
         )
@@ -6320,7 +6457,8 @@ def tmdb_discover():
 
         data = _tmdb_fetch_page_window(url, tmdb_pages)
         movies = []
-        for m in data.get('results', []):
+        provider_results = data.get('results', [])
+        for m in provider_results[provider_offset:provider_offset + page_size]:
             poster_path = m.get('poster_path', '')
             release = m.get('release_date', '') or ''
             year    = release[:4] if release else ''
@@ -6346,10 +6484,14 @@ def tmdb_discover():
                 'adult': bool(m.get('adult', False)),
             })
         payload = {
-            'results': movies[:page_size],
+            'results': movies,
             'page': page,
             'total_results': data.get('total_results', len(movies)),
-            **_tmdb_page_metadata(data.get('total_pages', 1), page_size),
+            **_tmdb_page_metadata(
+                data.get('total_pages', 1),
+                page_size,
+                data.get('total_results'),
+            ),
         }
         if keyword_id:
             payload['keyword'] = {
@@ -6447,7 +6589,7 @@ def tmdb_search():
     except ValueError:
         min_rating = 0
     try:
-        page, page_size, tmdb_pages = _tmdb_page_contract(
+        page, page_size, tmdb_pages, provider_offset = _tmdb_page_contract(
             request.args.get('page', '1'),
             request.args.get('page_size', '20'),
         )
@@ -6466,7 +6608,8 @@ def tmdb_search():
         url = f"https://api.themoviedb.org/3/search/movie?{params}"
         data = _tmdb_fetch_page_window(url, tmdb_pages)
         movies = []
-        for m in data.get('results', []):
+        provider_results = data.get('results', [])
+        for m in provider_results[provider_offset:provider_offset + page_size]:
             vote_count = int(m.get('vote_count', 0) or 0)
             if min_votes and vote_count < min_votes:
                 continue
@@ -6513,11 +6656,15 @@ def tmdb_search():
         elif sort_override == 'title.asc':
             movies.sort(key=lambda movie: str(movie.get('title') or '').casefold())
         return jsonify({
-            'results': movies[:page_size],
+            'results': movies,
             'page': page,
             'total_results': data.get('total_results', 0),
             'criteria_applied': bool(genre_id or min_votes or year_from or year_to or min_rating or sort_override),
-            **_tmdb_page_metadata(data.get('total_pages', 1), page_size),
+            **_tmdb_page_metadata(
+                data.get('total_pages', 1),
+                page_size,
+                data.get('total_results'),
+            ),
         })
     except urllib.error.HTTPError as e:
         if e.code == 401:
@@ -6534,31 +6681,37 @@ def tmdb_people_search():
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify({'error': 'q (query) parameter required'}), 400
-    page = _tmdb_requested_page(request.args.get('page', '1'))
-    if page > TMDB_PROVIDER_PAGE_LIMIT:
-        return jsonify({'error': 'page exceeds the TMDB provider limit'}), 400
     try:
-        def fetch_people(search_query):
+        page, page_size, tmdb_pages, provider_offset = _tmdb_page_contract(
+            request.args.get('page', '1'),
+            request.args.get('page_size', '20'),
+        )
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    try:
+        def people_search_url(search_query, provider_page):
             params = urllib.parse.urlencode({
                 'api_key': _tmdb_key,
                 'query': search_query,
                 'language': 'en-US',
                 'include_adult': _tmdb_include_adult_value(request.args.get('include_adult')),
-                'page': page,
+                'page': provider_page,
             })
-            url = f"https://api.themoviedb.org/3/search/person?{params}"
-            req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return _json.loads(resp.read().decode())
+            return f"https://api.themoviedb.org/3/search/person?{params}"
 
-        data = fetch_people(query)
-        people = data.get('results', []) or []
+        data = _tmdb_fetch_page_window(
+            people_search_url(query, tmdb_pages[0]),
+            tmdb_pages,
+        )
+        people = (data.get('results', []) or [])[provider_offset:provider_offset + page_size]
         used_split_fallback = False
         normalized_query = re.sub(r'[^a-z0-9]', '', query.casefold())
         if not people and page == 1 and normalized_query == query.casefold() and len(normalized_query) >= 5:
             candidates = {}
             for index in range(2, len(query) - 1):
-                split_data = fetch_people(f"{query[:index]} {query[index:]}")
+                split_data = _tmdb_fetch_provider_page(
+                    people_search_url(f"{query[:index]} {query[index:]}", 1)
+                )
                 for person in split_data.get('results', []) or []:
                     normalized_name = re.sub(r'[^a-z0-9]', '', str(person.get('name', '') or '').casefold())
                     if normalized_name == normalized_query:
@@ -6588,10 +6741,11 @@ def tmdb_people_search():
             })
         return jsonify({
             'results': results,
-            'page': data.get('page', page),
+            'page': page,
             **_tmdb_page_metadata(
                 1 if used_split_fallback else data.get('total_pages', 1),
-                20,
+                page_size,
+                len(results) if used_split_fallback else data.get('total_results'),
             ),
             'total_results': len(results) if used_split_fallback else data.get('total_results', len(results)),
         })
@@ -6610,23 +6764,26 @@ def tmdb_keywords_search():
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify({'error': 'q (query) parameter required'}), 400
-    page = _tmdb_requested_page(request.args.get('page', '1'))
-    if page > TMDB_PROVIDER_PAGE_LIMIT:
-        return jsonify({'error': 'page exceeds the TMDB provider limit'}), 400
+    try:
+        page, page_size, tmdb_pages, provider_offset = _tmdb_page_contract(
+            request.args.get('page', '1'),
+            request.args.get('page_size', '20'),
+        )
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
     try:
         params = urllib.parse.urlencode({
             'api_key': _tmdb_key,
             'query': query,
-            'page': page,
+            'page': tmdb_pages[0],
         })
         url = f"https://api.themoviedb.org/3/search/keyword?{params}"
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read().decode())
+        data = _tmdb_fetch_page_window(url, tmdb_pages)
 
         results = []
         seen = set()
-        for keyword in data.get('results', []) or []:
+        provider_results = data.get('results', []) or []
+        for keyword in provider_results[provider_offset:provider_offset + page_size]:
             keyword_id = str(keyword.get('id', '') or '').strip()
             name = str(keyword.get('name', '') or '').strip()
             if not keyword_id or not name or keyword_id in seen:
@@ -6638,8 +6795,12 @@ def tmdb_keywords_search():
             })
         return jsonify({
             'results': results,
-            'page': int(data.get('page', page) or page),
-            **_tmdb_page_metadata(data.get('total_pages', 1), 20),
+            'page': page,
+            **_tmdb_page_metadata(
+                data.get('total_pages', 1),
+                page_size,
+                data.get('total_results'),
+            ),
             'total_results': int(data.get('total_results', len(results)) or 0),
         })
     except urllib.error.HTTPError as e:
@@ -10284,6 +10445,7 @@ def tmdb_person_movies():
     except ValueError:
         min_rating = 0
     page = _tmdb_requested_page(request.args.get('page', '1'))
+    page_size = _tmdb_requested_page_size(request.args.get('page_size', '20'))
     _ensure_tmdb_genres()
     try:
         safe_id = urllib.parse.quote(str(person_id))
@@ -10350,7 +10512,6 @@ def tmdb_person_movies():
                 movie.get('release_date') or ''
             ), reverse=True)
 
-        page_size = 20
         total_results = len(movies)
         total_pages = max(1, (total_results + page_size - 1) // page_size)
         page = min(page, total_pages)

@@ -271,7 +271,8 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(item["directors"], [{"name": "Brian De Palma"}])
         self.assertEqual(item["cast"], [{"name": "Tom Cruise", "character": "Ethan Hunt"}])
 
-    def test_find_owned_person_results_intersect_online_matches_with_library(self):
+    def test_find_owned_person_results_use_library_without_online_provider(self):
+        person_calls = []
         result = ai_control.preview_command(
             "Find Tom Cruise movies I own",
             config=ai_control.default_config(),
@@ -283,6 +284,7 @@ class AiControlServiceTest(unittest.TestCase):
                     "tmdb_id": "954",
                     "resolution": "1080p",
                     "size_human": "2.4 GB",
+                    "cast": [{"name": "Tom Cruise"}],
                 }
             ],
             ollama_chat=lambda messages: json.dumps({
@@ -291,7 +293,7 @@ class AiControlServiceTest(unittest.TestCase):
                 "subject_type": "actor",
                 "owned": "owned",
             }),
-            person_movies=lambda name, role, settings: [
+            person_movies=lambda name, role, settings: person_calls.append((name, role)) or [
                 {"tmdb_id": "954", "title": "Mission: Impossible", "year": "1996", "source": "TMDB"},
                 {"tmdb_id": "744", "title": "Top Gun", "year": "1986", "source": "TMDB"},
             ],
@@ -302,8 +304,11 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual([item["title"] for item in result["items"]], ["Mission: Impossible"])
         self.assertEqual(result["items"][0]["path"], "E:\\Movies\\Mission Impossible.mkv")
         self.assertEqual(result["items"][0]["source"], "Library")
+        self.assertEqual(result["source"], "library")
+        self.assertEqual(person_calls, [])
 
-    def test_find_unowned_person_results_exclude_library_matches(self):
+    def test_find_unowned_person_results_batch_unresolved_ownership_matches(self):
+        lookup_calls = []
         result = ai_control.preview_command(
             "Find Tom Cruise movies not in my library",
             config=ai_control.default_config(),
@@ -320,11 +325,14 @@ class AiControlServiceTest(unittest.TestCase):
                 {"tmdb_id": "954", "title": "Mission: Impossible", "year": "1996", "source": "TMDB"},
                 {"tmdb_id": "744", "title": "Top Gun", "year": "1986", "source": "TMDB"},
             ],
+            owned_movies_lookup=lambda movies: lookup_calls.append(movies) or [None for _ in movies],
         )
 
         self.assertEqual(result["state"], "valid_plan")
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual([item["title"] for item in result["items"]], ["Top Gun"])
+        self.assertEqual(len(lookup_calls), 1)
+        self.assertEqual([movie["title"] for movie in lookup_calls[0]], ["Top Gun"])
 
     def test_find_keeps_complete_person_results_in_paged_cards(self):
         movies = [
@@ -386,14 +394,21 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(stored["items"][-1]["selection_key"], "item-60")
         self.assertIn("60 movies", result["message"])
 
-    def test_create_list_owned_person_results_intersect_online_matches_with_library(self):
+    def test_create_list_owned_person_results_use_library_without_online_provider(self):
         store = ai_control.PlanStore(ttl_seconds=60)
+        person_calls = []
 
         result = ai_control.preview_command(
             'create a list named "Owned Tom Cruise" with Tom Cruise movies I own',
             config=ai_control.default_config(),
             library_items=[
-                {"title": "Top Gun", "year": "1986", "path": "E:\\Movies\\Top Gun.mkv", "tmdb_id": "744"},
+                {
+                    "title": "Top Gun",
+                    "year": "1986",
+                    "path": "E:\\Movies\\Top Gun.mkv",
+                    "tmdb_id": "744",
+                    "cast": [{"name": "Tom Cruise"}],
+                },
             ],
             plan_store=store,
             ollama_chat=lambda messages: json.dumps({
@@ -403,7 +418,7 @@ class AiControlServiceTest(unittest.TestCase):
                 "owned": "owned",
                 "list_name": "Owned Tom Cruise",
             }),
-            person_movies=lambda name, role, settings: [
+            person_movies=lambda name, role, settings: person_calls.append((name, role)) or [
                 {"tmdb_id": "744", "title": "Top Gun", "year": "1986", "source": "TMDB"},
                 {"tmdb_id": "954", "title": "Mission: Impossible", "year": "1996", "source": "TMDB"},
             ],
@@ -413,6 +428,7 @@ class AiControlServiceTest(unittest.TestCase):
         self.assertEqual(result["total_matches"], 1)
         self.assertEqual([item["title"] for item in result["items"]], ["Top Gun"])
         self.assertEqual(result["items"][0]["source"], "Library")
+        self.assertEqual(person_calls, [])
 
     def test_download_preview_keeps_all_candidates_and_performs_no_source_work(self):
         movies = [

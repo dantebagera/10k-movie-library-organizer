@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QQuickFramebufferObject>
 #include <QSet>
+#include <QString>
 #include <QVariantList>
 #include <QtQml/qqmlregistration.h>
 
@@ -59,7 +60,8 @@ public:
     Q_INVOKABLE void selectSubtitleTrack(int id);
     Q_INVOKABLE void disableSubtitles();
     Q_INVOKABLE bool loadExternalSubtitle(const QString &path);
-    Q_INVOKABLE QString seekThumbnail(double seconds) const;
+    QString selectedSubtitleExternalPath() const;
+    Q_INVOKABLE QString seekThumbnail(double seconds);
     Q_INVOKABLE QVariantMap playbackStatistics() const;
     Q_INVOKABLE QString captureScreenshot();
     Q_INVOKABLE QString cycleABRepeat();
@@ -96,6 +98,7 @@ signals:
 
 private slots:
     void processEvents();
+    void processThumbnailEvents();
     void requestRender();
     void noteFirstFrame();
 
@@ -103,9 +106,20 @@ private:
     friend class MpvRenderer;
 
     static void wakeup(void *context);
+    static void thumbnailWakeup(void *context);
     bool sendCommand(const QList<QByteArray> &arguments);
     bool sendCommandAsync(const QList<QByteArray> &arguments);
+    bool sendThumbnailCommand(const QList<QByteArray> &arguments);
+    bool sendThumbnailCommandAsync(
+        const QList<QByteArray> &arguments,
+        quint64 requestId
+    );
     void initializeMpv();
+    bool initializeThumbnailMpv();
+    void destroyThumbnailMpv();
+    void requestNextThumbnail();
+    void completeThumbnailRequest(bool succeeded);
+    void trimThumbnailCache();
     void setStatus(const QString &status);
     void updateTrackModels();
     void updateChapters();
@@ -113,10 +127,10 @@ private:
     QVariantMap trackModel(int index) const;
     static QString trackFingerprint(const QVariantMap &track);
     void applyPreferences(const QVariantMap &preferences);
-    void captureCurrentSeekThumbnail();
 
     std::unique_ptr<MpvApi> m_api;
     mpv_handle *m_mpv = nullptr;
+    mpv_handle *m_thumbnailMpv = nullptr;
     bool m_available = false;
     bool m_paused = false;
     bool m_muted = false;
@@ -131,13 +145,21 @@ private:
     QVariantList m_subtitleTracks;
     QVariantList m_chapters;
     QString m_thumbnailRoot;
+    QString m_thumbnailMediaPath;
+    QString m_thumbnailLoadedMediaPath;
     QSet<int> m_thumbnailBuckets;
-    QSet<int> m_pendingThumbnailBuckets;
-    int m_lastThumbnailBucket = -1;
+    QSet<int> m_failedThumbnailBuckets;
+    int m_requestedThumbnailBucket = -1;
+    int m_activeThumbnailBucket = -1;
+    bool m_thumbnailLoading = false;
+    bool m_thumbnailCapturePending = false;
+    bool m_thumbnailWorkerUnavailable = false;
+    quint64 m_thumbnailCaptureCommandId = 0;
     QElapsedTimer m_loadTimer;
     quint64 m_loadGeneration = 0;
     quint64 m_fileLoadedGeneration = 0;
     int m_abRepeatStage = 0;
     int m_rotation = 0;
     quint64 m_asyncCommandId = 1000;
+    quint64 m_thumbnailCommandId = 100000;
 };

@@ -1,4 +1,4 @@
-import { ChevronDown, Film, MoreHorizontal, Play, RotateCcw, Star, X } from 'lucide-react';
+import { CalendarDays, ChevronDown, Film, MoreHorizontal, Play, RotateCcw, Star, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 function cx(...classes) {
@@ -267,5 +267,35 @@ export function ContinueMovieCard({
       <h3 dir="auto" title={displayTitle}>{displayTitle}</h3>
       <p>{remainingLabel}</p>
     </article>
+  );
+}
+
+export function UpcomingMovieCard({
+  title,
+  posterUrl,
+  releaseLabel,
+  selected = false,
+  onSelect
+}) {
+  const displayTitle = title || 'Untitled';
+
+  return (
+    <button
+      type="button"
+      className={cx('upcoming-movie-card', selected && 'upcoming-movie-card-selected')}
+      onClick={onSelect}
+      aria-pressed={selected}
+      aria-label={`Inspect ${displayTitle}${releaseLabel ? `, ${releaseLabel}` : ''}`}
+    >
+      <UnifiedMoviePoster
+        title={displayTitle}
+        posterUrl={posterUrl}
+        className="upcoming-movie-poster"
+      />
+      <span className="upcoming-movie-copy">
+        <strong dir="auto" title={displayTitle}>{displayTitle}</strong>
+        <small><CalendarDays size={13} /> {releaseLabel || 'Release date pending'}</small>
+      </span>
+    </button>
   );
 }

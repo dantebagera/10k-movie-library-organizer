@@ -33,6 +33,7 @@ endif()
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(cp-player WIN32
+    resources/cp-player.rc
     src/main.cpp
     src/MpvApi.cpp
     src/MpvApi.h
@@ -54,7 +55,45 @@ qt_add_qml_module(cp-player
         qml/PlayerTheme.qml
 )
 
+set(CP_PLAYER_ICON_PNG
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../static/cinema-paradiso-icon-preview.png"
+)
+set_source_files_properties("${CP_PLAYER_ICON_PNG}" PROPERTIES
+    QT_RESOURCE_ALIAS "cp-player.png"
+)
+qt_add_resources(cp-player "cp_player_branding"
+    PREFIX "/branding"
+    FILES "${CP_PLAYER_ICON_PNG}"
+)
+
+set(CP_PLAYER_CONTROL_ICONS
+    resources/icons/audio-tracks.svg
+    resources/icons/enter-fullscreen.svg
+    resources/icons/exit-fullscreen.svg
+    resources/icons/forward-10.svg
+    resources/icons/pause.svg
+    resources/icons/play.svg
+    resources/icons/rewind-10.svg
+    resources/icons/speed.svg
+    resources/icons/subtitles.svg
+    resources/icons/volume-high.svg
+    resources/icons/volume-muted.svg
+)
+foreach(CP_PLAYER_CONTROL_ICON IN LISTS CP_PLAYER_CONTROL_ICONS)
+    get_filename_component(CP_PLAYER_CONTROL_ICON_NAME
+        "${CP_PLAYER_CONTROL_ICON}" NAME
+    )
+    set_source_files_properties("${CP_PLAYER_CONTROL_ICON}" PROPERTIES
+        QT_RESOURCE_ALIAS "${CP_PLAYER_CONTROL_ICON_NAME}"
+    )
+endforeach()
+qt_add_resources(cp-player "cp_player_control_icons"
+    PREFIX "/icons"
+    FILES ${CP_PLAYER_CONTROL_ICONS}
+)
+
 target_include_directories(cp-player PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources"
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${MPV_INCLUDE_DIR}"
 )
@@ -68,6 +107,10 @@ target_link_libraries(cp-player PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
 )
+
+if(WIN32)
+    target_link_libraries(cp-player PRIVATE dwmapi)
+endif()
 
 target_compile_definitions(cp-player PRIVATE
     QT_NO_CAST_FROM_ASCII

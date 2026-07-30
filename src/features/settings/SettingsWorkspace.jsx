@@ -116,6 +116,7 @@ const emptySettingsState = {
     providers: {
       opensubtitles: {
         enabled: false,
+        authentication_mode: 'api_key_only',
         username: '',
         api_key: '',
         password: '',
@@ -162,6 +163,7 @@ function playerForm(payload = {}) {
     providers: {
       opensubtitles: {
         enabled: Boolean(opensubtitles.enabled),
+        authentication_mode: opensubtitles.authentication_mode || 'api_key_only',
         username: '',
         api_key: '',
         password: '',
@@ -782,9 +784,13 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           providers: {
             opensubtitles: {
               enabled: Boolean(player.providers.opensubtitles.enabled),
+              authentication_mode: player.providers.opensubtitles.authentication_mode,
               username: player.providers.opensubtitles.username,
               api_key: player.providers.opensubtitles.api_key,
-              password: player.providers.opensubtitles.password
+              password: player.providers.opensubtitles.password,
+              clear_secrets: player.providers.opensubtitles.authentication_mode === 'api_key_only'
+                ? ['username', 'password']
+                : []
             },
             subdl: {
               enabled: Boolean(player.providers.subdl.enabled),
@@ -1327,7 +1333,22 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
             <h4>Subtitle providers</h4>
             <label className="settings-checkbox-field">
               <input type="checkbox" checked={forms.player.providers.opensubtitles.enabled} onChange={(event) => updatePlayerProvider('opensubtitles', 'enabled', event.target.checked)} />
-              <span><strong>OpenSubtitles</strong><small>Credentials stay in the backend and are never returned to this page.</small></span>
+              <span><strong>OpenSubtitles</strong><small>The API key identifies Cinema Paradiso. Choose explicitly whether downloads use the consumer key or an OpenSubtitles account.</small></span>
+            </label>
+            <label className="dialog-field">
+              <span>OpenSubtitles authentication</span>
+              <select
+                value={forms.player.providers.opensubtitles.authentication_mode}
+                onChange={(event) => updatePlayerProvider('opensubtitles', 'authentication_mode', event.target.value)}
+              >
+                <option value="api_key_only">API key only — consumer quota</option>
+                <option value="account">OpenSubtitles account — personal quota</option>
+              </select>
+              <small>
+                {forms.player.providers.opensubtitles.authentication_mode === 'api_key_only'
+                  ? 'No account login. Saving removes any stored OpenSubtitles username and password.'
+                  : 'Uses your personal account allowance. Credentials stay in the backend and are never returned to this page.'}
+              </small>
             </label>
             <SecretField
               label="OpenSubtitles username"
@@ -1335,6 +1356,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
               revealed={revealed.playerOpenSubtitlesUsername}
               onReveal={() => setRevealed((state) => ({ ...state, playerOpenSubtitlesUsername: !state.playerOpenSubtitlesUsername }))}
               onChange={(value) => updatePlayerProvider('opensubtitles', 'username', value)}
+              disabled={forms.player.providers.opensubtitles.authentication_mode === 'api_key_only'}
               placeholder={forms.player.providers.opensubtitles.username_configured ? 'Saved — enter a value to replace' : 'Not configured'}
             />
             <SecretField
@@ -1351,6 +1373,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
               revealed={revealed.playerOpenSubtitlesPassword}
               onReveal={() => setRevealed((state) => ({ ...state, playerOpenSubtitlesPassword: !state.playerOpenSubtitlesPassword }))}
               onChange={(value) => updatePlayerProvider('opensubtitles', 'password', value)}
+              disabled={forms.player.providers.opensubtitles.authentication_mode === 'api_key_only'}
               placeholder={forms.player.providers.opensubtitles.password_configured ? 'Saved — enter a value to replace' : 'Not configured'}
             />
             <label className="settings-checkbox-field">
@@ -2031,13 +2054,13 @@ function integrationText(title) {
   }[title] || '';
 }
 
-function SecretField({ label, value, revealed, onReveal, onChange, placeholder = '' }) {
+function SecretField({ label, value, revealed, onReveal, onChange, placeholder = '', disabled = false }) {
   return (
     <div className="dialog-field secret-field">
       <span>{label}</span>
       <span className="secret-input-wrap">
-        <input aria-label={label} type={revealed ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete="off" placeholder={placeholder} />
-        <button type="button" className="secret-toggle" onClick={onReveal} aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`}>
+        <input aria-label={label} type={revealed ? 'text' : 'password'} value={value} onChange={(event) => onChange(event.target.value)} autoComplete="off" placeholder={placeholder} disabled={disabled} />
+        <button type="button" className="secret-toggle" onClick={onReveal} aria-label={revealed ? `Hide ${label}` : `Reveal ${label}`} disabled={disabled}>
           {revealed ? <EyeOff size={15} /> : <Eye size={15} />}
         </button>
       </span>

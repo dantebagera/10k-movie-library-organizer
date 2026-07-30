@@ -18,13 +18,19 @@ class ContinueWatchingUiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         cls.styles = (root / "src" / "styles.css").read_text(encoding="utf-8")
 
-    def test_home_places_full_width_continue_rail_after_hero(self):
+    def test_home_places_continue_beside_trailers_after_health_and_releases(self):
         hero_end = self.home.index("</section>")
-        continue_rail = self.home.index("<ContinueWatchingRail")
         health = self.home.index("<HealthPanel")
-        self.assertLess(hero_end, continue_rail)
-        self.assertLess(continue_rail, health)
-        self.assertIn('"continue continue"', self.styles)
+        releases = self.home.index("<ReleasePanel")
+        continue_rail = self.home.index("<ContinueWatchingRail")
+        self.assertLess(hero_end, health)
+        self.assertLess(health, releases)
+        self.assertLess(releases, continue_rail)
+        self.assertIn('className="home-status-grid"', self.home)
+        self.assertIn("className={cx('home-media-grid'", self.home)
+        self.assertIn("<HomeTrailersPanel", self.home)
+        self.assertIn(".home-status-grid,\n.home-media-grid,\n.home-main-grid", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.72fr);", self.styles)
 
     def test_compact_variant_is_owned_by_shared_movie_card_system(self):
         self.assertIn("export function ContinueMovieCard", self.card)

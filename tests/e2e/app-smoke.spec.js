@@ -210,6 +210,12 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
   await expect(sidebar).toHaveCSS('width', '84px');
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false');
   await expect(page.getByRole('button', { name: 'Library' })).toHaveAttribute('title', 'Library');
+  const collapsedBrandOffset = await page.locator('.brand-mark').evaluate((logo) => {
+    const sidebarRect = logo.closest('.sidebar').getBoundingClientRect();
+    const logoRect = logo.getBoundingClientRect();
+    return Math.abs((logoRect.left + logoRect.width / 2) - (sidebarRect.left + sidebarRect.width / 2));
+  });
+  expect(collapsedBrandOffset).toBeLessThanOrEqual(0.5);
 
   const collapsedWorkspaceWidth = await workspace.evaluate((element) => element.getBoundingClientRect().width);
   const collapsedContentWidth = await pageContent.evaluate((element) => element.getBoundingClientRect().width);
@@ -278,8 +284,8 @@ test('Continue Watching uses compact uncropped posters and centralized resume re
     return [...viewport.querySelectorAll('.continue-movie-card')]
       .filter((card) => card.getBoundingClientRect().right <= right + 0.5).length;
   });
-  expect(expandedComplete).toBeGreaterThanOrEqual(8);
-  expect(expandedComplete).toBeLessThanOrEqual(9);
+  expect(expandedComplete).toBeGreaterThanOrEqual(5);
+  expect(expandedComplete).toBeLessThanOrEqual(6);
   if (process.env.CP_E2E_EVIDENCE_PATH) {
     await page.screenshot({
       path: process.env.CP_E2E_EVIDENCE_PATH,
@@ -293,7 +299,7 @@ test('Continue Watching uses compact uncropped posters and centralized resume re
     return [...viewport.querySelectorAll('.continue-movie-card')]
       .filter((card) => card.getBoundingClientRect().right <= right + 0.5).length;
   });
-  expect(collapsedComplete).toBeGreaterThanOrEqual(9);
+  expect(collapsedComplete).toBeGreaterThanOrEqual(expandedComplete);
 
   await page.getByRole('button', { name: 'Play Continue Movie 1', exact: true }).click();
   await expect.poll(() => playRequests.length).toBe(1);
@@ -481,6 +487,11 @@ test('Settings keeps OS playback default, redacts provider secrets, and verifies
 
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
   await mockCardParityApis(page);
+  let resolvedFileSelection = [];
+  await page.route('**/api/library/selection/items', async (route) => {
+    resolvedFileSelection = route.request().postDataJSON()?.paths || [];
+    await route.fulfill({ json: { items: [parityLibraryItem], count: 1, catalog_generation: 1 } });
+  });
   await page.route('**/api/library?view=files', async (route) => {
     await route.fulfill({ json: { items: [parityLibraryItem], count: 1, catalog_generation: 1 } });
   });
@@ -490,9 +501,32 @@ test('Library switches between canonical movie and raw file views', async ({ pag
   await page.getByRole('button', { name: 'File View' }).click();
   await expect(page.getByRole('heading', { name: 'File View' })).toBeVisible();
   const fileRow = page.locator('.library-file-row').filter({ hasText: parityLibraryItem.filename });
-  await fileRow.getByRole('button', { name: `Expand file details for ${parityLibraryItem.filename}` }).click();
+  const fileSelectionBar = page.locator('.library-bulk-selection');
+  const fileCheckbox = fileRow.getByLabel(`Select ${parityLibraryItem.filename}`);
+  await expect(fileSelectionBar).toContainText('Select files');
+  await expect(fileCheckbox).toBeVisible();
+
+  await fileRow.locator('.file-selection-checkbox').click();
+  await expect(fileSelectionBar).toContainText('1 selected');
+  await expect(fileRow).toHaveAttribute('aria-expanded', 'false');
+  await fileSelectionBar.getByRole('button', { name: 'Clear' }).click();
+  await expect(fileCheckbox).not.toBeChecked();
+  await fileSelectionBar.getByRole('button', { name: 'Select all filtered' }).click();
+  await expect(fileCheckbox).toBeChecked();
+  await fileSelectionBar.getByRole('button', { name: 'Add to list' }).click();
+  await expect.poll(() => resolvedFileSelection).toEqual([parityLibraryItem.path]);
+  await expect(page.getByRole('dialog', { name: 'List editor' })).toContainText('1 selected movie will be added.');
+  await page.getByRole('button', { name: 'Close list editor' }).click();
+
+  await fileRow.locator('.file-row-main').click();
+  await fileRow.getByRole('button', { name: `Collapse file details for ${parityLibraryItem.filename}` }).click();
+  await expect(fileRow).toHaveAttribute('aria-expanded', 'false');
+  await fileRow.focus();
+  await fileRow.press('Enter');
   const fileFacts = page.locator('.file-expanded-panel');
   await expect(fileFacts.getByText('Physical file facts')).toBeVisible();
+  await fileFacts.click();
+  await expect(fileRow).toHaveAttribute('aria-expanded', 'true');
   await expect(fileFacts.getByText('1800 × 960', { exact: true })).toBeVisible();
   await expect(fileFacts.getByText('HEVC · Main 10@L4 · 10-bit', { exact: true })).toBeVisible();
   await expect(fileFacts.getByText('18.4 Mbps', { exact: true })).toBeVisible();
@@ -1460,7 +1494,16 @@ test('Pick relationship browsing uses shared Previous and Next replacement pages
   const rootCard = page.locator('.discover-movie-card').filter({ hasText: pickMovie.title });
   await expect(rootCard).toBeVisible();
   await rootCard.getByRole('heading', { name: pickMovie.title }).click();
-  await rootCard.locator('.person-card').filter({ hasText: 'Pick Actor' }).click();
+  const pickActorCard = rootCard.locator('.person-card').filter({ hasText: 'Pick Actor' });
+  const biographyButton = pickActorCard.getByRole('button', { name: 'Open biography for Pick Actor' });
+  const filmographyButton = pickActorCard.getByRole('button', { name: 'Open filmography for Pick Actor' });
+  await expect(biographyButton).toHaveAttribute('title', 'Biography');
+  await expect(filmographyButton).toHaveAttribute('title', 'Filmography');
+  const biographyBox = await biographyButton.boundingBox();
+  const filmographyBox = await filmographyButton.boundingBox();
+  expect(filmographyBox.y).toBeGreaterThan(biographyBox.y);
+  expect(Math.abs(filmographyBox.y - (biographyBox.y + biographyBox.height) - 6)).toBeLessThanOrEqual(1);
+  await filmographyButton.click();
 
   const pager = page.getByRole('navigation', { name: 'AI Pick relationship pagination' });
   await expect(page.getByText('Pick actor page 1', { exact: true })).toBeVisible();
@@ -2377,7 +2420,9 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   const discoverCard = page.locator('.discover-movie-card').filter({ hasText: parityMovie.title });
   await expect(discoverCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(discoverCard).toContainText(parityMovie.year);
-  await expect(discoverCard).toContainText('1080-class - 1800 x 960');
+  await expect(discoverCard).toContainText('1080 · Blu-ray');
+  await expect(discoverCard).not.toContainText('100 B');
+  await expect(discoverCard).not.toContainText('1080-class - 1800 x 960');
   await expect(discoverCard.getByText('Owned', { exact: true })).toBeVisible();
   const discoverRequestsBeforeExpand = tmdbDetailsRequests;
   await discoverCard.click();
@@ -2394,7 +2439,9 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   const listCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
   await expect(listCard.getByRole('heading', { name: parityMovie.title })).toBeVisible();
   await expect(listCard).toContainText(parityMovie.year);
-  await expect(listCard).toContainText('1080-class - 1800 x 960');
+  await expect(listCard).toContainText('1080 · Blu-ray');
+  await expect(listCard).not.toContainText('100 B');
+  await expect(listCard).not.toContainText('1080-class - 1800 x 960');
   const listRequestsBeforeExpand = tmdbDetailsRequests;
   await listCard.click();
   await expect(listCard).toContainText(parityMovie.plot);
@@ -2409,7 +2456,12 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('.inspector')).toContainText(parityMovie.plot);
   await expect(page.locator('.inspector')).toContainText('SQL Cast Member');
-  await expect(page.locator('.inspector')).toContainText('1080-class - 1800 x 960');
+  await expect(page.locator('.inspector')).toContainText('1080 · Blu-ray');
+  await expect(page.locator('.inspector')).not.toContainText('100 B');
+  await expect(page.locator('.inspector')).not.toContainText('1080-class - 1800 x 960');
+  const homeOwnedCard = page.locator('.home-smart-movie-card').filter({ hasText: parityMovie.title });
+  await expect(homeOwnedCard).toContainText('1080 · Blu-ray');
+  await expect(homeOwnedCard).not.toContainText('100 B');
   await expect(page.locator('.inspector').getByRole('button', { name: 'File details', exact: true })).toBeVisible();
 
   await page.route('**/api/ai-control/preview', async (route) => {
@@ -2428,7 +2480,9 @@ test('Library, Discover-owned, and Movie List cards render one canonical movie c
   await page.getByPlaceholder('Tell CP what to find, list, download, or delete...').fill('Find my parity movie');
   await page.getByRole('button', { name: 'Preview command' }).click();
   const aiCard = page.locator('.discover-movie-card').filter({ hasText: parityMovie.title });
-  await expect(aiCard).toContainText('1080-class - 1800 x 960');
+  await expect(aiCard).toContainText('1080 · Blu-ray');
+  await expect(aiCard).not.toContainText('100 B');
+  await expect(aiCard).not.toContainText('1080-class - 1800 x 960');
   await aiCard.click();
   await expect(aiCard).toContainText('SQL Director');
   await expect(aiCard).toContainText('SQL Cast Member');
@@ -2623,4 +2677,195 @@ test('curation generation refresh keeps an expanded Discover card open', async (
 
   await expect(card).toContainText('SQL Director');
   await expect(card).toHaveClass(/unified-movie-card-expanded/);
+});
+
+test('adaptive Discover paging fills the measured desktop card rows', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await mockCardParityApis(page);
+  const requestedPageSizes = [];
+  const movies = Array.from({ length: 100 }, (_, index) => ({
+    ...parityMovie,
+    tmdb_id: String(10000 + index),
+    title: `Adaptive Movie ${index + 1}`,
+    year: String(2000 + (index % 25))
+  }));
+
+  await page.route('**/api/tmdb/discover**', async (route) => {
+    const url = new URL(route.request().url());
+    const pageSize = Number(url.searchParams.get('page_size') || 20);
+    requestedPageSizes.push(pageSize);
+    await route.fulfill({ json: {
+      results: movies.slice(0, pageSize),
+      page: 1,
+      page_size: pageSize,
+      total_pages: Math.ceil(movies.length / pageSize),
+      total_results: movies.length
+    } });
+  });
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  const grid = page.locator('.discover-panel .discover-grid');
+  await expect(grid.locator(':scope > article')).toHaveCount(39);
+  const metrics = await grid.evaluate((element) => ({
+    cards: element.querySelectorAll(':scope > article').length,
+    columns: getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length
+  }));
+
+  expect(metrics).toEqual({ cards: 39, columns: 3 });
+  expect(metrics.cards % metrics.columns).toBe(0);
+  expect(requestedPageSizes).toContain(39);
+});
+
+test('Home fills both right-column spaces with playlist videos and inspector-aware upcoming movies', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await mockCardParityApis(page);
+  const poster = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="#151515"/><text x="300" y="450" text-anchor="middle" fill="#d4af37" font-size="72">SOON</text></svg>'
+  );
+  const continueItems = Array.from({ length: 6 }, (_, index) => ({
+    path_key: `e:\\movies\\home-${index}.mkv`,
+    title: `Home Continue ${index + 1}`,
+    poster_url: poster,
+    progress: 0.4,
+    remaining_seconds: 1200
+  }));
+  const upcoming = Array.from({ length: 6 }, (_, index) => ({
+    tmdb_id: String(8100 + index),
+    title: `Upcoming Feature ${index + 1}`,
+    year: '2027',
+    release_date: `2027-0${(index % 6) + 1}-15`,
+    poster_url: poster,
+    plot: `Upcoming plot ${index + 1}`,
+    genres: ['Drama'],
+    popularity: 100 - index
+  }));
+  const trending = Array.from({ length: 8 }, (_, index) => index === 0 ? parityMovie : ({
+    ...parityMovie,
+    tmdb_id: String(8200 + index),
+    imdb_id: `tt-home-${index}`,
+    title: `Trending Feature ${index + 1}`
+  }));
+  const videos = [
+    {
+      video_id: 'video-one',
+      title: 'Hot Trailer One',
+      url: 'https://www.youtube.com/watch?v=video-one',
+      thumbnail_url: poster,
+      published_at: '2026-07-28T10:00:00+00:00',
+      views: 12000
+    },
+    {
+      video_id: 'video-two',
+      title: 'Hot Trailer Two',
+      url: 'https://www.youtube.com/watch?v=video-two',
+      thumbnail_url: poster,
+      published_at: '2026-07-27T10:00:00+00:00',
+      views: 8000
+    }
+  ];
+
+  await page.route('**/api/player/continue-watching**', (route) => route.fulfill({
+    json: { items: continueItems }
+  }));
+  await page.route('**/api/home/trailers', (route) => route.fulfill({ json: {
+    playlist_id: 'PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-',
+    title: 'HOT New Trailers & Exclusives',
+    source_url: 'https://www.youtube.com/playlist?list=PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-',
+    items: videos,
+    stale: false
+  } }));
+  await page.route('**/api/tmdb/discover**', async (route) => {
+    const url = new URL(route.request().url());
+    const results = url.searchParams.get('list') === 'upcoming' ? upcoming : trending;
+    await route.fulfill({ json: {
+      results,
+      page: 1,
+      page_size: results.length,
+      total_pages: 1,
+      total_results: results.length
+    } });
+  });
+  await page.route('**/api/tmdb/details**', async (route) => {
+    const url = new URL(route.request().url());
+    const movie = upcoming.find((item) => String(item.tmdb_id) === url.searchParams.get('tmdb_id')) || parityMovie;
+    await route.fulfill({ json: {
+      ...movie,
+      summary: movie.plot,
+      cast: [{ id: '1', name: 'Upcoming Cast' }],
+      directors: [],
+      writers: [],
+      keywords: [],
+      trailer_url: 'https://www.youtube.com/watch?v=upcoming-trailer'
+    } });
+  });
+  await page.route('https://www.youtube.com/embed/**', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: '<html><body>YouTube fixture</body></html>'
+  }));
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'HOT New Trailers & Exclusives' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Upcoming movies' })).toBeVisible();
+  await expect(page.locator('.movie-list > .home-smart-movie-card')).toHaveCount(8);
+  await page.locator('.inspector').evaluate(
+    (element) => Promise.all(element.getAnimations().map((animation) => animation.finished))
+  );
+
+  const geometry = await page.evaluate(() => {
+    const rect = (selector) => {
+      const bounds = document.querySelector(selector).getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, width: bounds.width };
+    };
+    return {
+      continuePanel: rect('.continue-watching-panel'),
+      trailers: rect('.home-trailers-panel'),
+      discover: rect('.movie-rail'),
+      inspector: rect('.inspector'),
+      upcoming: rect('.coming-soon-panel')
+    };
+  });
+  expect(Math.abs(geometry.continuePanel.left - geometry.discover.left)).toBeLessThan(1);
+  expect(Math.abs(geometry.continuePanel.width - geometry.discover.width)).toBeLessThan(1);
+  expect(Math.abs(geometry.trailers.left - geometry.inspector.left)).toBeLessThan(1);
+  expect(Math.abs(geometry.trailers.width - geometry.inspector.width)).toBeLessThan(1);
+  expect(Math.abs(geometry.upcoming.left - geometry.inspector.left)).toBeLessThan(1);
+  expect(geometry.upcoming.top).toBeGreaterThanOrEqual(geometry.inspector.bottom + 17);
+
+  const rowMetrics = await page.evaluate(() => {
+    const metrics = (selector) => {
+      const grid = document.querySelector(selector);
+      return {
+        cards: grid.children.length,
+        columns: getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length
+      };
+    };
+    return {
+      trailers: metrics('.home-trailer-grid'),
+      upcoming: metrics('.coming-soon-grid')
+    };
+  });
+  expect(rowMetrics.trailers.cards % rowMetrics.trailers.columns).toBe(0);
+  expect(rowMetrics.upcoming.cards % rowMetrics.upcoming.columns).toBe(0);
+  expect(rowMetrics.upcoming).toEqual({ cards: 6, columns: 3 });
+
+  await page.getByRole('button', { name: 'Play Hot Trailer One' }).click();
+  const videoDialog = page.getByRole('dialog', { name: 'Hot New Trailers: Hot Trailer One' });
+  await expect(videoDialog).toBeVisible();
+  await expect(videoDialog.locator('iframe')).toHaveAttribute('src', 'https://www.youtube.com/embed/video-one?autoplay=1&rel=0&enablejsapi=1');
+  await videoDialog.getByRole('button', { name: 'Play Hot Trailer Two in this player' }).click();
+  const continuedVideoDialog = page.getByRole('dialog', { name: 'Hot New Trailers: Hot Trailer Two' });
+  await expect(continuedVideoDialog).toBeVisible();
+  await expect(continuedVideoDialog.locator('iframe')).toHaveAttribute('src', 'https://www.youtube.com/embed/video-two?autoplay=1&rel=0&enablejsapi=1');
+  await continuedVideoDialog.getByRole('button', { name: 'Stop video' }).click();
+  await expect(continuedVideoDialog).toHaveCount(0);
+
+  await page.getByRole('button', { name: /Inspect Upcoming Feature 1/ }).click();
+  await expect(page.locator('.inspector')).toContainText('Upcoming Feature 1');
+  await expect(page.locator('.inspector')).toContainText('Upcoming Cast');
+  await expect(page.locator('.inspector').getByRole('button', { name: 'Follow release' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'View all' }).click();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.locator('.discover-toolbar select').first()).toHaveValue('upcoming');
 });

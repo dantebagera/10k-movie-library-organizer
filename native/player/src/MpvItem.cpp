@@ -3,9 +3,11 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileInfoList>
 #include <QMetaObject>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -19,6 +21,9 @@
 #include <vector>
 
 namespace {
+
+constexpr int seekThumbnailIntervalSeconds = 5;
+constexpr int maximumSeekThumbnailFiles = 120;
 
 void *resolveOpenGlProcedure(void *, const char *name)
 {
@@ -94,10 +99,8 @@ public:
             target->height(),
             0,
         };
-        int flipY = 1;
         mpv_render_param parameters[] = {
             {MPV_RENDER_PARAM_OPENGL_FBO, &framebuffer},
-            {MPV_RENDER_PARAM_FLIP_Y, &flipY},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
         m_api->renderContextRender(m_context, parameters);
@@ -206,8 +209,12 @@ bool MpvItem::openTrustedLocalPath(const QString &path, const QVariantMap &prefe
         QFile::encodeName(media.absoluteFilePath())
         + QByteArray::number(media.size())
         + QByteArray::number(media.lastModified().toMSecsSinceEpoch());
+    const QString isolatedCacheRoot =
+        QString::fromLocal8Bit(qgetenv("CP_PLAYER_CACHE_ROOT")).trimmed();
     const QString cacheRoot =
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+        QFileInfo(isolatedCacheRoot).isAbsolute()
+            ? isolatedCacheRoot
+            : QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     m_thumbnailRoot = QDir(cacheRoot).filePath(
         QStringLiteral("seek-thumbnails/%1").arg(
             QString::fromLatin1(
@@ -217,9 +224,13 @@ bool MpvItem::openTrustedLocalPath(const QString &path, const QVariantMap &prefe
         )
     );
     QDir().mkpath(m_thumbnailRoot);
+    destroyThumbnailMpv();
+    m_thumbnailMediaPath = media.absoluteFilePath();
     m_thumbnailBuckets.clear();
-    m_pendingThumbnailBuckets.clear();
-    m_lastThumbnailBucket = -1;
+    m_failedThumbnailBuckets.clear();
+    m_thumbnailWorkerUnavailable = false;
+    m_requestedThumbnailBucket = -1;
+    m_activeThumbnailBucket = -1;
     m_firstFrameNoted = false;
     ++m_loadGeneration;
     m_loadTimer.restart();
@@ -340,18 +351,45 @@ bool MpvItem::loadExternalSubtitle(const QString &path)
     return accepted;
 }
 
-QString MpvItem::seekThumbnail(double seconds) const
+QString MpvItem::selectedSubtitleExternalPath() const
 {
-    if (!std::isfinite(seconds) || seconds < 0.0 || m_thumbnailRoot.isEmpty()) {
+    for (const QVariant &value : m_subtitleTracks) {
+        const QVariantMap track = value.toMap();
+        if (track.value(QStringLiteral("selected")).toBool()
+            && track.value(QStringLiteral("external")).toBool()) {
+            return track.value(QStringLiteral("external_path")).toString();
+        }
+    }
+    return {};
+}
+
+QString MpvItem::seekThumbnail(double seconds)
+{
+    if (!std::isfinite(seconds)
+        || seconds < 0.0
+        || m_thumbnailRoot.isEmpty()
+        || m_thumbnailWorkerUnavailable) {
         return {};
     }
-    const int bucket = std::max(0, static_cast<int>(seconds / 30.0) * 30);
+    const int bucket = std::max(
+        0,
+        static_cast<int>(seconds / seekThumbnailIntervalSeconds)
+            * seekThumbnailIntervalSeconds
+    );
     const QString path =
         QDir(m_thumbnailRoot).filePath(QStringLiteral("%1.jpg").arg(bucket));
-    if (!m_thumbnailBuckets.contains(bucket) && !QFileInfo::exists(path)) {
+    if (m_thumbnailBuckets.contains(bucket) || QFileInfo::exists(path)) {
+        m_thumbnailBuckets.insert(bucket);
+        return QUrl::fromLocalFile(path).toString();
+    }
+    if (m_failedThumbnailBuckets.contains(bucket)) {
         return {};
     }
-    return QUrl::fromLocalFile(path).toString();
+    m_requestedThumbnailBucket = bucket;
+    if (initializeThumbnailMpv()) {
+        requestNextThumbnail();
+    }
+    return {};
 }
 
 QVariantMap MpvItem::playbackStatistics() const
@@ -497,6 +535,7 @@ void MpvItem::adjustAudioDelay(double seconds)
 
 void MpvItem::shutdownPlayback()
 {
+    destroyThumbnailMpv();
     if (!m_mpv || !m_api) {
         return;
     }
@@ -535,15 +574,6 @@ void MpvItem::processEvents()
             if (name == QByteArrayLiteral("time-pos") && property->format == MPV_FORMAT_DOUBLE) {
                 m_position = *static_cast<double *>(property->data);
                 emit positionChanged();
-                const int bucket =
-                    std::max(0, static_cast<int>(m_position / 30.0) * 30);
-                if (bucket != m_lastThumbnailBucket
-                    && !m_thumbnailBuckets.contains(bucket)
-                    && !m_pendingThumbnailBuckets.contains(bucket)) {
-                    m_lastThumbnailBucket = bucket;
-                    m_pendingThumbnailBuckets.insert(bucket);
-                    QTimer::singleShot(250, this, &MpvItem::captureCurrentSeekThumbnail);
-                }
             } else if (name == QByteArrayLiteral("duration")
                        && property->format == MPV_FORMAT_DOUBLE) {
                 m_duration = *static_cast<double *>(property->data);
@@ -586,35 +616,70 @@ void MpvItem::processEvents()
     }
 }
 
-void MpvItem::captureCurrentSeekThumbnail()
+void MpvItem::processThumbnailEvents()
 {
-    if (!m_mpv || m_thumbnailRoot.isEmpty() || !std::isfinite(m_position)) {
+    if (!m_thumbnailMpv || !m_api) {
         return;
     }
-    const int bucket = std::max(0, static_cast<int>(m_position / 30.0) * 30);
-    const QString path =
-        QDir(m_thumbnailRoot).filePath(QStringLiteral("%1.jpg").arg(bucket));
-    if (QFileInfo::exists(path)) {
-        m_pendingThumbnailBuckets.remove(bucket);
-        m_thumbnailBuckets.insert(bucket);
-        emit seekThumbnailsChanged();
-        return;
-    }
-    if (!sendCommandAsync({
-            QByteArrayLiteral("screenshot-to-file"),
-            QFile::encodeName(path),
-            QByteArrayLiteral("video"),
-        })) {
-        m_pendingThumbnailBuckets.remove(bucket);
-        return;
-    }
-    QTimer::singleShot(250, this, [this, bucket, path]() {
-        m_pendingThumbnailBuckets.remove(bucket);
-        if (QFileInfo::exists(path)) {
-            m_thumbnailBuckets.insert(bucket);
-            emit seekThumbnailsChanged();
+    while (true) {
+        mpv_event *event = m_api->waitEvent(m_thumbnailMpv, 0.0);
+        if (!event || event->event_id == MPV_EVENT_NONE) {
+            break;
         }
-    });
+        if (event->event_id == MPV_EVENT_FILE_LOADED) {
+            m_thumbnailLoading = false;
+            m_thumbnailLoadedMediaPath = m_thumbnailMediaPath;
+            requestNextThumbnail();
+            continue;
+        }
+        if (event->event_id == MPV_EVENT_PLAYBACK_RESTART
+            && m_activeThumbnailBucket >= 0
+            && !m_thumbnailCapturePending) {
+            char *positionValue =
+                m_api->getPropertyString(m_thumbnailMpv, "time-pos");
+            const double decodedPosition =
+                positionValue
+                    ? QString::fromUtf8(positionValue).toDouble()
+                    : -1.0;
+            if (positionValue) {
+                m_api->freeValue(positionValue);
+            }
+            if (decodedPosition < 0.0
+                || std::abs(decodedPosition - m_activeThumbnailBucket) > 2.5) {
+                continue;
+            }
+            const QString path = QDir(m_thumbnailRoot).filePath(
+                QStringLiteral("%1.jpg").arg(m_activeThumbnailBucket)
+            );
+            m_thumbnailCaptureCommandId = m_thumbnailCommandId++;
+            m_thumbnailCapturePending = sendThumbnailCommandAsync({
+                QByteArrayLiteral("screenshot-to-file"),
+                QFile::encodeName(path),
+                QByteArrayLiteral("video"),
+            }, m_thumbnailCaptureCommandId);
+            if (!m_thumbnailCapturePending) {
+                completeThumbnailRequest(false);
+            }
+            continue;
+        }
+        if (event->event_id == MPV_EVENT_COMMAND_REPLY
+            && m_thumbnailCapturePending
+            && event->reply_userdata == m_thumbnailCaptureCommandId) {
+            const QString path = QDir(m_thumbnailRoot).filePath(
+                QStringLiteral("%1.jpg").arg(m_activeThumbnailBucket)
+            );
+            completeThumbnailRequest(
+                event->error >= 0 && QFileInfo::exists(path)
+            );
+            continue;
+        }
+        if (event->event_id == MPV_EVENT_END_FILE) {
+            auto *end = static_cast<mpv_event_end_file *>(event->data);
+            if (end && end->error < 0) {
+                completeThumbnailRequest(false);
+            }
+        }
+    }
 }
 
 void MpvItem::requestRender()
@@ -636,6 +701,18 @@ void MpvItem::wakeup(void *context)
     auto *item = static_cast<MpvItem *>(context);
     if (item) {
         QMetaObject::invokeMethod(item, &MpvItem::processEvents, Qt::QueuedConnection);
+    }
+}
+
+void MpvItem::thumbnailWakeup(void *context)
+{
+    auto *item = static_cast<MpvItem *>(context);
+    if (item) {
+        QMetaObject::invokeMethod(
+            item,
+            &MpvItem::processThumbnailEvents,
+            Qt::QueuedConnection
+        );
     }
 }
 
@@ -679,6 +756,193 @@ bool MpvItem::sendCommandAsync(const QList<QByteArray> &arguments)
     }
     command.push_back(nullptr);
     return m_api->commandAsync(m_mpv, m_asyncCommandId++, command.data()) >= 0;
+}
+
+bool MpvItem::sendThumbnailCommand(const QList<QByteArray> &arguments)
+{
+    if (!m_thumbnailMpv || !m_api || arguments.isEmpty()) {
+        return false;
+    }
+    std::vector<const char *> command;
+    command.reserve(static_cast<std::size_t>(arguments.size()) + 1);
+    for (const QByteArray &argument : arguments) {
+        command.push_back(argument.constData());
+    }
+    command.push_back(nullptr);
+    return m_api->command(m_thumbnailMpv, command.data()) >= 0;
+}
+
+bool MpvItem::sendThumbnailCommandAsync(
+    const QList<QByteArray> &arguments,
+    quint64 requestId
+)
+{
+    if (!m_thumbnailMpv || !m_api || arguments.isEmpty()) {
+        return false;
+    }
+    std::vector<const char *> command;
+    command.reserve(static_cast<std::size_t>(arguments.size()) + 1);
+    for (const QByteArray &argument : arguments) {
+        command.push_back(argument.constData());
+    }
+    command.push_back(nullptr);
+    return m_api->commandAsync(
+        m_thumbnailMpv,
+        requestId,
+        command.data()
+    ) >= 0;
+}
+
+bool MpvItem::initializeThumbnailMpv()
+{
+    if (m_thumbnailMpv) {
+        return true;
+    }
+    if (!m_api || !m_api->isLoaded() || m_thumbnailMediaPath.isEmpty()) {
+        return false;
+    }
+    m_thumbnailMpv = m_api->create();
+    if (!m_thumbnailMpv) {
+        qWarning() << "Seek preview disabled: libmpv client creation failed";
+        m_thumbnailWorkerUnavailable = true;
+        return false;
+    }
+    const QList<QPair<QByteArray, QByteArray>> options = {
+        {QByteArrayLiteral("config"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("terminal"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("input-default-bindings"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("vo"), QByteArrayLiteral("null")},
+        {QByteArrayLiteral("ao"), QByteArrayLiteral("null")},
+        {QByteArrayLiteral("pause"), QByteArrayLiteral("yes")},
+        {QByteArrayLiteral("hwdec"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("audio"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("sub"), QByteArrayLiteral("no")},
+        {QByteArrayLiteral("keep-open"), QByteArrayLiteral("yes")},
+        {QByteArrayLiteral("screenshot-format"), QByteArrayLiteral("jpg")},
+        {QByteArrayLiteral("screenshot-jpeg-quality"), QByteArrayLiteral("82")},
+    };
+    for (const auto &[name, value] : options) {
+        const int optionResult = m_api->setOptionString(
+            m_thumbnailMpv,
+            name.constData(),
+            value.constData()
+        );
+        if (optionResult < 0) {
+            qWarning().noquote()
+                << QStringLiteral(
+                       "Seek preview disabled: libmpv rejected option %1"
+                   ).arg(QString::fromLatin1(name));
+            destroyThumbnailMpv();
+            m_thumbnailWorkerUnavailable = true;
+            return false;
+        }
+    }
+    if (m_api->initialize(m_thumbnailMpv) < 0) {
+        qWarning() << "Seek preview disabled: libmpv initialization failed";
+        destroyThumbnailMpv();
+        m_thumbnailWorkerUnavailable = true;
+        return false;
+    }
+    m_api->setWakeupCallback(
+        m_thumbnailMpv,
+        &MpvItem::thumbnailWakeup,
+        this
+    );
+    m_thumbnailLoading = true;
+    if (!sendThumbnailCommand({
+            QByteArrayLiteral("loadfile"),
+            QFile::encodeName(m_thumbnailMediaPath),
+            QByteArrayLiteral("replace"),
+        })) {
+        qWarning() << "Seek preview disabled: media load command failed";
+        destroyThumbnailMpv();
+        m_thumbnailWorkerUnavailable = true;
+        return false;
+    }
+    return true;
+}
+
+void MpvItem::destroyThumbnailMpv()
+{
+    if (m_thumbnailMpv && m_api) {
+        m_api->setWakeupCallback(m_thumbnailMpv, nullptr, nullptr);
+        m_api->terminateDestroy(m_thumbnailMpv);
+    }
+    m_thumbnailMpv = nullptr;
+    m_thumbnailLoadedMediaPath.clear();
+    m_thumbnailLoading = false;
+    m_thumbnailCapturePending = false;
+    m_thumbnailCaptureCommandId = 0;
+    m_activeThumbnailBucket = -1;
+}
+
+void MpvItem::requestNextThumbnail()
+{
+    if (!m_thumbnailMpv
+        || m_thumbnailLoading
+        || m_thumbnailLoadedMediaPath != m_thumbnailMediaPath
+        || m_activeThumbnailBucket >= 0
+        || m_requestedThumbnailBucket < 0) {
+        return;
+    }
+    const int bucket = m_requestedThumbnailBucket;
+    const QString path =
+        QDir(m_thumbnailRoot).filePath(QStringLiteral("%1.jpg").arg(bucket));
+    if (QFileInfo::exists(path)) {
+        m_thumbnailBuckets.insert(bucket);
+        emit seekThumbnailsChanged();
+        return;
+    }
+    m_activeThumbnailBucket = bucket;
+    if (!sendThumbnailCommand({
+            QByteArrayLiteral("seek"),
+            QByteArray::number(bucket),
+            QByteArrayLiteral("absolute+exact"),
+        })) {
+        completeThumbnailRequest(false);
+    }
+}
+
+void MpvItem::completeThumbnailRequest(bool succeeded)
+{
+    const int completedBucket = m_activeThumbnailBucket;
+    m_thumbnailCapturePending = false;
+    m_thumbnailCaptureCommandId = 0;
+    m_activeThumbnailBucket = -1;
+    if (completedBucket >= 0) {
+        if (succeeded) {
+            m_thumbnailBuckets.insert(completedBucket);
+            trimThumbnailCache();
+            emit seekThumbnailsChanged();
+        } else {
+            m_failedThumbnailBuckets.insert(completedBucket);
+        }
+    }
+    if (m_requestedThumbnailBucket != completedBucket) {
+        requestNextThumbnail();
+    }
+}
+
+void MpvItem::trimThumbnailCache()
+{
+    QDir root(m_thumbnailRoot);
+    QFileInfoList files = root.entryInfoList(
+        {QStringLiteral("*.jpg")},
+        QDir::Files,
+        QDir::Time | QDir::Reversed
+    );
+    while (files.size() > maximumSeekThumbnailFiles) {
+        const QFileInfo oldest = files.takeFirst();
+        if (oldest.fileName()
+            == QStringLiteral("%1.jpg").arg(m_requestedThumbnailBucket)) {
+            files.append(oldest);
+            continue;
+        }
+        const int bucket = oldest.completeBaseName().toInt();
+        if (QFile::remove(oldest.absoluteFilePath())) {
+            m_thumbnailBuckets.remove(bucket);
+        }
+    }
 }
 
 void MpvItem::initializeMpv()
@@ -787,6 +1051,8 @@ QVariantMap MpvItem::trackModel(int index) const
                  propertyYes(propertyString(base + QByteArrayLiteral("hearing-impaired"))));
     track.insert(QStringLiteral("external"),
                  propertyYes(propertyString(base + QByteArrayLiteral("external"))));
+    track.insert(QStringLiteral("external_path"),
+                 propertyString(base + QByteArrayLiteral("external-filename")));
     track.insert(QStringLiteral("fingerprint"), trackFingerprint(track));
     return track;
 }

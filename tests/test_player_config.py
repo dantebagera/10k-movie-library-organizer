@@ -41,6 +41,10 @@ class PlayerConfigTests(unittest.TestCase):
         self.assertTrue(public["providers"]["opensubtitles"]["api_key_configured"])
         self.assertTrue(public["providers"]["opensubtitles"]["username_configured"])
         self.assertTrue(public["providers"]["opensubtitles"]["password_configured"])
+        self.assertEqual(
+            public["providers"]["opensubtitles"]["authentication_mode"],
+            "account",
+        )
         self.assertTrue(public["providers"]["subdl"]["api_key_configured"])
         stored = config.storage_payload()
         self.assertEqual(stored["providers"]["opensubtitles"]["api_key"], "open-secret")
@@ -77,6 +81,81 @@ class PlayerConfigTests(unittest.TestCase):
         self.assertFalse(
             config.public_payload()["providers"]["opensubtitles"]["api_key_configured"]
         )
+
+    def test_api_key_only_mode_clears_account_credentials_but_keeps_key(self):
+        config = PlayerConfig({
+            "providers": {
+                "opensubtitles": {
+                    "authentication_mode": "account",
+                    "username": "dante",
+                    "api_key": "keep-api-key",
+                    "password": "account-secret",
+                },
+            },
+        })
+
+        public = config.update({
+            "providers": {
+                "opensubtitles": {
+                    "authentication_mode": "api_key_only",
+                },
+            },
+        })
+
+        stored = config.storage_payload()["providers"]["opensubtitles"]
+        self.assertEqual(stored["authentication_mode"], "api_key_only")
+        self.assertEqual(stored["api_key"], "keep-api-key")
+        self.assertEqual(stored["username"], "")
+        self.assertEqual(stored["password"], "")
+        self.assertFalse(public["providers"]["opensubtitles"]["username_configured"])
+        self.assertFalse(public["providers"]["opensubtitles"]["password_configured"])
+
+    def test_existing_account_credentials_migrate_to_explicit_account_mode(self):
+        config = PlayerConfig({
+            "providers": {
+                "opensubtitles": {
+                    "username": "dante",
+                    "api_key": "api-key",
+                    "password": "account-secret",
+                },
+            },
+        })
+
+        provider = config.storage_payload()["providers"]["opensubtitles"]
+
+        self.assertEqual(provider["authentication_mode"], "account")
+        self.assertEqual(provider["username"], "dante")
+        self.assertEqual(provider["password"], "account-secret")
+
+    def test_explicit_api_key_only_storage_drops_stale_account_credentials(self):
+        config = PlayerConfig({
+            "providers": {
+                "opensubtitles": {
+                    "authentication_mode": "api_key_only",
+                    "username": "stale-user",
+                    "api_key": "api-key",
+                    "password": "stale-password",
+                },
+            },
+        })
+
+        provider = config.storage_payload()["providers"]["opensubtitles"]
+
+        self.assertEqual(provider["authentication_mode"], "api_key_only")
+        self.assertEqual(provider["username"], "")
+        self.assertEqual(provider["password"], "")
+
+    def test_rejects_unknown_opensubtitles_authentication_mode(self):
+        config = PlayerConfig()
+
+        with self.assertRaises(PlayerConfigError):
+            config.update({
+                "providers": {
+                    "opensubtitles": {
+                        "authentication_mode": "automatic_fallback",
+                    },
+                },
+            })
 
     def test_preferences_validate_ranges_and_enums(self):
         config = PlayerConfig()

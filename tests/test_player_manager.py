@@ -1,6 +1,7 @@
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -14,8 +15,10 @@ class FakeRuntime:
     def __init__(self, root=None, error=None):
         self.root = Path(root) if root else None
         self.error = error
+        self.resolve_calls = []
 
     def resolve_bundle(self, verify_hashes=True):
+        self.resolve_calls.append(verify_hashes)
         if self.error:
             raise self.error
         return {
@@ -136,7 +139,9 @@ class FakeSubtitleService:
     def __init__(self):
         self.searches = []
         self.downloads = []
+        self.saves = []
         self.downloaded = threading.Event()
+        self.saved = threading.Event()
 
     def search_async(self, session_id, media, callback):
         self.searches.append((session_id, dict(media)))
@@ -147,6 +152,17 @@ class FakeSubtitleService:
         self.downloaded.set()
         return {
             "path": "C:\\cache\\subtitle.srt",
+            "provider": "subdl",
+            "language": "en",
+            "release_name": "Movie",
+            "save_available": True,
+        }
+
+    def save_beside_movie(self, cached_path, media):
+        self.saves.append((cached_path, dict(media)))
+        self.saved.set()
+        return {
+            "path": "E:\\Movie.cp.en.saved.srt",
             "provider": "subdl",
             "language": "en",
             "release_name": "Movie",
@@ -211,9 +227,10 @@ class PlayerManagerTests(unittest.TestCase):
                 transports.append(transport)
                 return transport
 
+            runtime = FakeRuntime(bundle)
             manager = PlayerManager(
                 config,
-                FakeRuntime(bundle),
+                runtime,
                 lambda path_key: self.media(media_path),
                 os_opener=lambda path: self.fail("OS fallback was not expected"),
                 transport_factory=transport_factory,
@@ -223,6 +240,7 @@ class PlayerManagerTests(unittest.TestCase):
             result = manager.play("catalog-key")
 
         self.assertEqual(result["mode"], "built_in")
+        self.assertEqual(runtime.resolve_calls, [False])
         self.assertEqual(launch_state["executable"], executable)
         environment = launch_state["environment"]
         self.assertNotIn("provider-secret", str(environment))
@@ -421,6 +439,50 @@ class PlayerManagerTests(unittest.TestCase):
             [message["type"] for message in transport.sent],
             ["subtitle.results", "subtitle.loaded"],
         )
+        self.assertEqual(transport.sent[-1]["result_id"], "opaque-result")
+        self.assertTrue(transport.sent[-1]["save_available"])
+
+        manager._handle_event(session, {
+            "type": "subtitle.save",
+            "sequence": 4,
+            "result_id": "opaque-result",
+        })
+        self.assertTrue(subtitle_service.saved.wait(2))
+
+        self.assertEqual(subtitle_service.saves[0][0], "C:\\cache\\subtitle.srt")
+        self.assertEqual(transport.sent[-1]["type"], "subtitle.saved")
+        self.assertEqual(transport.sent[-1]["result_id"], "opaque-result")
+
+    def test_subtitle_save_rejects_unknown_session_download(self):
+        subtitle_service = FakeSubtitleService()
+        manager = PlayerManager(
+            PlayerConfig(),
+            FakeRuntime(error=AssertionError("not used")),
+            lambda _path_key: {},
+            subtitle_service=subtitle_service,
+        )
+        transport = EventTransport([])
+        session = PlayerSession(
+            "subtitle-session",
+            FakeProcess(),
+            transport,
+            lambda _session, _message: None,
+            media={"path_key": "e:\\movie.mkv", "path": "E:\\Movie.mkv"},
+        )
+        manager._active = session
+
+        manager._handle_event(session, {
+            "type": "subtitle.save",
+            "sequence": 2,
+            "result_id": "not-downloaded-here",
+        })
+        deadline = time.time() + 2
+        while not transport.sent and time.time() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(transport.sent[-1]["type"], "error")
+        self.assertEqual(transport.sent[-1]["code"], "subtitle_save_failed")
+        self.assertEqual(subtitle_service.saves, [])
 
     def test_window_state_is_persisted_by_the_authoritative_player_config(self):
         config = PlayerConfig()

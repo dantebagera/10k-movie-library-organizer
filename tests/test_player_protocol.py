@@ -181,6 +181,32 @@ class PlayerProtocolTests(unittest.TestCase):
             )["result_id"],
             "opaque-result",
         )
+        loaded = validate_message(message(
+            "subtitle.loaded",
+            path="C:\\cache\\movie.srt",
+            provider="subdl",
+            language="en",
+            release_name="Movie",
+            result_id="opaque-result",
+            save_available=True,
+        ))
+        self.assertTrue(loaded["save_available"])
+        self.assertEqual(
+            validate_message(
+                message("subtitle.save", result_id="opaque-result")
+            )["result_id"],
+            "opaque-result",
+        )
+        self.assertEqual(
+            validate_message(
+                message(
+                    "subtitle.saved",
+                    result_id="opaque-result",
+                    path="E:\\Movies\\Movie.cp.en.abc.srt",
+                )
+            )["type"],
+            "subtitle.saved",
+        )
         with self.assertRaises(PlayerProtocolError):
             validate_message(message(
                 "subtitle.results",
@@ -188,6 +214,8 @@ class PlayerProtocolTests(unittest.TestCase):
                 results=[result] * 41,
                 diagnostics={},
             ))
+        with self.assertRaises(PlayerProtocolError):
+            validate_message(message("subtitle.save", result_id=""))
 
 
 if __name__ == "__main__":

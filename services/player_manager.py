@@ -84,6 +84,20 @@ class PlayerSession:
         self._send_lock = threading.Lock()
         self._reader = None
         self._closed_event_received = False
+        self._subtitle_downloads = {}
+        self._subtitle_downloads_lock = threading.Lock()
+
+    def remember_subtitle_download(self, result_id, path):
+        with self._subtitle_downloads_lock:
+            self._subtitle_downloads[result_id] = path
+
+    def subtitle_download_path(self, result_id):
+        with self._subtitle_downloads_lock:
+            return self._subtitle_downloads.get(result_id)
+
+    def forget_subtitle_download(self, result_id):
+        with self._subtitle_downloads_lock:
+            self._subtitle_downloads.pop(result_id, None)
 
     def send(self, message_type, **payload):
         with self._send_lock:
@@ -231,7 +245,7 @@ class PlayerManager:
             raise PlayerLaunchError("The operating-system player could not open the file") from error
 
     def _launch_built_in(self, media, *, restart=False):
-        runtime = self.player_runtime.resolve_bundle(verify_hashes=True)
+        runtime = self.player_runtime.resolve_bundle(verify_hashes=False)
         executable = runtime["bundle_root"] / "cp-player.exe"
         self.close_active()
 
@@ -359,6 +373,13 @@ class PlayerManager:
                 name=f"cp-subtitle-download-{session.session_id[:8]}",
                 daemon=True,
             ).start()
+        elif message["type"] == "subtitle.save" and self.subtitle_service:
+            threading.Thread(
+                target=self._save_subtitle,
+                args=(session, message["result_id"]),
+                name=f"cp-subtitle-save-{session.session_id[:8]}",
+                daemon=True,
+            ).start()
         elif message["type"] == "window.state":
             try:
                 self.player_config.update({"window_state": message["window_state"]})
@@ -413,11 +434,50 @@ class PlayerManager:
                 result_id,
                 session.media,
             )
-            self._send_to_active(session, "subtitle.loaded", **loaded)
+            save_available = bool(loaded.pop("save_available", False))
+            if save_available:
+                session.remember_subtitle_download(result_id, loaded["path"])
+            self._send_to_active(
+                session,
+                "subtitle.loaded",
+                result_id=result_id,
+                save_available=save_available,
+                **loaded,
+            )
         except SubtitleServiceError:
             self._send_to_active(
                 session,
                 "error",
                 code="subtitle_download_failed",
                 message="The selected subtitle could not be loaded.",
+            )
+
+    def _save_subtitle(self, session, result_id):
+        cached_path = session.subtitle_download_path(result_id)
+        if not cached_path:
+            self._send_to_active(
+                session,
+                "error",
+                code="subtitle_save_failed",
+                message="The selected subtitle is not available to save.",
+            )
+            return
+        try:
+            saved = self.subtitle_service.save_beside_movie(
+                cached_path,
+                session.media,
+            )
+            session.forget_subtitle_download(result_id)
+            self._send_to_active(
+                session,
+                "subtitle.saved",
+                result_id=result_id,
+                path=saved["path"],
+            )
+        except SubtitleServiceError:
+            self._send_to_active(
+                session,
+                "error",
+                code="subtitle_save_failed",
+                message="The selected subtitle could not be saved beside the movie.",
             )

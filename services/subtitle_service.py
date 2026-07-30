@@ -214,10 +214,17 @@ class OpenSubtitlesProvider(_HttpProvider):
         return results
 
     def _login_token(self):
+        authentication_mode = self.credentials.get(
+            "authentication_mode", "api_key_only"
+        )
+        if authentication_mode == "api_key_only":
+            return ""
+        if authentication_mode != "account":
+            raise SubtitleProviderError("not_configured")
         username = self.credentials.get("username", "")
         password = self.credentials.get("password", "")
         if not username or not password:
-            return ""
+            raise SubtitleProviderError("not_configured")
         body = json.dumps({"username": username, "password": password}).encode("utf-8")
         request = urllib.request.Request(
             f"{self.api_root}/login",
@@ -225,7 +232,10 @@ class OpenSubtitlesProvider(_HttpProvider):
             headers=self._headers(json_body=True),
             method="POST",
         )
-        return str(self._json(request).get("token") or "")[:4096]
+        token = str(self._json(request).get("token") or "")[:4096]
+        if not token:
+            raise SubtitleProviderError("authentication_failed")
+        return token
 
     def download(self, provider_ref):
         file_id = str(provider_ref.get("file_id") or "")
@@ -536,6 +546,62 @@ class SubtitleService:
             "provider": row["provider"],
             "language": row["language"],
             "release_name": row["release_name"],
+            "save_available": (
+                destination.parent
+                == Path(self.cache_root_provider()).resolve()
+            ),
+        }
+
+    def save_beside_movie(self, cached_path, media):
+        """Copy one service-owned cached subtitle beside its catalog movie."""
+        cache_root = Path(self.cache_root_provider()).resolve()
+        source = Path(str(cached_path or "")).resolve()
+        if (
+            source.parent != cache_root
+            or source.suffix.lower() not in APPROVED_EXTENSIONS
+            or not source.is_file()
+        ):
+            raise SubtitleServiceError("The cached subtitle is unavailable")
+        try:
+            if source.stat().st_size > MAX_SUBTITLE_BYTES:
+                raise SubtitleServiceError("The cached subtitle is too large")
+            payload = self._normalize_text(source.read_bytes())
+            metadata_path = source.with_suffix(source.suffix + ".json")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except SubtitleServiceError:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise SubtitleServiceError("The cached subtitle metadata is invalid") from None
+        if not isinstance(metadata, dict):
+            raise SubtitleServiceError("The cached subtitle metadata is invalid")
+        digest = hashlib.sha256(payload).hexdigest()
+        if metadata.get("sha256") != digest:
+            raise SubtitleServiceError("The cached subtitle failed validation")
+        provider = str(metadata.get("provider") or "")[:32]
+        provider_identity = str(metadata.get("provider_identity") or "")[:128]
+        language = _language(metadata.get("language"))
+        release_name = str(metadata.get("release_name") or "")[:512]
+        source_name = Path(str(metadata.get("source_name") or source.name)).name[:512]
+        if not provider or not provider_identity or not language or not source_name:
+            raise SubtitleServiceError("The cached subtitle metadata is invalid")
+        destination = self._store(
+            payload,
+            source.suffix.lower(),
+            source_name,
+            {
+                "provider": provider,
+                "provider_identity": provider_identity,
+                "language": language,
+                "release_name": release_name,
+            },
+            media,
+            "beside_movie",
+        )
+        return {
+            "path": str(destination),
+            "provider": provider,
+            "language": language,
+            "release_name": release_name,
         }
 
     def _search_identity(self, media):

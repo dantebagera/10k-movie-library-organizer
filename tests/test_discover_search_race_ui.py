@@ -33,7 +33,7 @@ class DiscoverSearchRaceUiTest(unittest.TestCase):
         )
 
     def test_discover_result_card_keys_include_position_to_handle_duplicate_tmdb_rows(self):
-        self.assertIn("filteredDiscoverResults.map((movie, index)", APP)
+        self.assertIn("visibleDiscoverResults.map((movie, index)", APP)
         self.assertIn('key={`${movie.tmdb_id || movie.title}-${movie.year}-${index}`}', APP)
 
 

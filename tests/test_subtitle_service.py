@@ -185,6 +185,7 @@ class SubtitleServiceTests(unittest.TestCase):
         result = service.search("session", self.media_payload)["results"][0]
         loaded = service.download("session", result["result_id"], self.media_payload)
         destination = Path(loaded["path"])
+        self.assertTrue(loaded["save_available"])
         self.assertEqual(destination.read_bytes(), b"1\n00:00:01,000 --> 00:00:02,000\nHello\n")
         metadata = json.loads(
             destination.with_suffix(destination.suffix + ".json").read_text(encoding="utf-8")
@@ -214,6 +215,38 @@ class SubtitleServiceTests(unittest.TestCase):
         loaded = service.download("session", result["result_id"], self.media_payload)
         self.assertEqual(Path(loaded["path"]).parent, self.media.parent)
         self.assertTrue(Path(loaded["path"]).name.startswith("The.Matrix.1999"))
+        self.assertFalse(loaded["save_available"])
+
+    def test_cached_subtitle_can_be_copied_beside_movie_after_validation(self):
+        FastProvider.rows = [subtitle_row("opensubtitles", "release")]
+        service = self.service({"opensubtitles": FastProvider})
+        result = service.search("session", self.media_payload)["results"][0]
+        loaded = service.download("session", result["result_id"], self.media_payload)
+        cached = Path(loaded["path"])
+
+        saved = service.save_beside_movie(cached, self.media_payload)
+        destination = Path(saved["path"])
+
+        self.assertEqual(destination.parent, self.media.parent)
+        self.assertTrue(destination.name.startswith("The.Matrix.1999"))
+        self.assertEqual(destination.read_bytes(), cached.read_bytes())
+        self.assertTrue(cached.exists())
+        self.assertTrue(destination.with_suffix(destination.suffix + ".json").exists())
+
+    def test_save_rejects_files_outside_service_cache_and_tampered_cache(self):
+        service = self.service({"opensubtitles": FastProvider})
+        outside = self.media.parent / "outside.srt"
+        outside.write_text("subtitle", encoding="utf-8")
+        with self.assertRaisesRegex(SubtitleServiceError, "unavailable"):
+            service.save_beside_movie(outside, self.media_payload)
+
+        FastProvider.rows = [subtitle_row("opensubtitles", "release")]
+        result = service.search("session", self.media_payload)["results"][0]
+        loaded = service.download("session", result["result_id"], self.media_payload)
+        cached = Path(loaded["path"])
+        cached.write_text("tampered", encoding="utf-8")
+        with self.assertRaisesRegex(SubtitleServiceError, "validation"):
+            service.save_beside_movie(cached, self.media_payload)
 
     def test_archive_traversal_is_rejected_without_writing_outside_cache(self):
         archive = io.BytesIO()

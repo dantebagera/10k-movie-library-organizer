@@ -10,9 +10,11 @@ import { previewSourceReview } from '../../api/sourceReview.js';
 import ExportCopyDialog from '../../components/ExportCopyDialog.jsx';
 import ListEditorModal from '../../components/ListEditorModal.jsx';
 import MetadataCorrectionModal from '../../components/MetadataCorrectionModal.jsx';
+import Pagination from '../../components/Pagination.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { DiscoverMovieCard, LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { discoverMoviePayload, listsForDiscoverMovie } from '../../discoverUtils.js';
@@ -38,6 +40,7 @@ export default function MovieListsWorkspace({
   const [selectedListId, setSelectedListId] = useState('');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [newListName, setNewListName] = useState('');
   const [renameValue, setRenameValue] = useState('');
@@ -86,6 +89,14 @@ export default function MovieListsWorkspace({
     query,
     statusFilter
   }), [libraryItems, selectedList, query, statusFilter]);
+  const {
+    gridRef: movieListsGridRef,
+    pageSize: movieListsPageSize
+  } = useCardGridMetrics({ target: 40, max: 200, bias: 'lower' });
+  const movieListsTotalPages = Math.max(1, Math.ceil(model.rows.length / movieListsPageSize));
+  const movieListsPage = Math.min(currentPage, movieListsTotalPages);
+  const movieListsPageStart = (movieListsPage - 1) * movieListsPageSize;
+  const visibleMovieListRows = model.rows.slice(movieListsPageStart, movieListsPageStart + movieListsPageSize);
   const selectedRows = model.rows.filter((row) => selectedKeys.has(row.identityKey));
   const allRowsSelected = model.rows.length > 0 && model.rows.every((row) => selectedKeys.has(row.identityKey));
   const selectedListIsSystem = Boolean(selectedList?.system_type);
@@ -183,6 +194,7 @@ export default function MovieListsWorkspace({
   useEffect(() => {
     setSelectedKeys(new Set());
     setExpandedKey('');
+    setCurrentPage(1);
   }, [selectedListId, query, statusFilter]);
 
   useEffect(() => {
@@ -530,8 +542,18 @@ export default function MovieListsWorkspace({
             <div className="empty-state"><strong>{loading ? 'Loading movie lists...' : 'Checking selected list...'}</strong><span>{loading ? 'Reading saved lists.' : 'Matching this list against Library ownership.'}</span></div>
           ) : selectedList ? (
             model.rows.length ? (
-              <div className="library-results library-movie-results movie-lists-card-grid">
-                {model.rows.map((row) => {
+              <>
+                <Pagination
+                  total={model.rows.length}
+                  page={movieListsPage}
+                  totalPages={movieListsTotalPages}
+                  pageStart={movieListsPageStart}
+                  pageEnd={Math.min(movieListsPageStart + movieListsPageSize, model.rows.length)}
+                  ariaLabel="Movie list pagination"
+                  onPageChange={setCurrentPage}
+                />
+                <div ref={movieListsGridRef} className="library-results library-movie-results movie-lists-card-grid">
+                {visibleMovieListRows.map((row) => {
                   const movie = movieListRowMovie(row);
                   const projection = !row.ownedItem ? cardProjections[movieIdentityKey(movie)] : null;
                   const cardMovie = projection ? {
@@ -614,7 +636,8 @@ export default function MovieListsWorkspace({
                     />
                   );
                 })}
-              </div>
+                </div>
+              </>
             ) : (
               <div className="empty-state"><strong>No movies match this view.</strong><span>Change the search or filter chip.</span></div>
             )

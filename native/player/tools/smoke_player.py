@@ -50,30 +50,182 @@ def find_visible_window(process_id):
     return matches[0] if matches else None
 
 
+def show_test_window(window):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SwitchToThisWindow.argtypes = [wintypes.HWND, wintypes.BOOL]
+    user32.ShowWindow(window, 5)
+    user32.SetWindowPos(
+        window,
+        wintypes.HWND(-1),
+        0,
+        0,
+        0,
+        0,
+        0x0001 | 0x0002 | 0x0010,
+    )
+    user32.BringWindowToTop(window)
+    user32.SetForegroundWindow(window)
+    user32.SwitchToThisWindow(window, True)
+    time.sleep(0.1)
+
+
 def send_window_key(window, virtual_key):
     user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.ShowWindow(window, 5)
-    user32.SetForegroundWindow(window)
-    time.sleep(0.1)
-    user32.keybd_event(virtual_key, 0, 0, 0)
-    user32.keybd_event(virtual_key, 0, 0x0002, 0)
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.PostMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    show_test_window(window)
+    if user32.GetForegroundWindow() == window:
+        user32.keybd_event(virtual_key, 0, 0, 0)
+        user32.keybd_event(virtual_key, 0, 0x0002, 0)
+    else:
+        user32.PostMessageW(window, 0x0100, virtual_key, 0)
+        user32.PostMessageW(window, 0x0101, virtual_key, 0xC0000001)
+
+
+def window_client_fraction_point(window, x_fraction, y_fraction):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    rectangle = wintypes.RECT()
+    user32.GetClientRect(window, ctypes.byref(rectangle))
+    client = wintypes.POINT(
+        round((rectangle.right - rectangle.left) * x_fraction),
+        round((rectangle.bottom - rectangle.top) * y_fraction),
+    )
+    screen = wintypes.POINT(client.x, client.y)
+    user32.ClientToScreen(window, ctypes.byref(screen))
+    packed = (client.x & 0xFFFF) | ((client.y & 0xFFFF) << 16)
+    return user32, screen, packed
 
 
 def click_window_fraction(window, x_fraction, y_fraction):
+    user32, screen, packed = window_client_fraction_point(
+        window,
+        x_fraction,
+        y_fraction,
+    )
+    show_test_window(window)
+    user32.SetCursorPos(screen.x, screen.y)
+    user32.SendMessageW(window, 0x0201, 1, packed)
+    user32.SendMessageW(window, 0x0202, 0, packed)
+
+
+def move_window_fraction(window, x_fraction, y_fraction):
+    user32, screen, _ = window_client_fraction_point(
+        window,
+        x_fraction,
+        y_fraction,
+    )
+    show_test_window(window)
+    user32.SetCursorPos(screen.x - 2, screen.y)
+    time.sleep(0.05)
+    user32.SetCursorPos(screen.x, screen.y)
+    user32.mouse_event(0x0001, 1, 0, 0, 0)
+    time.sleep(0.1)
+
+
+def drag_window_fraction(
+    window,
+    start_x_fraction,
+    end_x_fraction,
+    y_fraction,
+    steps=12,
+):
     user32 = ctypes.WinDLL("user32", use_last_error=True)
-    rectangle = wintypes.RECT()
-    user32.GetWindowRect(window, ctypes.byref(rectangle))
-    x = round(rectangle.left + (rectangle.right - rectangle.left) * x_fraction)
-    y = round(rectangle.top + (rectangle.bottom - rectangle.top) * y_fraction)
-    user32.SetForegroundWindow(window)
-    time.sleep(0.15)
-    user32.SetCursorPos(x, y)
-    point = wintypes.POINT(x, y)
-    user32.ScreenToClient(window, ctypes.byref(point))
-    packed = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
-    user32.PostMessageW(window, 0x0200, 0, packed)
-    user32.PostMessageW(window, 0x0201, 1, packed)
-    user32.PostMessageW(window, 0x0202, 0, packed)
+
+    def client_point(x_fraction):
+        _, screen, packed = window_client_fraction_point(
+            window,
+            x_fraction,
+            y_fraction,
+        )
+        user32.SetCursorPos(screen.x, screen.y)
+        return packed
+
+    show_test_window(window)
+    start = client_point(start_x_fraction)
+    user32.SendMessageW(window, 0x0201, 1, start)
+    for step in range(1, steps + 1):
+        fraction = start_x_fraction + (
+            end_x_fraction - start_x_fraction
+        ) * step / steps
+        packed = client_point(fraction)
+        user32.SendMessageW(window, 0x0200, 1, packed)
+        time.sleep(0.025)
+    user32.SendMessageW(window, 0x0202, 0, packed)
+
+
+def capture_window(window, destination):
+    from PIL import ImageGrab
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        image = ImageGrab.grab(window=window)
+    except TypeError:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        rectangle = wintypes.RECT()
+        if not user32.GetWindowRect(window, ctypes.byref(rectangle)):
+            raise RuntimeError("The native player window bounds were unavailable.")
+        image = ImageGrab.grab(
+            bbox=(
+                rectangle.left,
+                rectangle.top,
+                rectangle.right,
+                rectangle.bottom,
+            )
+        )
+    image.save(destination)
+
+
+def read_windows_caption_theme(window):
+    dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+    dwmapi.DwmGetWindowAttribute.argtypes = [
+        wintypes.HWND,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+
+    def read_dword(attribute):
+        value = wintypes.DWORD()
+        result = dwmapi.DwmGetWindowAttribute(
+            window,
+            attribute,
+            ctypes.byref(value),
+            ctypes.sizeof(value),
+        )
+        return value.value if result >= 0 else None
+
+    def color_hex(value):
+        if value is None:
+            return ""
+        return "#{:02x}{:02x}{:02x}".format(
+            value & 0xFF,
+            (value >> 8) & 0xFF,
+            (value >> 16) & 0xFF,
+        )
+
+    return {
+        "dark_mode": bool(read_dword(20)),
+        "border": color_hex(read_dword(34)),
+        "background": color_hex(read_dword(35)),
+        "text": color_hex(read_dword(36)),
+    }
 
 
 def receive_until(transport, process, events, predicate, timeout):
@@ -111,11 +263,13 @@ def main():
     )
     parser.add_argument("--runtime", required=True, type=Path)
     parser.add_argument("--media", required=True, type=Path)
+    parser.add_argument("--poster-reference", type=Path)
     parser.add_argument("--observe-seconds", type=float, default=4.0)
     parser.add_argument("--require-min-position-ms", type=int, default=0)
     parser.add_argument("--allow-no-audio", action="store_true")
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
+    parser.add_argument("--exercise-timeline", action="store_true")
     parser.add_argument("--exercise-subtitle-provider-flow", action="store_true")
     parser.add_argument("--external-subtitle", type=Path)
     parser.add_argument("--exercise-resume", action="store_true")
@@ -130,6 +284,12 @@ def main():
     media = args.media.resolve()
     if not executable.is_file() or not media.is_file():
         raise SystemExit("The runtime executable and media fixture must exist.")
+    poster_reference = ""
+    if args.poster_reference:
+        poster_path = args.poster_reference.resolve()
+        if not poster_path.is_file():
+            raise SystemExit("The poster fixture must exist.")
+        poster_reference = poster_path.as_uri()
 
     session_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(32)
@@ -163,11 +323,17 @@ def main():
             "CP_PLAYER_SESSION_ID": session_id,
             "CP_PLAYER_SESSION_TOKEN": token,
             "CP_PLAYER_PROTOCOL": str(PLAYER_PROTOCOL_VERSION),
+            "CP_PLAYER_CACHE_ROOT": str(isolated_local / "Cache"),
         }
     )
 
     process = None
     events = []
+    caption_theme = {}
+    timeline_click_position_ms = 0
+    timeline_drag_position_ms = 0
+    timeline_preview_thumbnail = ""
+    timeline_y_fraction = 0.0
     backend_sequence = 1
     started = time.monotonic()
     with WindowsNamedPipeServer(pipe_name) as transport:
@@ -203,7 +369,7 @@ def main():
                         "title": "Cinema Paradiso Player Smoke Fixture",
                         "year": "2026",
                         "movie_key": "fixture:phase2",
-                        "poster_reference": "",
+                        "poster_reference": poster_reference,
                     },
                     start_position_ms=(
                         max(0, args.resume_position_ms)
@@ -250,24 +416,11 @@ def main():
                     5,
                 )
                 if args.screenshot:
-                    from PIL import ImageGrab
-
                     time.sleep(0.3)
-                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                     resume_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-resume-prompt{args.screenshot.suffix}"
                     )
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
-                        ),
-                        all_screens=True,
-                    ).save(resume_path)
+                    capture_window(window, resume_path)
                 send_window_key(window, 0x0D)
                 receive_until(
                     transport,
@@ -306,24 +459,13 @@ def main():
                 window = find_visible_window(process.pid)
                 if not window:
                     raise RuntimeError("The production player window was not visible.")
+                show_test_window(window)
+                caption_theme = read_windows_caption_theme(window)
                 if args.screenshot:
-                    from PIL import ImageGrab
-
-                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                     pre_controls_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-pre-controls{args.screenshot.suffix}"
                     )
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
-                        ),
-                        all_screens=True,
-                    ).save(pre_controls_path)
+                    capture_window(window, pre_controls_path)
                 send_window_key(window, 0x20)
                 receive_until(
                     transport,
@@ -333,38 +475,113 @@ def main():
                     and event.get("state") == "paused",
                     3,
                 )
-                if args.screenshot:
-                    from PIL import ImageGrab
-
-                    time.sleep(0.3)
-                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
+                if args.exercise_timeline:
+                    duration_ms = max(
+                        (
+                            int(event.get("duration_ms", 0))
+                            for event in events
+                            if event["type"] == "progress"
                         ),
-                        all_screens=True,
-                    ).save(args.screenshot)
+                        default=0,
+                    )
+                    if duration_ms < 5000:
+                        raise RuntimeError(
+                            "Timeline smoke requires a media fixture of at least five seconds."
+                        )
+                    clicked = None
+                    for timeline_y in (
+                        0.890,
+                        0.895,
+                        0.900,
+                        0.905,
+                        0.910,
+                        0.915,
+                        0.920,
+                    ):
+                        click_window_fraction(window, 0.66, timeline_y)
+                        try:
+                            clicked = receive_until(
+                                transport,
+                                process,
+                                events,
+                                lambda event: event["type"] == "progress"
+                                and event.get("position_ms", 0)
+                                    >= int(duration_ms * 0.55),
+                                1.25,
+                            )
+                            timeline_y_fraction = timeline_y
+                            break
+                        except RuntimeError:
+                            continue
+                    if clicked is None:
+                        raise RuntimeError(
+                            "Real mouse input did not activate the visible timeline."
+                        )
+                    if args.screenshot:
+                        time.sleep(0.3)
+                        pointer_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-timeline-pointer"
+                            f"{args.screenshot.suffix}"
+                        )
+                        capture_window(window, pointer_path)
+                    timeline_click_position_ms = int(
+                        clicked.get("position_ms", 0)
+                    )
+
+                    move_window_fraction(window, 0.62, timeline_y_fraction)
+                    preview_deadline = time.monotonic() + 8
+                    preview_files = []
+                    while time.monotonic() < preview_deadline:
+                        preview_files = list(
+                            isolated_local.rglob("seek-thumbnails/**/*.jpg")
+                        )
+                        if preview_files:
+                            break
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.1)
+                    if not preview_files:
+                        raise RuntimeError(
+                            "Click seeking worked at "
+                            f"{timeline_click_position_ms} ms, but hovering "
+                            "did not produce an on-demand thumbnail."
+                        )
+                    timeline_preview_thumbnail = str(preview_files[0])
+                    if args.screenshot:
+                        time.sleep(0.4)
+                        preview_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-timeline-preview"
+                            f"{args.screenshot.suffix}"
+                        )
+                        capture_window(window, preview_path)
+
+                    drag_window_fraction(
+                        window,
+                        0.30,
+                        0.78,
+                        timeline_y_fraction,
+                    )
+                    dragged = receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "progress"
+                        and event.get("position_ms", 0)
+                            >= int(duration_ms * 0.68),
+                        4,
+                    )
+                    timeline_drag_position_ms = int(
+                        dragged.get("position_ms", 0)
+                    )
+                if args.screenshot:
+                    time.sleep(0.3)
+                    capture_window(window, args.screenshot)
                     send_window_key(window, 0x41)
                     time.sleep(0.3)
                     audio_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-audio-tracks{args.screenshot.suffix}"
                     )
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
-                        ),
-                        all_screens=True,
-                    ).save(audio_path)
+                    capture_window(window, audio_path)
                     click_window_fraction(window, 0.81, 0.47)
                     receive_until(
                         transport,
@@ -385,17 +602,7 @@ def main():
                     subtitle_tracks_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-subtitle-tracks{args.screenshot.suffix}"
                     )
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
-                        ),
-                        all_screens=True,
-                    ).save(subtitle_tracks_path)
+                    capture_window(window, subtitle_tracks_path)
                     click_window_fraction(window, 0.81, 0.50)
                     receive_until(
                         transport,
@@ -463,17 +670,7 @@ def main():
                     overlay_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-subtitle-search{args.screenshot.suffix}"
                     )
-                    rectangle = wintypes.RECT()
-                    ctypes.WinDLL("user32").GetWindowRect(window, ctypes.byref(rectangle))
-                    ImageGrab.grab(
-                        bbox=(
-                            rectangle.left,
-                            rectangle.top,
-                            rectangle.right,
-                            rectangle.bottom,
-                        ),
-                        all_screens=True,
-                    ).save(overlay_path)
+                    capture_window(window, overlay_path)
                 if args.exercise_subtitle_provider_flow:
                     send_window_key(window, 0x0D)
                     receive_until(
@@ -493,6 +690,8 @@ def main():
                         provider="fixture-provider",
                         language="en",
                         release_name="Cinema.Paradiso.Phase4.1080p",
+                        result_id="fixture-result",
+                        save_available=True,
                     ))
                     receive_until(
                         transport,
@@ -515,6 +714,37 @@ def main():
                         ),
                         4,
                     )
+                    send_window_key(window, 0x1B)
+                    send_window_key(window, 0x53)
+                    time.sleep(0.4)
+                    if args.screenshot:
+                        hub_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-subtitle-hub"
+                            f"{args.screenshot.suffix}"
+                        )
+                        capture_window(window, hub_path)
+                    click_window_fraction(window, 0.81, 0.45)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "subtitle.save"
+                        and event.get("result_id") == "fixture-result",
+                        3,
+                    )
+                    backend_sequence += 1
+                    transport.send(message(
+                        session_id,
+                        backend_sequence,
+                        "subtitle.saved",
+                        result_id="fixture-result",
+                        path=str(
+                            args.external_subtitle.with_name(
+                                "Cinema.Paradiso.cp.en.fixture.srt"
+                            ).resolve()
+                        ),
+                    ))
+                    time.sleep(0.2)
 
             backend_sequence += 1
             transport.send(message(session_id, backend_sequence, "close"))
@@ -617,6 +847,12 @@ def main():
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
         "controls_exercised": bool(args.exercise_controls),
+        "timeline_exercised": bool(args.exercise_timeline),
+        "timeline_click_position_ms": timeline_click_position_ms,
+        "timeline_drag_position_ms": timeline_drag_position_ms,
+        "timeline_preview_thumbnail": timeline_preview_thumbnail,
+        "timeline_y_fraction": timeline_y_fraction,
+        "windows_caption_theme": caption_theme,
         "resume_exercised": bool(args.exercise_resume),
         "track_restore_exercised": bool(
             args.restore_audio_fingerprint or args.restore_subtitle_fingerprint

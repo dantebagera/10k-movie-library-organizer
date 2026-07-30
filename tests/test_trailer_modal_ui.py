@@ -17,12 +17,23 @@ class TrailerModalUiTest(unittest.TestCase):
         self.assertNotIn("window.open(details.trailer_url", self.app_source)
         self.assertNotIn("window.open(`https://www.youtube.com/results?search_query=", self.app_source)
 
+    def test_home_playlist_videos_reuse_the_same_youtube_modal(self):
+        self.assertIn("function openYouTubeVideo(", self.app_source)
+        self.assertIn("function openHomeTrailerVideo(", self.app_source)
+        self.assertIn("openYouTubeVideo({", self.app_source)
+        self.assertEqual(self.app_source.count("function TrailerModal("), 1)
+        self.assertIn("function TrailerRecommendationGrid(", self.app_source)
+        self.assertIn("loadYouTubeIframeApi()", self.app_source)
+        self.assertIn("setShowEndRecommendations(true)", self.app_source)
+        self.assertIn("setActiveVideo(video)", self.app_source)
+
     def test_trailer_modal_embeds_youtube_player_with_fullscreen_controls(self):
         self.assertIn("function TrailerModal(", self.app_source)
         modal_source = self.app_source.split("function TrailerModal(", 1)[1].split("function ", 1)[0]
 
         self.assertIn("<iframe", modal_source)
         self.assertIn("allowFullScreen", modal_source)
+        self.assertIn("enablejsapi=1", modal_source)
         self.assertIn(
             'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"',
             modal_source,

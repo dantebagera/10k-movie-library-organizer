@@ -60,7 +60,7 @@ def preview_command(
     tmdb_discover=None,
     tmdb_search=None,
     person_movies=None,
-    owned_movie_lookup=None,
+    owned_movies_lookup=None,
 ):
     prompt = str(prompt or "").strip()
     config = coerce_config(config)
@@ -93,11 +93,11 @@ def preview_command(
     if action == "delete":
         return _preview_delete(prompt, intent, library_items or [], library_roots or [], plan_store)
     if action == "find":
-        return _preview_find(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
+        return _preview_find(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movies_lookup)
     if action == "create_list":
-        return _preview_create_list(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
+        return _preview_create_list(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movies_lookup)
     if action == "download":
-        return _preview_download(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup)
+        return _preview_download(prompt, intent, library_items or [], config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movies_lookup)
     return _state("unsupported", f"{action} is not supported in AI Control v1.")
 
 
@@ -595,11 +595,15 @@ def _preview_delete(prompt, intent, library_items, library_roots, plan_store):
     return _store_or_return(plan, plan_store)
 
 
-def _preview_find(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup=None):
+def _preview_find(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movies_lookup=None):
     source = str(intent.get("source") or "").lower()
-    if _online_intent(intent, prompt):
+    owned_filter = _ownership_filter_value(intent)
+    if owned_filter is True:
+        movies = _filter_library_items(library_items, intent.get("filters") or [])
+        source = "library"
+    elif owned_filter is False or _online_intent(intent, prompt):
         movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
-        movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lookup)
+        movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movies_lookup)
     else:
         movies = _filter_library_items(library_items, intent.get("filters") or [])
     items = [_movie_preview_item(movie) for movie in movies]
@@ -621,16 +625,19 @@ def _preview_find(prompt, intent, library_items, config, plan_store, tmdb_discov
     return _store_or_return(plan, plan_store)
 
 
-def _preview_create_list(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movie_lookup=None):
+def _preview_create_list(prompt, intent, library_items, config, plan_store, tmdb_discover, tmdb_search, person_movies, owned_movies_lookup=None):
     if not _create_list_has_grounded_source(prompt, intent):
         return _state(
             "needs_clarification",
             "Tell me what should go in the list: actor, director, genre, year, owned movies, or a clear discovery type.",
         )
-    movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
-    if movies and _online_intent(intent, prompt):
-        movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lookup)
-    if not movies and not _online_intent(intent, prompt):
+    owned_filter = _ownership_filter_value(intent)
+    if owned_filter is True:
+        movies = _filter_library_items(library_items, intent.get("filters") or [])
+    elif owned_filter is False or _online_intent(intent, prompt):
+        movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
+        movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movies_lookup)
+    else:
         movies = _filter_library_items(library_items, intent.get("filters") or [])
     items = [_movie_preview_item(movie) for movie in movies]
     if not items:
@@ -661,12 +668,12 @@ def _preview_download(
     tmdb_discover,
     tmdb_search,
     person_movies,
-    owned_movie_lookup=None,
+    owned_movies_lookup=None,
 ):
     if not config.get("trusted_indexers"):
         return _state("integration_missing", "Choose AI Control trusted indexers in Settings before planning downloads.")
     movies = _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies)
-    movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lookup)
+    movies = _apply_online_ownership_filter(movies, intent, library_items, owned_movies_lookup)
     if not movies:
         return _state("no_matches", "No online movies matched this download command.")
     items = _plan_items([_movie_preview_item(movie) for movie in movies])
@@ -890,7 +897,7 @@ def _matches_filter(item, filter_item):
     return False
 
 
-def _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lookup=None):
+def _apply_online_ownership_filter(movies, intent, library_items, owned_movies_lookup=None):
     owned_filter = _ownership_filter_value(intent)
     if owned_filter is None:
         return movies
@@ -898,9 +905,20 @@ def _apply_online_ownership_filter(movies, intent, library_items, owned_movie_lo
     for item in library_items or []:
         for key in _movie_keys(item):
             owned_by_key.setdefault(key, item)
+    movies = list(movies or [])
+    matches = [_owned_movie_match(movie, owned_by_key) for movie in movies]
+    unresolved_indexes = [index for index, match in enumerate(matches) if not match]
+    if unresolved_indexes and owned_movies_lookup:
+        try:
+            fallback_matches = owned_movies_lookup([movies[index] for index in unresolved_indexes])
+        except Exception:
+            fallback_matches = []
+        if isinstance(fallback_matches, (list, tuple)):
+            for index, match in zip(unresolved_indexes, fallback_matches):
+                if isinstance(match, dict) and match.get("found", True):
+                    matches[index] = match
     result = []
-    for movie in movies or []:
-        owned_match = _owned_movie_match(movie, owned_by_key, owned_movie_lookup)
+    for movie, owned_match in zip(movies, matches):
         if owned_filter and owned_match:
             merged = {**movie, **owned_match}
             merged["source"] = "Library"
@@ -917,19 +935,11 @@ def _ownership_filter_value(intent):
     return None
 
 
-def _owned_movie_match(movie, owned_by_key, owned_movie_lookup=None):
+def _owned_movie_match(movie, owned_by_key):
     for key in _movie_keys(movie):
         if key in owned_by_key:
             return owned_by_key[key]
-    if not owned_movie_lookup:
-        return None
-    try:
-        match = owned_movie_lookup(movie)
-    except Exception:
-        return None
-    if isinstance(match, dict):
-        return match if match.get("found", True) else None
-    return {"path": ""} if match else None
+    return None
 
 
 def _resolve_online_movies(intent, config, tmdb_discover, tmdb_search, person_movies):

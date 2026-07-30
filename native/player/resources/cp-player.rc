@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_CP_PLAYER_ICON ICON "cp-player.ico"

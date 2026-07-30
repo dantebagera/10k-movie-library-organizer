@@ -1,16 +1,17 @@
 import {
-  AlertTriangle, Bell, ChevronLeft, ChevronRight, Film, HardDrive, Link as LinkIcon, Loader2, MonitorPlay,
-  Play, ScanSearch, Search, Sparkles, Trash2, Wand2, X
+  AlertTriangle, Bell, ChevronLeft, ChevronRight, ExternalLink, Film, HardDrive, Link as LinkIcon, Loader2, MonitorPlay,
+  Play, ScanSearch, Search, Sparkles, Trash2, Wand2, X, Youtube
 } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import headerCropUrl from '../../assets/header.png';
 import Rating from '../../components/Rating.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import { OwnedFileDetailsButton, PosterEditButton, PosterStateControls } from '../../components/SharedMovieCards.jsx';
-import { ContinueMovieCard, UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
+import { ContinueMovieCard, UnifiedMovieCard, UpcomingMovieCard } from '../../components/movie-card/MovieCard.jsx';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import { cx, formatCount, movieKey, sortFollowedReleases } from '../../utils/appUtils.js';
 import { canonicalOwnedMovie, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
-import { getQualityLabel } from '../../utils/libraryUtils.js';
+import { getCompactQualityLabel } from '../../utils/libraryUtils.js';
 import { formatReleaseDateLabel, formatVoteCount, isUnreleasedMovie } from '../../utils/moviePresentation.js';
 
 export default function HomeWorkspace(props) {
@@ -18,6 +19,10 @@ export default function HomeWorkspace(props) {
     stats,
     loading,
     movies,
+    upcomingMovies,
+    upcomingError,
+    homeTrailers,
+    homeTrailersError,
     ownership,
     followed,
     followedChecking,
@@ -25,8 +30,11 @@ export default function HomeWorkspace(props) {
     selectedOwnership,
     selectedDetails,
     onSelectSection,
+    onOpenDiscoverList,
     onOpenCleanup,
     onSelectMovie,
+    onOpenHomeTrailer,
+    onRetryHomeTrailers,
     onPlay,
     onStream,
     streamingAvailable,
@@ -60,91 +68,114 @@ export default function HomeWorkspace(props) {
         </div>
       </section>
 
-      {continueWatching.length > 0 && (
-        <ContinueWatchingRail
-          items={continueWatching}
-          onResume={onResumeWatching}
-          onRestart={onRestartWatching}
-          onRemove={onRemoveWatching}
+      <div className="home-status-grid">
+        <HealthPanel stats={stats} loading={loading.stats} onOpenCleanup={onOpenCleanup} />
+        <ReleasePanel
+          followed={followed}
+          checking={followedChecking}
+          onSelectMovie={onSelectMovie}
+          onViewAll={() => setReleaseDrawerOpen(true)}
         />
-      )}
+      </div>
 
-      <HealthPanel stats={stats} loading={loading.stats} onOpenCleanup={onOpenCleanup} />
-      <ReleasePanel
-        followed={followed}
-        checking={followedChecking}
-        onSelectMovie={onSelectMovie}
-        onViewAll={() => setReleaseDrawerOpen(true)}
-      />
-
-      <section className="movie-rail">
-        <div className="section-heading">
-          <div>
-            <p className="screen-kicker">Discover</p>
-            <h3>Trending movies with archive-aware actions</h3>
-          </div>
-          <button type="button" className="ghost-link" onClick={() => onSelectSection('discover')}>
-            Open Discover
-          </button>
-        </div>
-        {loading.movies ? (
-          <div className="skeleton-stack">
-            <div className="movie-card skeleton-card" />
-            <div className="movie-card skeleton-card" />
-            <div className="movie-card skeleton-card" />
-          </div>
-        ) : (
-          <div className="movie-list">
-            {movies.slice(0, 5).map((movie) => {
-              const owned = ownedMovieFor(movie, ownership);
-              return (
-                <SmartMovieCard
-                  key={movieKey(movie)}
-                  movie={movie}
-                  owned={owned}
-                  selected={movieKey(movie) === movieKey(selectedMovie || {})}
-                  followed={followed.some((item) => movieKey(item) === movieKey(movie))}
-                  watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
-                  watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
-                  details={movieKey(movie) === movieKey(selectedMovie || {}) ? selectedDetails : null}
-                  onSelect={() => onSelectMovie(movie)}
-                  onPlay={onPlay}
-                  onStream={onStream}
-                  streamingAvailable={streamingAvailable}
-                  streamingLabel={streamingLabel}
-                  onFindTorrent={onFindTorrent}
-                  onTrailer={onTrailer}
-                  onFollow={onFollow}
-                  onToggleWatched={owned ? () => onToggleSystemList('watched', movie, owned) : undefined}
-                  onToggleWatchlist={() => onToggleSystemList('watchlist', movie, owned)}
-                  onEditPoster={owned ? () => onEditPoster(owned, movie) : undefined}
-                />
-              );
-            })}
-          </div>
+      <div className={cx('home-media-grid', !continueWatching.length && 'home-media-grid-trailers-only')}>
+        {continueWatching.length > 0 && (
+          <ContinueWatchingRail
+            items={continueWatching}
+            onResume={onResumeWatching}
+            onRestart={onRestartWatching}
+            onRemove={onRemoveWatching}
+          />
         )}
-      </section>
+        <HomeTrailersPanel
+          feed={homeTrailers}
+          loading={loading.trailers}
+          error={homeTrailersError}
+          onOpenVideo={onOpenHomeTrailer}
+          onRetry={onRetryHomeTrailers}
+        />
+      </div>
 
-      <MovieInspector
-        movie={selectedMovie}
-        owned={selectedOwnership}
-        details={selectedDetails}
-        followed={followed.some((item) => movieKey(item) === movieKey(selectedMovie || {}))}
-        watched={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watched')}
-        watchlisted={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watchlist')}
-        onClose={() => onSelectMovie(null)}
-        onPlay={onPlay}
-        onStream={onStream}
-        streamingAvailable={streamingAvailable}
-        streamingLabel={streamingLabel}
-        onFindTorrent={onFindTorrent}
-        onTrailer={onTrailer}
-        onFollow={onFollow}
-        onToggleWatched={selectedOwnership ? () => onToggleSystemList('watched', selectedMovie, selectedOwnership) : undefined}
-        onToggleWatchlist={selectedMovie ? () => onToggleSystemList('watchlist', selectedMovie, selectedOwnership) : undefined}
-        onEditPoster={selectedOwnership ? () => onEditPoster(selectedOwnership, selectedMovie) : undefined}
-        onOpenFileDetails={onOpenFileDetails}
-      />
+      <div className="home-main-grid">
+        <section className="movie-rail">
+          <div className="section-heading">
+            <div>
+              <p className="screen-kicker">Discover</p>
+              <h3>Trending movies with archive-aware actions</h3>
+            </div>
+            <button type="button" className="ghost-link" onClick={() => onSelectSection('discover')}>
+              Open Discover
+            </button>
+          </div>
+          {loading.movies ? (
+            <div className="skeleton-stack">
+              <div className="movie-card skeleton-card" />
+              <div className="movie-card skeleton-card" />
+              <div className="movie-card skeleton-card" />
+            </div>
+          ) : (
+            <div className="movie-list">
+              {movies.slice(0, 8).map((movie) => {
+                const owned = ownedMovieFor(movie, ownership);
+                return (
+                  <SmartMovieCard
+                    key={movieKey(movie)}
+                    movie={movie}
+                    owned={owned}
+                    selected={movieKey(movie) === movieKey(selectedMovie || {})}
+                    followed={followed.some((item) => movieKey(item) === movieKey(movie))}
+                    watched={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watched')}
+                    watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
+                    details={movieKey(movie) === movieKey(selectedMovie || {}) ? selectedDetails : null}
+                    onSelect={() => onSelectMovie(movie)}
+                    onPlay={onPlay}
+                    onStream={onStream}
+                    streamingAvailable={streamingAvailable}
+                    streamingLabel={streamingLabel}
+                    onFindTorrent={onFindTorrent}
+                    onTrailer={onTrailer}
+                    onFollow={onFollow}
+                    onToggleWatched={owned ? () => onToggleSystemList('watched', movie, owned) : undefined}
+                    onToggleWatchlist={() => onToggleSystemList('watchlist', movie, owned)}
+                    onEditPoster={owned ? () => onEditPoster(owned, movie) : undefined}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <div className="home-side-stack">
+          <MovieInspector
+            movie={selectedMovie}
+            owned={selectedOwnership}
+            details={selectedDetails}
+            followed={followed.some((item) => movieKey(item) === movieKey(selectedMovie || {}))}
+            watched={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watched')}
+            watchlisted={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watchlist')}
+            onClose={() => onSelectMovie(null)}
+            onPlay={onPlay}
+            onStream={onStream}
+            streamingAvailable={streamingAvailable}
+            streamingLabel={streamingLabel}
+            onFindTorrent={onFindTorrent}
+            onTrailer={onTrailer}
+            onFollow={onFollow}
+            onToggleWatched={selectedOwnership ? () => onToggleSystemList('watched', selectedMovie, selectedOwnership) : undefined}
+            onToggleWatchlist={selectedMovie ? () => onToggleSystemList('watchlist', selectedMovie, selectedOwnership) : undefined}
+            onEditPoster={selectedOwnership ? () => onEditPoster(selectedOwnership, selectedMovie) : undefined}
+            onOpenFileDetails={onOpenFileDetails}
+          />
+          <ComingSoonPanel
+            movies={upcomingMovies}
+            loading={loading.upcoming}
+            error={upcomingError}
+            selectedMovie={selectedMovie}
+            onSelectMovie={onSelectMovie}
+            onViewAll={() => onOpenDiscoverList('upcoming')}
+          />
+        </div>
+      </div>
       {releaseDrawerOpen && (
         <FollowedReleasesDrawer
           followed={followed}
@@ -157,6 +188,172 @@ export default function HomeWorkspace(props) {
         />
       )}
     </div>
+  );
+}
+
+function publishedLabel(value) {
+  const timestamp = Date.parse(value || '');
+  if (!Number.isFinite(timestamp)) return '';
+  const elapsedMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+  if (elapsedMinutes < 60) return `${Math.max(1, elapsedMinutes)} min ago`;
+  const hours = Math.floor(elapsedMinutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  const months = Math.floor(days / 30);
+  return `${months} month${months === 1 ? '' : 's'} ago`;
+}
+
+function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
+  const [page, setPage] = useState(0);
+  const { columns, gridRef } = useCardGridMetrics({ target: 2, max: 2, bias: 'lower' });
+  const items = feed?.items || [];
+  const pageSize = Math.max(1, columns);
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const visibleItems = useMemo(
+    () => items.slice(safePage * pageSize, safePage * pageSize + pageSize),
+    [items, pageSize, safePage]
+  );
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages - 1));
+  }, [totalPages]);
+
+  return (
+    <section className="home-trailers-panel" aria-labelledby="home-trailers-heading">
+      <div className="section-heading home-trailers-heading">
+        <div>
+          <p className="screen-kicker">Rotten Tomatoes Trailers</p>
+          <h3 id="home-trailers-heading">{feed?.title || 'HOT New Trailers & Exclusives'}</h3>
+        </div>
+        <div className="home-trailer-heading-actions">
+          <a
+            className="ghost-link ghost-link-small"
+            href={feed?.source_url}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open Hot New Trailers playlist on YouTube"
+          >
+            <ExternalLink size={14} /> Playlist
+          </a>
+          <div className="continue-watching-controls">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              aria-label="Previous trailer videos"
+              disabled={safePage === 0}
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+              aria-label="Next trailer videos"
+              disabled={safePage >= totalPages - 1}
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="home-trailer-grid" ref={gridRef}>
+          {Array.from({ length: pageSize }, (_, index) => (
+            <div className="home-video-card home-video-card-skeleton skeleton-card" key={index} />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="home-feed-empty">
+          <AlertTriangle size={22} />
+          <strong>Hot New Trailers is temporarily unavailable.</strong>
+          <span>{error}</span>
+          <button type="button" className="ghost-link ghost-link-small" onClick={onRetry}>Retry</button>
+        </div>
+      ) : visibleItems.length ? (
+        <div className="home-trailer-grid" ref={gridRef}>
+          {visibleItems.map((video) => (
+            <button
+              type="button"
+              className="home-video-card"
+              key={video.video_id}
+              onClick={() => onOpenVideo(video)}
+              aria-label={`Play ${video.title}`}
+            >
+              <span className="home-video-thumbnail">
+                <img src={video.thumbnail_url} alt="" loading="lazy" />
+                <span className="home-video-play"><Youtube size={25} /></span>
+              </span>
+              <strong dir="auto" title={video.title}>{video.title}</strong>
+              <small>
+                {video.views ? `${formatCount(video.views)} views` : 'New video'}
+                {publishedLabel(video.published_at) ? ` · ${publishedLabel(video.published_at)}` : ''}
+              </small>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="home-feed-empty">
+          <Youtube size={22} />
+          <strong>No playlist videos are available.</strong>
+        </div>
+      )}
+      {feed?.stale && <small className="home-feed-stale">Showing the last successfully refreshed playlist.</small>}
+    </section>
+  );
+}
+
+function ComingSoonPanel({ movies, loading, error, selectedMovie, onSelectMovie, onViewAll }) {
+  const { gridRef, pageSize } = useCardGridMetrics({ target: 6, min: 6, max: 6 });
+  const visibleMovies = useMemo(
+    () => (movies || []).slice(0, pageSize),
+    [movies, pageSize]
+  );
+
+  return (
+    <section className="coming-soon-panel" aria-labelledby="coming-soon-heading">
+      <div className="section-heading">
+        <div>
+          <p className="screen-kicker">Coming soon</p>
+          <h3 id="coming-soon-heading">Upcoming movies</h3>
+        </div>
+        <button type="button" className="ghost-link ghost-link-small" onClick={onViewAll}>
+          View all
+        </button>
+      </div>
+      {loading ? (
+        <div className="coming-soon-grid" ref={gridRef}>
+          {Array.from({ length: pageSize }, (_, index) => (
+            <div className="upcoming-movie-card upcoming-movie-card-skeleton skeleton-card" key={index} />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="home-feed-empty">
+          <AlertTriangle size={22} />
+          <strong>Upcoming movies are temporarily unavailable.</strong>
+          <span>{error}</span>
+        </div>
+      ) : visibleMovies.length ? (
+        <div className="coming-soon-grid" ref={gridRef}>
+          {visibleMovies.map((movie) => (
+            <UpcomingMovieCard
+              key={movieKey(movie)}
+              title={movie.title}
+              posterUrl={movie.poster_url}
+              releaseLabel={formatReleaseDateLabel(movie.release_date)}
+              selected={movieKey(movie) === movieKey(selectedMovie || {})}
+              onSelect={() => onSelectMovie(movie)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="home-feed-empty">
+          <Sparkles size={22} />
+          <strong>No upcoming movies are available.</strong>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -453,8 +650,7 @@ function SmartMovieCard(props) {
       mutedChips={[
         displayMovie.language,
         displayMovie.country_flag || displayMovie.country,
-        owned ? getQualityLabel(ownedItem) : '',
-        ownedItem?.size_human || owned?.size_human
+        owned ? getCompactQualityLabel(ownedItem) : ''
       ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
@@ -535,7 +731,7 @@ function MovieInspector({
             {releaseDateLabel && <span>Releases {releaseDateLabel}</span>}
             {displayMovie.language && <span>{displayMovie.language}</span>}
             {(displayMovie.country_flag || displayMovie.country) && <span>{displayMovie.country_flag || displayMovie.country}</span>}
-            {owned && <span>{getQualityLabel(ownedItem)}</span>}
+            {owned && <span>{getCompactQualityLabel(ownedItem)}</span>}
           </div>
         </div>
       </div>

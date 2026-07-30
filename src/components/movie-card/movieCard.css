@@ -346,6 +346,69 @@
   box-shadow: var(--shadow-card);
 }
 
+.upcoming-movie-card {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  align-content: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 7px;
+  text-align: left;
+  transition: border-color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.upcoming-movie-card:hover,
+.upcoming-movie-card:focus-visible,
+.upcoming-movie-card-selected {
+  border-color: #d4af3770;
+  background: #d4af370d;
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.upcoming-movie-poster.unified-movie-poster {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 2 / 3;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.upcoming-movie-copy {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.upcoming-movie-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.88rem;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.upcoming-movie-copy small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--projector-gold);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.upcoming-movie-copy svg {
+  flex: 0 0 auto;
+}
+
 .continue-movie-menu button {
   display: flex;
   align-items: center;

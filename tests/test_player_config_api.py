@@ -53,6 +53,40 @@ class PlayerConfigApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.save_config.assert_not_called()
 
+    def test_put_api_key_only_mode_clears_account_credentials(self):
+        self.client.put("/api/player/config", json={
+            "providers": {
+                "opensubtitles": {
+                    "enabled": True,
+                    "authentication_mode": "account",
+                    "username": "account-user",
+                    "api_key": "consumer-key",
+                    "password": "account-password",
+                },
+            },
+        })
+        self.save_config.reset_mock()
+
+        response = self.client.put("/api/player/config", json={
+            "providers": {
+                "opensubtitles": {
+                    "enabled": True,
+                    "authentication_mode": "api_key_only",
+                },
+            },
+        })
+
+        self.assertEqual(response.status_code, 200)
+        public = response.get_json()["providers"]["opensubtitles"]
+        self.assertEqual(public["authentication_mode"], "api_key_only")
+        self.assertTrue(public["api_key_configured"])
+        self.assertFalse(public["username_configured"])
+        self.assertFalse(public["password_configured"])
+        stored = self.save_config.call_args.args[0]["player"]["providers"]["opensubtitles"]
+        self.assertEqual(stored["api_key"], "consumer-key")
+        self.assertEqual(stored["username"], "")
+        self.assertEqual(stored["password"], "")
+
     def test_reset_restores_install_default(self):
         self.client.put("/api/player/config", json={"mode": "built_in"})
         self.save_config.reset_mock()

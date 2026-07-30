@@ -23,6 +23,8 @@ MESSAGE_TYPES = {
     "subtitle.results",
     "subtitle.download",
     "subtitle.loaded",
+    "subtitle.save",
+    "subtitle.saved",
     "error",
     "closing",
     "closed",
@@ -225,6 +227,19 @@ def validate_message(message, *, expected_type=None, session_id=None, token=None
             maximum=512,
             allow_empty=True,
         )
+        _bounded_string(
+            message.get("result_id", ""),
+            "subtitle.result_id",
+            maximum=128,
+            allow_empty=True,
+        )
+        if not isinstance(message.get("save_available", False), bool):
+            raise PlayerProtocolError("Subtitle save availability is invalid")
+    elif message_type == "subtitle.save":
+        _bounded_string(message.get("result_id", ""), "subtitle.result_id", maximum=128)
+    elif message_type == "subtitle.saved":
+        _bounded_string(message.get("result_id", ""), "subtitle.result_id", maximum=128)
+        _bounded_string(message.get("path", ""), "subtitle.path", maximum=32768)
     elif message_type == "resume.choice":
         if message.get("choice") not in {"resume", "restart"}:
             raise PlayerProtocolError("Player resume choice is invalid")

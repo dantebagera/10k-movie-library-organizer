@@ -20,6 +20,7 @@ import WorkspacePathBar from '../../components/WorkspacePathBar.jsx';
 import { LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
 import Pagination from '../../components/Pagination.jsx';
 import { ConfirmDialog, LibraryRenameModal, LibraryStat } from '../../components/LibraryControls.jsx';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, getUniqueOptions } from '../../utils/appUtils.js';
 import {
@@ -101,6 +102,46 @@ function librarySelectionKey(item) {
   return item.path || movieIdentityKey(moviePayload(item));
 }
 
+function LibraryBulkSelectionBar({
+  kind,
+  selectedCount,
+  allFilteredSelected,
+  onToggleAll,
+  onSelectAll,
+  onClear,
+  onAddToList,
+  onFindSources,
+  onDelete
+}) {
+  const noun = kind === 'file' ? 'files' : 'movies';
+  return (
+    <div className="bulk-selection-bar library-bulk-selection">
+      <SelectionCheckbox
+        className="library-selection-master"
+        checked={allFilteredSelected}
+        onChange={onToggleAll}
+        label={`Select all filtered library ${noun}`}
+      />
+      <span>{selectedCount ? `${formatCount(selectedCount)} selected` : `Select ${noun}`}</span>
+      <button type="button" className="mini-action" onClick={onSelectAll}>
+        Select all filtered
+      </button>
+      <button type="button" className="mini-action" onClick={onClear} disabled={!selectedCount}>
+        Clear
+      </button>
+      <button type="button" className="mini-action" onClick={onAddToList} disabled={!selectedCount}>
+        <CirclePlus size={13} /> Add to list
+      </button>
+      <button type="button" className="mini-action mini-action-source" onClick={onFindSources} disabled={!selectedCount}>
+        <Search size={13} /> Find sources
+      </button>
+      <button type="button" className="mini-action mini-action-danger" onClick={onDelete} disabled={!selectedCount}>
+        <Trash2 size={13} /> Delete selected
+      </button>
+    </div>
+  );
+}
+
 function libraryFilterQuery(filters, page, pageSize, forceScan = false) {
   const params = new URLSearchParams({
     view: 'cards',
@@ -147,7 +188,10 @@ export default function LibraryWorkspace({
   fileDetailsRequest,
   onFileDetailsRequestConsumed
 }) {
-  const pageSize = 40;
+  const {
+    gridRef: libraryMovieGridRef,
+    pageSize
+  } = useCardGridMetrics({ target: 40, max: 200, bias: 'lower' });
   const [items, setItems] = useState([]);
   const [fileItems, setFileItems] = useState([]);
   const [fileItemsLoaded, setFileItemsLoaded] = useState(false);
@@ -199,6 +243,7 @@ export default function LibraryWorkspace({
   const [sourceReview, setSourceReview] = useState(null);
   const [showAdultMovies, setShowAdultMovies] = useState(true);
   const [selectedLibraryKeys, setSelectedLibraryKeys] = useState(() => new Set());
+  const [selectedFilePaths, setSelectedFilePaths] = useState(() => new Set());
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [peopleLoaded, setPeopleLoaded] = useState(false);
   const [peopleItems, setPeopleItems] = useState([]);
@@ -324,7 +369,7 @@ export default function LibraryWorkspace({
     } finally {
       if (requestSeq === libraryRequestSeq.current) setLoading(false);
     }
-  }, [currentPage, notify, serverFilters]);
+  }, [currentPage, notify, pageSize, serverFilters]);
 
   useEffect(() => {
     if (mode === 'movie' && librarySearchKind === 'movies') loadLibrary(false, { quiet: true, silentSuccess: true });
@@ -576,9 +621,11 @@ export default function LibraryWorkspace({
     });
   }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, qualityFilter, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
 
-  const selectedPageItems = useMemo(() => (
-    items.filter((item) => selectedLibraryKeys.has(librarySelectionKey(item)))
-  ), [items, selectedLibraryKeys]);
+  const activeSelectedPaths = mode === 'movie' ? selectedLibraryKeys : selectedFilePaths;
+  const selectedPageItems = useMemo(() => {
+    const activeItemsForSelection = mode === 'movie' ? items : fileItems;
+    return activeItemsForSelection.filter((item) => activeSelectedPaths.has(librarySelectionKey(item)));
+  }, [activeSelectedPaths, fileItems, items, mode]);
   const listMissingCoverage = useMemo(() => (
     listFilter ? listLibraryCoverage(listCoverageItems, listFilter) : null
   ), [listCoverageItems, listFilter]);
@@ -586,6 +633,8 @@ export default function LibraryWorkspace({
     buildLibraryPeopleIndex(peopleItems, query)
   ), [peopleItems, query]);
   const allFilteredLibrarySelected = libraryResult.total > 0 && selectedLibraryKeys.size === libraryResult.total;
+  const allFilteredFilesSelected = filteredItems.length > 0
+    && filteredItems.every((item) => selectedFilePaths.has(item.path));
 
   function toggleLibrarySelection(item, checked) {
     const key = librarySelectionKey(item);
@@ -597,7 +646,20 @@ export default function LibraryWorkspace({
     });
   }
 
-  async function selectAllFilteredLibrary() {
+  function toggleFileSelection(item, checked) {
+    setSelectedFilePaths((current) => {
+      const next = new Set(current);
+      if (checked) next.add(item.path);
+      else next.delete(item.path);
+      return next;
+    });
+  }
+
+  async function selectAllFiltered() {
+    if (mode === 'file') {
+      setSelectedFilePaths(new Set(filteredItems.map((item) => item.path)));
+      return;
+    }
     try {
       const data = await fetchJson('/api/library/selection', {
         method: 'POST',
@@ -610,23 +672,24 @@ export default function LibraryWorkspace({
     }
   }
 
-  function clearLibrarySelection() {
-    setSelectedLibraryKeys(new Set());
+  function clearActiveSelection() {
+    if (mode === 'file') setSelectedFilePaths(new Set());
+    else setSelectedLibraryKeys(new Set());
   }
 
-  async function resolveSelectedLibraryItems() {
-    if (!selectedLibraryKeys.size) return [];
+  async function resolveSelectedLibraryItems(paths = activeSelectedPaths) {
+    if (!paths.size) return [];
     const data = await fetchJson('/api/library/selection/items', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: [...selectedLibraryKeys] })
+      body: JSON.stringify({ paths: [...paths] })
     });
     return data.items || [];
   }
 
   async function openSelectedSourceReview() {
-    if (!selectedLibraryKeys.size) {
-      notify('Select movies before finding sources.', 'neutral');
+    if (!activeSelectedPaths.size) {
+      notify(`Select ${mode === 'file' ? 'files' : 'movies'} before finding sources.`, 'neutral');
       return;
     }
     setSourceReview({ loading: true, rows: [], error: '', title: 'Find sources' });
@@ -657,15 +720,15 @@ export default function LibraryWorkspace({
   }
 
   function requestBulkDelete() {
-    if (!selectedLibraryKeys.size) return;
+    if (!activeSelectedPaths.size) return;
     const byPath = new Map(selectedPageItems.map((item) => [item.path, item]));
     setDeleteTarget({
-      items: [...selectedLibraryKeys].map((path) => byPath.get(path) || ({ path, filename: path.split(/[\\/]/).pop() || path }))
+      items: [...activeSelectedPaths].map((path) => byPath.get(path) || ({ path, filename: path.split(/[\\/]/).pop() || path }))
     });
   }
 
   async function openSelectedListEditor() {
-    if (!selectedLibraryKeys.size) return;
+    if (!activeSelectedPaths.size) return;
     try {
       setListEditor({ items: await resolveSelectedLibraryItems() });
     } catch (selectionError) {
@@ -702,12 +765,6 @@ export default function LibraryWorkspace({
   }, [currentPage, totalPages]);
 
   useEffect(() => {
-    if (mode !== 'movie' && selectedLibraryKeys.size) {
-      setSelectedLibraryKeys(new Set());
-    }
-  }, [mode, selectedLibraryKeys.size]);
-
-  useEffect(() => {
     if (mode !== 'movie') setLibrarySearchKind('movies');
   }, [mode]);
 
@@ -740,6 +797,7 @@ export default function LibraryWorkspace({
     setLibraryHistory([]);
     setLibraryCurrentLabel('');
     setSelectedLibraryKeys(new Set());
+    setSelectedFilePaths(new Set());
     resetLibraryPage();
   }
 
@@ -1017,6 +1075,7 @@ export default function LibraryWorkspace({
     announceCurationChanged();
     notify(`${formatCount((movies || []).length)} movie${(movies || []).length === 1 ? '' : 's'} added to list`);
     setSelectedLibraryKeys(new Set());
+    setSelectedFilePaths(new Set());
   }
 
   async function renameList(listId, name) {
@@ -1115,6 +1174,7 @@ export default function LibraryWorkspace({
     setItems((current) => current.filter((item) => !deleted.has(item.path)));
     setFileItems((current) => current.filter((item) => !deleted.has(item.path)));
     setSelectedLibraryKeys(new Set());
+    setSelectedFilePaths(new Set());
     setDeleteTarget(null);
     if (deletedPaths.length) {
       notify(`${formatCount(deletedPaths.length)} file${deletedPaths.length === 1 ? '' : 's'} moved to Recycle Bin`);
@@ -1372,31 +1432,18 @@ export default function LibraryWorkspace({
           />
         ) : (
         <>
-          {mode === 'movie' && libraryResult.total > 0 && (
-            <div className="bulk-selection-bar library-bulk-selection">
-              <SelectionCheckbox
-                className="library-selection-master"
-                checked={allFilteredLibrarySelected}
-                onChange={(checked) => { if (checked) selectAllFilteredLibrary(); else clearLibrarySelection(); }}
-                label="Select all filtered library movies"
-              />
-              <span>{selectedLibraryKeys.size ? `${formatCount(selectedLibraryKeys.size)} selected` : 'Select movies'}</span>
-              <button type="button" className="mini-action" onClick={selectAllFilteredLibrary}>
-                Select all filtered
-              </button>
-              <button type="button" className="mini-action" onClick={clearLibrarySelection} disabled={!selectedLibraryKeys.size}>
-                Clear
-              </button>
-              <button type="button" className="mini-action" onClick={openSelectedListEditor} disabled={!selectedLibraryKeys.size}>
-                <CirclePlus size={13} /> Add to list
-              </button>
-              <button type="button" className="mini-action mini-action-source" onClick={openSelectedSourceReview} disabled={!selectedLibraryKeys.size}>
-                <Search size={13} /> Find sources
-              </button>
-              <button type="button" className="mini-action mini-action-danger" onClick={requestBulkDelete} disabled={!selectedLibraryKeys.size}>
-                <Trash2 size={13} /> Delete selected
-              </button>
-            </div>
+          {(mode === 'movie' ? libraryResult.total > 0 : filteredItems.length > 0) && (
+            <LibraryBulkSelectionBar
+              kind={mode}
+              selectedCount={activeSelectedPaths.size}
+              allFilteredSelected={mode === 'movie' ? allFilteredLibrarySelected : allFilteredFilesSelected}
+              onToggleAll={(checked) => { if (checked) selectAllFiltered(); else clearActiveSelection(); }}
+              onSelectAll={selectAllFiltered}
+              onClear={clearActiveSelection}
+              onAddToList={openSelectedListEditor}
+              onFindSources={openSelectedSourceReview}
+              onDelete={requestBulkDelete}
+            />
           )}
         <Pagination
             total={focusedMovieItem ? visibleItems.length : mode === 'movie' ? libraryResult.total : filteredItems.length}
@@ -1407,7 +1454,10 @@ export default function LibraryWorkspace({
             onPageChange={goToLibraryPage}
           />
           {visibleItems.length ? (
-            <div className={cx('library-results', mode === 'movie' ? 'library-movie-results' : 'library-file-results')}>
+            <div
+              ref={mode === 'movie' ? libraryMovieGridRef : undefined}
+              className={cx('library-results', mode === 'movie' ? 'library-movie-results' : 'library-file-results')}
+            >
               {visibleItems.map((item) => {
                 if (mode === 'movie') {
                   const details = tmdbCache[getTmdbCacheKey(item)];
@@ -1448,7 +1498,6 @@ export default function LibraryWorkspace({
                       onToggleWatched={() => toggleSystemList('watched', item)}
                       onToggleWatchlist={() => toggleSystemList('watchlist', item)}
                       showOwnedBadge={false}
-                      conciseFileFacts
                       selected={selectedLibraryKeys.has(librarySelectionKey(item))}
                       onSelect={(checked) => toggleLibrarySelection(item, checked)}
                     />
@@ -1465,6 +1514,8 @@ export default function LibraryWorkspace({
                     onRename={() => setRenameTarget(item)}
                     onDelete={() => setDeleteTarget(item)}
                     onOpenMovieView={() => openMovieForFile(item)}
+                    selected={selectedFilePaths.has(item.path)}
+                    onSelect={(checked) => toggleFileSelection(item, checked)}
                   />
                 );
               })}
@@ -1931,7 +1982,18 @@ function describeFileQualityEvidence(item) {
   return 'Quality evidence is unavailable until this file is measured.';
 }
 
-function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRename, onDelete, onOpenMovieView }) {
+function LibraryFileRow({
+  item,
+  expanded,
+  onToggle,
+  onPlay,
+  onFindTorrent,
+  onRename,
+  onDelete,
+  onOpenMovieView,
+  selected,
+  onSelect
+}) {
   const identity = getMovieIdentity(item);
   const canonical = item.canonical_metadata || {};
   const lowQuality = isLowQuality(item.resolution);
@@ -1946,25 +2008,46 @@ function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRen
     item.audio_channels ? `${formatMediaDecimal(item.audio_channels)} channels` : '',
     item.audio_bitrate ? formatMediaBitrate(item.audio_bitrate) : ''
   ].filter(Boolean).join(' · ') || 'Unavailable';
+  function handleKeyDown(event) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onToggle();
+    }
+  }
   return (
-    <article className={cx('library-file-row', expanded && 'library-file-row-expanded')}>
+    <article
+      className={cx('library-file-row', expanded && 'library-file-row-expanded', selected && 'library-file-row-selected')}
+      onClick={onToggle}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
+      aria-expanded={expanded}
+    >
       <div className="file-row-main">
-        <div className="file-row-title">
-          <strong>{item.filename}</strong>
-          <span>{identity.title}{identity.year ? ` (${identity.year})` : ''}</span>
-        </div>
-        <div className="file-row-path" title={item.path}>{item.path}</div>
-        <div className="file-row-meta">
-          <span className={cx('chip', lowQuality && 'chip-warning')}>{getQualityFactsLabel(item)}</span>
-          <span className="chip chip-muted">{item.rip_source || 'Unknown source'}</span>
-          <span className="chip chip-muted">{item.size_human || '?'}</span>
-          {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
-          <span className={cx('chip', item.metadata_accepted ? 'status-owned' : 'status-missing')}>{item.metadata_accepted ? 'Catalog matched' : 'Needs identity'}</span>
-          {(canonical.genres?.length ? canonical.genres : item.plex_genres || []).slice(0, 2).map((genre) => <span className="chip chip-muted" key={genre}>{genre}</span>)}
-          {getLocaleTag(item) && <span className="chip chip-muted">{getLocaleTag(item)}</span>}
+        <SelectionCheckbox
+          className="file-selection-checkbox"
+          checked={selected}
+          onChange={onSelect}
+          label={`Select ${item.filename}`}
+        />
+        <div className="file-row-copy">
+          <div className="file-row-title">
+            <strong>{item.filename}</strong>
+            <span>{identity.title}{identity.year ? ` (${identity.year})` : ''}</span>
+          </div>
+          <div className="file-row-path" title={item.path}>{item.path}</div>
+          <div className="file-row-meta">
+            <span className={cx('chip', lowQuality && 'chip-warning')}>{getQualityFactsLabel(item)}</span>
+            <span className="chip chip-muted">{item.rip_source || 'Unknown source'}</span>
+            <span className="chip chip-muted">{item.size_human || '?'}</span>
+            {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
+            <span className={cx('chip', item.metadata_accepted ? 'status-owned' : 'status-missing')}>{item.metadata_accepted ? 'Catalog matched' : 'Needs identity'}</span>
+            {(canonical.genres?.length ? canonical.genres : item.plex_genres || []).slice(0, 2).map((genre) => <span className="chip chip-muted" key={genre}>{genre}</span>)}
+            {getLocaleTag(item) && <span className="chip chip-muted">{getLocaleTag(item)}</span>}
+          </div>
         </div>
       </div>
-      <div className="file-row-actions">
+      <div className="file-row-actions" onClick={(event) => event.stopPropagation()}>
         <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(item.path)}>
           <Play size={15} /> Play
         </button>
@@ -1998,7 +2081,7 @@ function LibraryFileRow({ item, expanded, onToggle, onPlay, onFindTorrent, onRen
         </button>
       </div>
       {expanded && (
-        <div className="file-expanded-panel">
+        <div className="file-expanded-panel" onClick={(event) => event.stopPropagation()}>
           <div><span>Full path</span><strong>{item.path}</strong></div>
           <div><span>Catalog title</span><strong>{canonical.title || identity.title || 'Needs identity'}</strong></div>
           <div><span>Catalog year</span><strong>{canonical.year || identity.year || 'Unknown'}</strong></div>

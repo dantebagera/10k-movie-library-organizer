@@ -119,6 +119,27 @@ class PlayerRuntimeAssemblyTests(unittest.TestCase):
             self.assertIn(required, paths)
             self.assertTrue((license_root / required).is_file())
 
+    def test_production_metadata_supports_current_package_version(self):
+        project = Path(__file__).resolve().parents[1]
+        metadata = json.loads(
+            (project / "native" / "player" / "runtime-metadata.json")
+            .read_text(encoding="utf-8")
+        )
+        package = json.loads(
+            (project / "package.json").read_text(encoding="utf-8")
+        )
+
+        self.assertIn(package["version"], metadata["compatible_cp_versions"])
+
+    def test_assembler_uses_inherited_permissions_for_windows_runtime(self):
+        project = Path(__file__).resolve().parents[1]
+        source = (
+            project / "tools" / "assemble_player_runtime.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("tempfile.mkdtemp", source)
+        self.assertIn("temporary_parent.mkdir()", source)
+
 
 if __name__ == "__main__":
     unittest.main()

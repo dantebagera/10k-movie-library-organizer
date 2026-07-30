@@ -11,6 +11,7 @@ import ListEditorModal from '../../components/ListEditorModal.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import { DiscoverMovieCard } from '../../components/SharedMovieCards.jsx';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
@@ -245,6 +246,11 @@ function AIControlResult({
   const [reviewedDownloads, setReviewedDownloads] = useState([]);
   const [sourceReview, setSourceReview] = useState(null);
   const planKey = `${plan?.plan_id || ''}-${plan?.summary || ''}-${plan?.message || ''}-${aiControlReceipt?.summary || ''}`;
+  const targetPageSize = Number(plan?.page_size || 20);
+  const {
+    gridRef: aiControlGridRef,
+    pageSize
+  } = useCardGridMetrics({ target: targetPageSize, max: 200, bias: 'lower' });
 
   useEffect(() => {
     setCurrentPage(1);
@@ -284,7 +290,6 @@ function AIControlResult({
   const ready = plan.state === 'valid_plan';
   const rows = plan.items || [];
   const blocked = plan.blocked || [];
-  const pageSize = Number(plan.page_size || 20);
   const totalMatches = Number(plan.total_matches || rows.length);
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -412,6 +417,7 @@ function AIControlResult({
           onOpenFileDetails={onOpenFileDetails}
           onOpenDiscoverPerson={onOpenDiscoverPerson}
           onOpenDiscoverCollection={onOpenDiscoverCollection}
+          gridRef={aiControlGridRef}
         />
       ) : null}
       {blocked.length > 0 && <p className="settings-empty-note">{formatCount(blocked.length)} result{blocked.length === 1 ? '' : 's'} could not be included in the selectable plan.</p>}
@@ -472,7 +478,8 @@ function AIControlCardResults({
   onEditPoster,
   onOpenFileDetails,
   onOpenDiscoverPerson,
-  onOpenDiscoverCollection
+  onOpenDiscoverCollection,
+  gridRef
 }) {
   const [ownership, setOwnership] = useState(() => buildAiControlOwnershipMap(rows));
   const [userLists, setUserLists] = useState([]);
@@ -664,7 +671,7 @@ function AIControlCardResults({
         </button>
       </div>
 
-      <DiscoverResultGrid emptyText="No AI Control movies are available for card display.">
+      <DiscoverResultGrid gridRef={gridRef} emptyText="No AI Control movies are available for card display.">
         {movies.map((movie, index) => {
           const owned = ownedMovieFor(movie, ownership) || (movie.path ? movie : null);
           const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;

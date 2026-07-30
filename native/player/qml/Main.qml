@@ -25,7 +25,10 @@ ApplicationWindow {
     property bool statisticsOpen: false
     property var playbackStatistics: ({})
     property string toastText: ""
-    property bool seeking: timeline.pressed
+    property bool seeking: timeline.scrubbing || timeline.previewActive
+    property color nativeCaptionColor: PlayerTheme.archiveBlack
+    property color nativeCaptionTextColor: PlayerTheme.projectorGoldBright
+    property color nativeCaptionBorderColor: PlayerTheme.projectorGold
 
     component CpButton: Button {
         id: control
@@ -51,6 +54,56 @@ ApplicationWindow {
         }
     }
 
+    component CpIconButton: AbstractButton {
+        id: iconControl
+        required property url iconSource
+        required property string label
+        property bool selected: false
+        implicitWidth: 42
+        implicitHeight: 42
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        scale: down ? 0.92 : 1
+
+        Behavior on scale {
+            NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+        }
+
+        contentItem: Item {
+            Image {
+                anchors.centerIn: parent
+                width: 28
+                height: 28
+                source: iconControl.iconSource
+                fillMode: Image.PreserveAspectFit
+                sourceSize.width: 56
+                sourceSize.height: 56
+                opacity: iconControl.enabled ? 1 : 0.35
+                scale: iconControl.hovered || iconControl.activeFocus ? 1.06 : 1
+
+                Behavior on scale {
+                    NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+                }
+            }
+        }
+
+        background: Rectangle {
+            radius: width / 2
+            color: iconControl.down
+                   ? "#30f7d57a"
+                   : iconControl.hovered || iconControl.activeFocus
+                     ? "#20d4af37"
+                     : iconControl.selected ? "#16d4af37" : "transparent"
+            border.width: 0
+
+            Behavior on color { ColorAnimation { duration: 120 } }
+        }
+
+        ToolTip.visible: iconControl.hovered
+        ToolTip.delay: 450
+        ToolTip.text: iconControl.label
+    }
+
     function showControls() {
         controlsVisible = true
         hideControls.restart()
@@ -68,6 +121,15 @@ ApplicationWindow {
             return true
         }
         return false
+    }
+
+    function showSubtitleSearch() {
+        subtitleSearchOpen = true
+        audioPanelOpen = false
+        subtitlePanelOpen = false
+        chapterPanelOpen = false
+        playerBridge.requestSubtitleSearch()
+        showControls()
     }
 
     function toggleFullscreen() {
@@ -96,6 +158,17 @@ ApplicationWindow {
         root.setAlwaysOnTop(Boolean(state.always_on_top))
         if (state.maximized)
             root.visibility = Window.Maximized
+    }
+
+    function activatePlayerWindow() {
+        root.requestActivate()
+        mpv.forceActiveFocus()
+    }
+
+    Component.onCompleted: Qt.callLater(root.activatePlayerWindow)
+    onActiveChanged: {
+        if (active)
+            mpv.forceActiveFocus()
     }
 
     function formatTime(seconds) {
@@ -130,7 +203,10 @@ ApplicationWindow {
 
     Connections {
         target: playerBridge
-        function onPreferencesChanged() { root.restoreWindowState() }
+        function onPreferencesChanged() {
+            root.restoreWindowState()
+            Qt.callLater(root.activatePlayerWindow)
+        }
     }
 
     Timer {
@@ -208,14 +284,7 @@ ApplicationWindow {
     }
     Shortcut {
         sequence: playerBridge.shortcuts.subtitle_search || "D"
-        onActivated: {
-            subtitleSearchOpen = true
-            audioPanelOpen = false
-            subtitlePanelOpen = false
-            chapterPanelOpen = false
-            playerBridge.requestSubtitleSearch()
-            root.showControls()
-        }
+        onActivated: root.showSubtitleSearch()
     }
     Shortcut {
         sequence: playerBridge.shortcuts.chapters || "C"
@@ -306,11 +375,21 @@ ApplicationWindow {
     }
 
     Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: 2
+        z: 1000
+        visible: root.visibility !== Window.FullScreen
+        color: PlayerTheme.projectorGold
+    }
+
+    Rectangle {
         id: topBar
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: 116
+        height: nowPlayingSummary.height + 40
         opacity: root.controlsVisible ? 1 : 0
         visible: opacity > 0
         color: "transparent"
@@ -321,25 +400,59 @@ ApplicationWindow {
         }
         Behavior on opacity { NumberAnimation { duration: 160 } }
 
-        Column {
+        Row {
+            id: nowPlayingSummary
             anchors.left: parent.left
             anchors.top: parent.top
-            anchors.margins: 28
-            spacing: 4
+            anchors.leftMargin: 28
+            anchors.topMargin: 20
+            height: 156
+            spacing: 14
 
-            Text {
-                text: playerBridge.title || "Cinema Paradiso"
-                color: PlayerTheme.textStrong
-                font.pixelSize: 22
-                font.weight: Font.DemiBold
-                elide: Text.ElideRight
-                width: Math.min(720, root.width - 180)
+            Item {
+                id: nowPlayingPosterFrame
+                width: 104
+                height: nowPlayingSummary.height
+                visible: playerBridge.posterReference.length > 0
+                         && posterImage.status !== Image.Error
+                         && posterImage.status !== Image.Null
+
+                Image {
+                    id: posterImage
+                    anchors.fill: parent
+                    source: playerBridge.posterReference
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: false
+                    smooth: true
+                    mipmap: true
+                }
             }
-            Text {
-                text: [playerBridge.year, mpv.paused ? "Paused" : mpv.status]
-                      .filter(Boolean).join("  ·  ")
-                color: PlayerTheme.textMuted
-                font.pixelSize: 13
+
+            Column {
+                y: Math.max(0, (nowPlayingSummary.height - height) / 2)
+                spacing: 4
+
+                Text {
+                    text: playerBridge.title || "Cinema Paradiso"
+                    color: PlayerTheme.textStrong
+                    font.pixelSize: 22
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                    width: Math.min(
+                        720,
+                        root.width - 180
+                        - (nowPlayingPosterFrame.visible
+                           ? nowPlayingPosterFrame.width + nowPlayingSummary.spacing
+                           : 0)
+                    )
+                }
+                Text {
+                    text: [playerBridge.year, mpv.paused ? "Paused" : mpv.status]
+                          .filter(Boolean).join("  ·  ")
+                    color: PlayerTheme.textMuted
+                    font.pixelSize: 13
+                }
             }
         }
 
@@ -416,62 +529,74 @@ ApplicationWindow {
             Slider {
                 id: timeline
                 Layout.fillWidth: true
+                Layout.preferredHeight: 28
                 from: 0
                 to: Math.max(1, mpv.duration)
-                value: pressed ? value : mpv.position
+                value: 0
                 property real hoverPosition: 0
                 property string hoverThumbnail: ""
-                function updateHoverPreview() {
-                    const localX = Math.max(0, Math.min(width, timelineHover.point.position.x))
-                    hoverPosition = to * localX / Math.max(1, width)
+                property real previewX: 0
+                property bool scrubbing: timelinePointer.pressed
+                property bool previewActive: false
+                function positionForX(localX) {
+                    const trackX = Math.max(0, Math.min(
+                        availableWidth,
+                        localX - leftPadding
+                    ))
+                    previewX = leftPadding + trackX
+                    return to * trackX / Math.max(1, availableWidth)
+                }
+                function updateHoverPreview(localX) {
+                    hoverPosition = positionForX(localX)
                     hoverThumbnail = mpv.seekThumbnail(hoverPosition)
                 }
-                onMoved: mpv.seekAbsolute(value)
-                onPressedChanged: root.showControls()
-                HoverHandler { id: timelineHover }
+                function seekFromPointer(localX) {
+                    root.showControls()
+                    value = positionForX(localX)
+                    updateHoverPreview(localX)
+                    mpv.seekAbsolute(value)
+                }
+                MouseArea {
+                    id: timelinePointer
+                    anchors.fill: parent
+                    z: 20
+                    acceptedButtons: Qt.LeftButton
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onEntered: timeline.previewActive = true
+                    onPressed: mouse => {
+                        timeline.previewActive = true
+                        timeline.seekFromPointer(mouse.x)
+                    }
+                    onPositionChanged: mouse => {
+                        timeline.previewActive = true
+                        if (pressed)
+                            timeline.seekFromPointer(mouse.x)
+                        else
+                            timeline.updateHoverPreview(mouse.x)
+                    }
+                    onReleased: mouse => timeline.seekFromPointer(mouse.x)
+                    onExited: {
+                        timeline.previewActive = false
+                        timeline.hoverThumbnail = ""
+                    }
+                }
                 Timer {
-                    interval: 90
-                    running: timelineHover.hovered
+                    interval: 120
+                    running: timeline.previewActive
                     repeat: true
                     triggeredOnStart: true
-                    onTriggered: timeline.updateHoverPreview()
+                    onTriggered: timeline.updateHoverPreview(timelinePointer.mouseX)
                 }
                 Connections {
                     target: mpv
+                    function onPositionChanged() {
+                        if (!timeline.scrubbing)
+                            timeline.value = mpv.position
+                    }
                     function onSeekThumbnailsChanged() {
-                        if (timelineHover.hovered)
-                            timeline.updateHoverPreview()
-                    }
-                }
-                Rectangle {
-                    z: 8
-                    visible: timelineHover.hovered
-                    width: 220
-                    height: timeline.hoverThumbnail.length > 0 ? 154 : 42
-                    x: Math.max(0, Math.min(timeline.width - width,
-                        timelineHover.point.position.x - width / 2))
-                    y: -height - 8
-                    radius: PlayerTheme.radiusMedium
-                    color: PlayerTheme.panelBlack
-                    border.color: PlayerTheme.borderStrong
-                    Image {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 6
-                        height: 118
-                        visible: timeline.hoverThumbnail.length > 0
-                        source: timeline.hoverThumbnail
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                    }
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.bottom: parent.bottom
-                        anchors.bottomMargin: 7
-                        text: root.formatTime(timeline.hoverPosition)
-                        color: PlayerTheme.textSoft
-                        font.pixelSize: 12
+                        if (timeline.previewActive)
+                            timeline.updateHoverPreview(timelinePointer.mouseX)
                     }
                 }
                 background: Rectangle {
@@ -506,7 +631,7 @@ ApplicationWindow {
                     x: timeline.leftPadding + timeline.visualPosition
                        * (timeline.availableWidth - width)
                     y: timeline.topPadding + timeline.availableHeight / 2 - height / 2
-                    width: timeline.pressed || timeline.hovered ? 16 : 12
+                    width: timeline.scrubbing || timeline.previewActive ? 16 : 12
                     height: width
                     radius: width / 2
                     color: PlayerTheme.projectorGoldBright
@@ -515,38 +640,109 @@ ApplicationWindow {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 8
+                spacing: 10
 
-                ToolButton {
-                    text: mpv.paused ? "▶" : "Ⅱ"
-                    onClicked: mpv.togglePause()
+                CpIconButton {
+                    iconSource: mpv.paused
+                                ? "qrc:/icons/play.svg"
+                                : "qrc:/icons/pause.svg"
+                    label: mpv.paused ? "Play" : "Pause"
+                    onClicked: {
+                        mpv.togglePause()
+                        root.showControls()
+                    }
                 }
-                ToolButton { text: "−10"; onClicked: mpv.seekRelative(-10) }
-                ToolButton { text: "+10"; onClicked: mpv.seekRelative(10) }
-                ToolButton {
-                    text: mpv.muted ? "🔇" : "♪"
-                    onClicked: mpv.toggleMute()
+                CpIconButton {
+                    iconSource: "qrc:/icons/rewind-10.svg"
+                    label: "Back 10 seconds"
+                    onClicked: {
+                        mpv.seekRelative(-10)
+                        root.showControls()
+                    }
+                }
+                CpIconButton {
+                    iconSource: "qrc:/icons/forward-10.svg"
+                    label: "Forward 10 seconds"
+                    onClicked: {
+                        mpv.seekRelative(10)
+                        root.showControls()
+                    }
+                }
+                CpIconButton {
+                    iconSource: mpv.muted
+                                ? "qrc:/icons/volume-muted.svg"
+                                : "qrc:/icons/volume-high.svg"
+                    label: mpv.muted ? "Unmute" : "Mute"
+                    selected: mpv.muted
+                    onClicked: {
+                        mpv.toggleMute()
+                        root.showControls()
+                    }
                 }
                 Slider {
-                    Layout.preferredWidth: 112
+                    id: volumeSlider
+                    Layout.preferredWidth: 118
+                    Layout.preferredHeight: 32
                     from: 0
                     to: 100
                     value: mpv.volume
                     onMoved: mpv.setVolume(value)
+                    background: Rectangle {
+                        x: volumeSlider.leftPadding
+                        y: volumeSlider.topPadding
+                           + volumeSlider.availableHeight / 2 - height / 2
+                        width: volumeSlider.availableWidth
+                        height: 3
+                        radius: 2
+                        color: "#556d7178"
+                        Rectangle {
+                            width: parent.width * volumeSlider.visualPosition
+                            height: parent.height
+                            radius: parent.radius
+                            color: PlayerTheme.projectorGold
+                        }
+                    }
+                    handle: Rectangle {
+                        x: volumeSlider.leftPadding + volumeSlider.visualPosition
+                           * (volumeSlider.availableWidth - width)
+                        y: volumeSlider.topPadding
+                           + volumeSlider.availableHeight / 2 - height / 2
+                        width: volumeSlider.pressed || volumeSlider.hovered ? 14 : 11
+                        height: width
+                        radius: width / 2
+                        color: PlayerTheme.projectorGoldBright
+                        border.width: 1
+                        border.color: "#668c6418"
+
+                        Behavior on width { NumberAnimation { duration: 100 } }
+                    }
                 }
                 Text {
                     text: root.formatTime(mpv.position) + " / " + root.formatTime(mpv.duration)
-                    color: PlayerTheme.textSoft
+                    color: PlayerTheme.projectorGoldBright
                     font.pixelSize: 13
                 }
                 Item { Layout.fillWidth: true }
-                Text {
-                    text: mpv.speed.toFixed(2) + "×"
-                    color: PlayerTheme.textMuted
-                    font.pixelSize: 12
+                RowLayout {
+                    spacing: 5
+                    Image {
+                        Layout.preferredWidth: 23
+                        Layout.preferredHeight: 23
+                        source: "qrc:/icons/speed.svg"
+                        fillMode: Image.PreserveAspectFit
+                        sourceSize.width: 46
+                        sourceSize.height: 46
+                    }
+                    Text {
+                        text: mpv.speed.toFixed(2) + "×"
+                        color: PlayerTheme.projectorGoldBright
+                        font.pixelSize: 12
+                    }
                 }
-                ToolButton {
-                    text: "AUDIO"
+                CpIconButton {
+                    iconSource: "qrc:/icons/audio-tracks.svg"
+                    label: "Audio tracks"
+                    selected: audioPanelOpen
                     onClicked: {
                         audioPanelOpen = !audioPanelOpen
                         subtitlePanelOpen = false
@@ -555,8 +751,10 @@ ApplicationWindow {
                         root.showControls()
                     }
                 }
-                ToolButton {
-                    text: "SUBS"
+                CpIconButton {
+                    iconSource: "qrc:/icons/subtitles.svg"
+                    label: "Subtitles"
+                    selected: subtitlePanelOpen
                     onClicked: {
                         subtitlePanelOpen = !subtitlePanelOpen
                         audioPanelOpen = false
@@ -565,10 +763,54 @@ ApplicationWindow {
                         root.showControls()
                     }
                 }
-                ToolButton {
-                    text: root.visibility === Window.FullScreen ? "WINDOW" : "FULL"
+                CpIconButton {
+                    iconSource: root.visibility === Window.FullScreen
+                                ? "qrc:/icons/exit-fullscreen.svg"
+                                : "qrc:/icons/enter-fullscreen.svg"
+                    label: root.visibility === Window.FullScreen
+                           ? "Exit fullscreen"
+                           : "Enter fullscreen"
                     onClicked: root.toggleFullscreen()
                 }
+            }
+        }
+
+        Rectangle {
+            id: timelinePreview
+            z: 100
+            visible: bottomBar.visible && timeline.previewActive
+            width: 220
+            height: timeline.hoverThumbnail.length > 0 ? 154 : 42
+            x: Math.max(12, Math.min(
+                bottomBar.width - width - 12,
+                timeline.mapToItem(
+                    bottomBar,
+                    timeline.previewX,
+                    0
+                ).x - width / 2
+            ))
+            y: timeline.mapToItem(bottomBar, 0, 0).y - height - 8
+            radius: PlayerTheme.radiusMedium
+            color: PlayerTheme.panelBlack
+            border.color: PlayerTheme.borderStrong
+            Image {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 6
+                height: 118
+                visible: timeline.hoverThumbnail.length > 0
+                source: timeline.hoverThumbnail
+                fillMode: Image.PreserveAspectFit
+                asynchronous: true
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 7
+                text: root.formatTime(timeline.hoverPosition)
+                color: PlayerTheme.textSoft
+                font.pixelSize: 12
             }
         }
     }
@@ -641,6 +883,39 @@ ApplicationWindow {
                     Column {
                         width: parent.width
                         spacing: 4
+                        CpButton {
+                            width: parent.width
+                            text: "Search online subtitles"
+                            highlighted: true
+                            onClicked: root.showSubtitleSearch()
+                        }
+                        CpButton {
+                            width: parent.width
+                            visible: playerBridge.selectedSubtitleCanSave
+                                     || playerBridge.subtitleSaveStatus === "saving"
+                                     || playerBridge.subtitleSaveStatus === "saved"
+                            enabled: playerBridge.selectedSubtitleCanSave
+                                     && playerBridge.subtitleSaveStatus !== "saving"
+                            text: playerBridge.subtitleSaveStatus === "saving"
+                                  ? "Saving subtitle..."
+                                  : playerBridge.subtitleSaveStatus === "saved"
+                                    ? "Saved beside movie"
+                                    : "Save selected subtitle beside movie"
+                            onClicked: playerBridge.requestSaveSelectedSubtitle()
+                        }
+                        Text {
+                            width: parent.width
+                            visible: playerBridge.subtitleSaveError.length > 0
+                            text: playerBridge.subtitleSaveError
+                            color: PlayerTheme.dangerRed
+                            wrapMode: Text.WordWrap
+                            padding: 8
+                        }
+                        Rectangle {
+                            width: parent.width
+                            height: 1
+                            color: PlayerTheme.border
+                        }
                         CpButton {
                             width: parent.width
                             text: "Off"
@@ -779,7 +1054,7 @@ ApplicationWindow {
                       : playerBridge.subtitleSearchStatus === "downloading"
                         ? "Downloading and validating the selected subtitle…"
                         : playerBridge.subtitleSearchStatus === "loaded"
-                          ? "Subtitle loaded. You can close this panel."
+                          ? "Subtitle loaded. Verify it, then use the subtitle icon to save it beside the movie."
                           : playerBridge.subtitleResults.length === 0
                             ? "No matching subtitles were returned by the configured providers."
                             : playerBridge.subtitleResults.length + " ranked results"

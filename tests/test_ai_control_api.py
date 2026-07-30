@@ -1,9 +1,12 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import app
 
@@ -357,6 +360,77 @@ class AiControlApiTest(unittest.TestCase):
 
         self.assertEqual(captured_pages, [1, 2])
         self.assertEqual([movie["tmdb_id"] for movie in result], ["1", "2", "3"])
+
+    def test_tmdb_search_fetches_remaining_pages_concurrently_and_preserves_page_order(self):
+        previous_key = app._tmdb_key
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+        captured_pages = []
+
+        def fake_fetch(page_url):
+            nonlocal active, max_active
+            page = int(page_url.split("page=", 1)[1].split("&", 1)[0])
+            with lock:
+                captured_pages.append(page)
+                active += 1
+                max_active = max(max_active, active)
+            if page > 1:
+                time.sleep(0.02)
+            with lock:
+                active -= 1
+            return {
+                "page": page,
+                "total_pages": 4,
+                "results": [{"id": page, "title": f"Movie {page}", "release_date": f"200{page}-01-01"}],
+            }
+
+        app._tmdb_key = "test-key"
+        try:
+            with patch("app._tmdb_fetch_provider_page", side_effect=fake_fetch):
+                result = app._ai_control_tmdb_search("complete", app.ai_control.default_config())
+        finally:
+            app._tmdb_key = previous_key
+
+        self.assertEqual(sorted(captured_pages), [1, 2, 3, 4])
+        self.assertGreater(max_active, 1)
+        self.assertEqual([movie["tmdb_id"] for movie in result], ["1", "2", "3", "4"])
+
+    def test_batch_owned_movie_lookup_reuses_one_snapshot_and_catalog_query(self):
+        snapshot = Mock(return_value={"files": {}})
+        ownership_candidates = Mock(return_value=[{"path": "E:\\Movies\\Owned.mkv"}])
+        store = SimpleNamespace(
+            snapshot=snapshot,
+            catalog=SimpleNamespace(store=SimpleNamespace(ownership_candidates=ownership_candidates)),
+        )
+        movies = [
+            {"tmdb_id": "1", "title": "Owned", "year": "2001"},
+            {"tmdb_id": "2", "title": "Missing", "year": "2002"},
+        ]
+
+        def fake_owned_movie(movie, **kwargs):
+            if movie["tmdb_id"] != "1":
+                return None
+            return {
+                "item": {
+                    "path": "E:\\Movies\\Owned.mkv",
+                    "filename": "Owned.mkv",
+                    "resolution": "1080p",
+                    "size_human": "2.0 GB",
+                }
+            }
+
+        with patch("app._iter_movie_roots", return_value=iter(["E:\\Movies"])), \
+                patch("app._metadata_store", return_value=store), \
+                patch("app._catalog_owned_entries", return_value=[{"item": {}}]), \
+                patch("app._catalog_owned_movie", side_effect=fake_owned_movie) as owned_movie:
+            result = app._find_owned_movies(movies)
+
+        snapshot.assert_called_once_with()
+        ownership_candidates.assert_called_once()
+        self.assertEqual(owned_movie.call_count, 2)
+        self.assertEqual(result[0]["path"], "E:\\Movies\\Owned.mkv")
+        self.assertIsNone(result[1])
 
     def test_ai_control_source_review_prepares_every_requested_movie_without_total_cap(self):
         movies = [

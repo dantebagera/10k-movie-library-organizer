@@ -52,6 +52,71 @@ class PlayerCatalogTests(unittest.TestCase):
             "https://image.tmdb.org/poster.jpg",
         )
 
+    def test_resolves_cached_api_poster_to_a_native_file_uri(self):
+        with tempfile.TemporaryDirectory() as root:
+            library = Path(root) / "Movies"
+            library.mkdir()
+            media = library / "Movie.mkv"
+            media.write_bytes(b"fixture")
+            poster = Path(root) / "poster.jpg"
+            poster.write_bytes(b"poster")
+            path_key = os.path.normcase(os.path.normpath(str(media)))
+            local_reference = "/api/assets/" + ("a" * 64)
+            repository = FakeRepository({
+                path_key: {
+                    "path_key": path_key,
+                    "path": str(media),
+                    "relational_canonical": {
+                        "movie_key": "tmdb:42",
+                        "poster_url": local_reference,
+                        "remote_poster_url": "https://image.tmdb.org/fallback.jpg",
+                    },
+                },
+            })
+            resolved_references = []
+
+            def resolve_local(reference):
+                resolved_references.append(reference)
+                return poster
+
+            resolved = resolve_library_media(
+                repository,
+                path_key,
+                [library],
+                local_poster_resolver=resolve_local,
+            )
+
+        self.assertEqual(resolved_references, [local_reference])
+        self.assertEqual(resolved["poster_reference"], poster.resolve().as_uri())
+
+    def test_falls_back_to_trusted_remote_poster_when_cached_asset_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            media = Path(root) / "Movie.mkv"
+            media.write_bytes(b"fixture")
+            path_key = os.path.normcase(os.path.normpath(str(media)))
+            repository = FakeRepository({
+                path_key: {
+                    "path_key": path_key,
+                    "path": str(media),
+                    "relational_canonical": {
+                        "poster_url": "/api/assets/" + ("b" * 64),
+                        "remote_poster_url": "https://image.tmdb.org/fallback.jpg?secret=remove",
+                    },
+                },
+            })
+
+            resolved = resolve_library_media(
+                repository,
+                path_key,
+                [root],
+                local_poster_resolver=lambda reference: None,
+            )
+
+        self.assertEqual(
+            resolved["poster_reference"],
+            "https://image.tmdb.org/fallback.jpg",
+        )
+
     def test_rejects_arbitrary_paths_remote_urls_and_stale_files(self):
         with tempfile.TemporaryDirectory() as root:
             library = Path(root) / "Movies"

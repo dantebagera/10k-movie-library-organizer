@@ -22,6 +22,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { iptvApi, iptvImage } from '../../api/iptv.js';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import { formatCount } from '../../utils/appUtils.js';
 import IPTVPlayer from './IPTVPlayer.jsx';
 import IPTVListsWorkspace, { IPTVListPickerModal } from './IPTVListsWorkspace.jsx';
@@ -96,6 +97,20 @@ export default function IPTVWorkspace({ notify }) {
 
   const browseKind = activeTab === 'favorites' ? favoriteKind : activeTab;
   const isBrowseTab = ['live', 'movie', 'series', 'favorites'].includes(activeTab);
+  const adaptiveCardGrid = ['movie', 'series'].includes(browseKind)
+    && !(activeTab === 'favorites' && favoriteKind === 'all');
+  const {
+    gridRef: iptvCardGridRef,
+    pageSize: adaptiveCardPageSize
+  } = useCardGridMetrics({
+    target: activeTab === 'favorites' ? 60 : 30,
+    max: 100,
+    bias: 'lower'
+  });
+  const browsePageSize = browseKind === 'live'
+    ? 80
+    : (adaptiveCardGrid ? adaptiveCardPageSize : (activeTab === 'favorites' ? 60 : 30));
+  const activeCardGridRef = adaptiveCardGrid ? iptvCardGridRef : undefined;
   categoryIdRef.current = categoryId;
   activeProviderRef.current = activeProviderId;
   const activeProvider = providers.find((provider) => provider.provider_id === activeProviderId) || null;
@@ -193,7 +208,7 @@ export default function IPTVWorkspace({ notify }) {
             kind: favoriteKind === 'all' ? '' : favoriteKind,
             q: query.trim(),
             page,
-            page_size: 60
+            page_size: browsePageSize
           });
           if (!cancelled) setCatalog(result);
           return;
@@ -203,7 +218,7 @@ export default function IPTVWorkspace({ notify }) {
           category_id: categoryId,
           q: query.trim(),
           page,
-          page_size: browseKind === 'live' ? 80 : 30,
+          page_size: browsePageSize,
           favorites: activeTab === 'favorites'
         });
         if (!cancelled) setCatalog(result);
@@ -214,7 +229,11 @@ export default function IPTVWorkspace({ notify }) {
       }
     }, query ? 220 : 0);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeProviderId, activeTab, browseKind, categoryId, query, page, status?.configured, status?.generation]);
+  }, [activeProviderId, activeTab, browseKind, browsePageSize, categoryId, query, page, status?.configured, status?.generation]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [browsePageSize]);
 
   useEffect(() => {
     if (!status?.configured || activeTab !== 'lists') return undefined;
@@ -623,6 +642,7 @@ export default function IPTVWorkspace({ notify }) {
               onAddToList={openListPicker}
               onOpenChannel={(channel) => { selectTab('live'); selectChannel(channel); }}
               loading={loading}
+              gridRef={activeCardGridRef}
             />
           ) : browseKind === 'live' ? (
             <LiveView
@@ -641,11 +661,11 @@ export default function IPTVWorkspace({ notify }) {
               onClosePlayback={closePlayback}
             />
           ) : browseKind === 'movie' ? (
-            <MovieView providerId={activeProviderId} catalog={catalog} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
+            <MovieView providerId={activeProviderId} catalog={catalog} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} gridRef={activeCardGridRef} />
           ) : (
-            <SeriesView providerId={activeProviderId} catalog={catalog} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={setSelectedSeason} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} />
+            <SeriesView providerId={activeProviderId} catalog={catalog} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={setSelectedSeason} onToggle={openDetail} onPlay={playItem} onFavorite={toggleFavorite} onAddToList={openListPicker} gridRef={activeCardGridRef} />
           )}
-          <Pagination page={catalog.page || page} pageSize={catalog.page_size || 30} total={catalog.total || 0} onPage={setPage} />
+          <Pagination page={catalog.page || page} pageSize={catalog.page_size || browsePageSize} total={catalog.total || 0} onPage={setPage} />
         </>
       ) : null}
 
@@ -785,9 +805,9 @@ function LiveView({ providerId, categories, categoryId, onCategory, catalog, sel
   );
 }
 
-function MovieView({ providerId, catalog, selectedId, detail, detailLoading, onToggle, onPlay, onFavorite, onAddToList }) {
+function MovieView({ providerId, catalog, selectedId, detail, detailLoading, onToggle, onPlay, onFavorite, onAddToList, gridRef }) {
   return (
-    <div className="iptv-movie-grid">
+    <div ref={gridRef} className="iptv-movie-grid">
       {catalog.items.map((movie) => {
         const expanded = selectedId === movie.item_id;
         const current = expanded && detail ? detail : movie;
@@ -824,11 +844,11 @@ function MovieView({ providerId, catalog, selectedId, detail, detailLoading, onT
   );
 }
 
-function SeriesView({ providerId, catalog, detail, detailLoading, selectedId, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList }) {
+function SeriesView({ providerId, catalog, detail, detailLoading, selectedId, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList, gridRef }) {
   const seasonNumbers = useMemo(() => [...new Set((detail?.episodes || []).map((episode) => episode.season))].sort((a, b) => a - b), [detail]);
   return (
     <>
-      <div className="iptv-poster-grid">
+      <div ref={gridRef} className="iptv-poster-grid">
         {catalog.items.map((series) => <PosterTile providerId={providerId} key={series.item_id} item={series} active={selectedId === series.item_id} onClick={() => onToggle(series)} onFavorite={onFavorite} onAddToList={onAddToList} />)}
       </div>
       {selectedId ? (
@@ -889,7 +909,7 @@ function ListActionButton({ item, onAddToList, className = '' }) {
   );
 }
 
-function FavoritesView({ providerId, catalog, selectedId, detail, detailLoading, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList, onOpenChannel, loading }) {
+function FavoritesView({ providerId, catalog, selectedId, detail, detailLoading, selectedSeason, onSeason, onToggle, onPlay, onFavorite, onAddToList, onOpenChannel, loading, gridRef }) {
   const channels = catalog.items.filter((item) => item.kind === 'live');
   const movies = catalog.items.filter((item) => item.kind === 'movie');
   const series = catalog.items.filter((item) => item.kind === 'series');
@@ -918,13 +938,13 @@ function FavoritesView({ providerId, catalog, selectedId, detail, detailLoading,
       {movies.length ? (
         <section className="iptv-favorite-section">
           <header><Film size={18} /><h2>Movies</h2><span>{formatCount(movies.length)}</span></header>
-          <MovieView providerId={providerId} catalog={{ ...catalog, items: movies }} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
+          <MovieView providerId={providerId} catalog={{ ...catalog, items: movies }} selectedId={selectedId} detail={detail} detailLoading={detailLoading} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} gridRef={gridRef} />
         </section>
       ) : null}
       {series.length ? (
         <section className="iptv-favorite-section">
           <header><Tv size={18} /><h2>Series</h2><span>{formatCount(series.length)}</span></header>
-          <SeriesView providerId={providerId} catalog={{ ...catalog, items: series }} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={onSeason} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} />
+          <SeriesView providerId={providerId} catalog={{ ...catalog, items: series }} detail={detail} detailLoading={detailLoading} selectedId={selectedId} selectedSeason={selectedSeason} onSeason={onSeason} onToggle={onToggle} onPlay={onPlay} onFavorite={onFavorite} onAddToList={onAddToList} gridRef={gridRef} />
         </section>
       ) : null}
     </div>

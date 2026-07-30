@@ -53,6 +53,7 @@ import {
   ownedMovieFor
 } from './discoverUtils.js';
 import { resolutionRank } from './utils/libraryUtils.js';
+import { buildUpcomingHomeMovies, uniqueHomeMovies } from './utils/homeMovies.js';
 
 const HelpWorkspace = lazy(() => import('./features/help/HelpWorkspace.jsx'));
 const LibraryWorkspace = lazy(() => import('./features/library/LibraryWorkspace.jsx'));
@@ -133,6 +134,42 @@ const navItems = [
 
 const APP_VERSION = `v${import.meta.env.VITE_APP_VERSION || '0.0.0'}`;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'cp.sidebarCollapsed';
+const HOME_TRAILERS_PLAYLIST_URL = 'https://www.youtube.com/playlist?list=PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-';
+let youtubeIframeApiPromise = null;
+
+function loadYouTubeIframeApi() {
+  if (typeof window === 'undefined') return Promise.resolve(null);
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (youtubeIframeApiPromise) return youtubeIframeApiPromise;
+
+  youtubeIframeApiPromise = new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = 0;
+    const previousReady = window.onYouTubeIframeAPIReady;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      resolve(window.YT?.Player ? window.YT : null);
+    };
+
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof previousReady === 'function') previousReady();
+      finish();
+    };
+
+    if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      script.async = true;
+      script.onerror = finish;
+      document.head.appendChild(script);
+    }
+    timeoutId = window.setTimeout(finish, 8000);
+  });
+
+  return youtubeIframeApiPromise;
+}
 
 function storedSidebarCollapsed() {
   if (typeof window === 'undefined') return false;
@@ -245,12 +282,26 @@ function ArchiveApp() {
   const [mountedSections, setMountedSections] = useState(() => new Set([activeSection]));
   const [stats, setStats] = useState(null);
   const [movies, setMovies] = useState([]);
+  const [upcomingMovies, setUpcomingMovies] = useState([]);
+  const [upcomingError, setUpcomingError] = useState('');
+  const [homeTrailers, setHomeTrailers] = useState({
+    title: 'HOT New Trailers & Exclusives',
+    source_url: HOME_TRAILERS_PLAYLIST_URL,
+    items: [],
+    stale: false
+  });
+  const [homeTrailersError, setHomeTrailersError] = useState('');
   const [ownership, setOwnership] = useState({});
   const [selectedMovie, setSelectedMovie] = useState(null);
   const [details, setDetails] = useState({});
   const [followed, setFollowed] = useState([]);
   const [followedChecking, setFollowedChecking] = useState(false);
-  const [loading, setLoading] = useState({ stats: true, movies: true });
+  const [loading, setLoading] = useState({
+    stats: true,
+    movies: true,
+    upcoming: true,
+    trailers: true
+  });
   const [toast, setToast] = useState(null);
   const [torrentModal, setTorrentModal] = useState(null);
   const [trailerModal, setTrailerModal] = useState(null);
@@ -267,6 +318,7 @@ function ArchiveApp() {
   const [discoverActiveTab, setDiscoverActiveTab] = useState('explore');
   const [discoverSearchRequest, setDiscoverSearchRequest] = useState(0);
   const [discoverRelationshipRequest, setDiscoverRelationshipRequest] = useState(null);
+  const [discoverListRequest, setDiscoverListRequest] = useState(null);
   const [cleanupInitialTab, setCleanupInitialTab] = useState('storage');
   const [libraryFilterRequest, setLibraryFilterRequest] = useState(null);
   const [libraryFileRequest, setLibraryFileRequest] = useState(null);
@@ -277,6 +329,7 @@ function ArchiveApp() {
   const sectionScrollPositionsRef = useRef({});
   const sourceSearchTokenRef = useRef(0);
   const libraryReconcileSignatureRef = useRef('');
+  const homeTrailersRequestRef = useRef(0);
 
   useEffect(() => {
     setMountedSections((sections) => (
@@ -436,37 +489,83 @@ function ArchiveApp() {
 
   useEffect(() => {
     let cancelled = false;
-    async function loadMovies() {
-      setLoading((state) => ({ ...state, movies: true }));
+    async function loadHomeMovies() {
+      setLoading((state) => ({ ...state, movies: true, upcoming: true }));
+      setUpcomingError('');
+      const [trendingResult, upcomingResult] = await Promise.allSettled([
+        fetchJson('/api/tmdb/discover?list=trending_week&page=1&page_size=20'),
+        fetchJson('/api/tmdb/discover?list=upcoming&page=1&page_size=100')
+      ]);
+      if (cancelled) return;
+
+      const trendingMovies = trendingResult.status === 'fulfilled' && trendingResult.value.results?.length
+        ? trendingResult.value.results.slice(0, 8)
+        : fallbackMovies;
+      if (trendingResult.status === 'rejected') {
+        notify(`Discover feed unavailable: ${trendingResult.reason.message}`, 'error');
+      }
+
+      const upcoming = upcomingResult.status === 'fulfilled'
+        ? buildUpcomingHomeMovies(upcomingResult.value.results || [], trendingMovies)
+        : [];
+      if (upcomingResult.status === 'rejected') {
+        setUpcomingError(upcomingResult.reason.message);
+      }
+
+      setMovies(trendingMovies);
+      setUpcomingMovies(upcoming);
+      setSelectedMovie((current) => current || trendingMovies[0] || upcoming[0] || null);
+
       try {
-        const data = await fetchJson('/api/tmdb/discover?list=trending_week&page=1');
-        const results = (data.results && data.results.length ? data.results : fallbackMovies).slice(0, 8);
-        if (cancelled) return;
-        setMovies(results);
-        setSelectedMovie(results[0] || null);
-        try {
-          const ownershipResults = await fetchOwnershipChecks(results);
-          if (!cancelled) {
-            setOwnership(buildOwnershipMap(ownershipResults));
-          }
-        } catch {
-          if (!cancelled) setOwnership({});
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setMovies(fallbackMovies);
-          setSelectedMovie(fallbackMovies[0]);
-          notify(`Discover feed unavailable: ${error.message}`, 'error');
-        }
+        const ownershipResults = await fetchOwnershipChecks(
+          uniqueHomeMovies(trendingMovies, upcoming)
+        );
+        if (!cancelled) setOwnership(buildOwnershipMap(ownershipResults));
+      } catch {
+        if (!cancelled) setOwnership({});
       } finally {
-        if (!cancelled) setLoading((state) => ({ ...state, movies: false }));
+        if (!cancelled) {
+          setLoading((state) => ({ ...state, movies: false, upcoming: false }));
+        }
       }
     }
-    loadMovies();
+    loadHomeMovies();
     return () => {
       cancelled = true;
     };
   }, [notify]);
+
+  const loadHomeTrailers = useCallback(async () => {
+    const requestId = homeTrailersRequestRef.current + 1;
+    homeTrailersRequestRef.current = requestId;
+    setLoading((state) => ({ ...state, trailers: true }));
+    setHomeTrailersError('');
+    try {
+      const data = await fetchJson('/api/home/trailers');
+      if (homeTrailersRequestRef.current !== requestId) return;
+      setHomeTrailers({
+        title: data.title || 'HOT New Trailers & Exclusives',
+        source_url: data.source_url || HOME_TRAILERS_PLAYLIST_URL,
+        items: data.items || [],
+        stale: Boolean(data.stale)
+      });
+    } catch (error) {
+      if (homeTrailersRequestRef.current === requestId) {
+        setHomeTrailersError(error.message);
+      }
+    } finally {
+      if (homeTrailersRequestRef.current === requestId) {
+        setLoading((state) => ({ ...state, trailers: false }));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHomeTrailers();
+    return () => {
+      homeTrailersRequestRef.current += 1;
+    };
+  }, [loadHomeTrailers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -646,6 +745,15 @@ function ArchiveApp() {
     selectSection('discover');
   }
 
+  function openDiscoverList(list) {
+    setDiscoverActiveTab('explore');
+    setDiscoverListRequest((current) => ({
+      requestId: Number(current?.requestId || 0) + 1,
+      list
+    }));
+    selectSection('discover');
+  }
+
   async function toggleFollow(movie) {
     const key = movieKey(movie);
     const existing = followed.find((item) => movieKey(item) === key);
@@ -724,15 +832,45 @@ function ArchiveApp() {
     }
   }
 
-  function openTrailerModal(movie, trailerUrl = '') {
-    const title = movie?.title || 'Trailer';
-    const year = movie?.year || '';
+  function openYouTubeVideo({
+    title,
+    year = '',
+    sourceUrl = '',
+    searchUrl = '',
+    kicker = 'Trailer',
+    activeVideo = null,
+    playlistItems = []
+  }) {
     setTrailerModal({
       title,
       year,
+      kicker,
+      sourceUrl,
+      embedUrl: toYouTubeEmbedUrl(sourceUrl),
+      searchUrl: searchUrl || sourceUrl || youtubeTrailerSearchUrl(title, year),
+      activeVideo,
+      playlistItems
+    });
+  }
+
+  function openTrailerModal(movie, trailerUrl = '') {
+    const title = movie?.title || 'Trailer';
+    const year = movie?.year || '';
+    openYouTubeVideo({
+      title,
+      year,
       sourceUrl: trailerUrl,
-      embedUrl: toYouTubeEmbedUrl(trailerUrl),
       searchUrl: youtubeTrailerSearchUrl(title, year)
+    });
+  }
+
+  function openHomeTrailerVideo(video) {
+    openYouTubeVideo({
+      title: video?.title || 'YouTube video',
+      sourceUrl: video?.url || '',
+      kicker: 'Hot New Trailers',
+      activeVideo: video,
+      playlistItems: homeTrailers?.items || []
     });
   }
 
@@ -842,34 +980,41 @@ function ArchiveApp() {
           <div className="workspace-panel" hidden={activeSection !== 'home'}>
             <Suspense fallback={<div className="loading-state"><Loader2 className="spin" size={20} /></div>}>
               <HomeWorkspace
-              stats={stats}
-              loading={loading}
-              movies={movies}
-              ownership={ownership}
-              followed={followed}
-              followedChecking={followedChecking}
-              selectedMovie={selectedMovieWithDetails}
-              selectedOwnership={selectedOwnership}
-              selectedDetails={selectedDetails}
-              onSelectSection={selectSection}
-              onOpenCleanup={openCleanupTab}
-              onSelectMovie={setSelectedMovie}
-              onPlay={playLocal}
-              onStream={streamMovie}
-              streamingAvailable={streamingAvailable}
-              streamingLabel={streamingLabel}
-              onFindTorrent={findTorrent}
-              onTrailer={openTrailerModal}
-              onFollow={toggleFollow}
-              userLists={homeLists}
-              onToggleSystemList={toggleHomeSystemList}
-              onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
-               onOpenFileDetails={openOwnedFileDetails}
-               continueWatching={continueWatching}
-               onResumeWatching={(item) => playLocal(item.path_key)}
-               onRestartWatching={(item) => playLocal(item.path_key, { restart: true })}
-               onRemoveWatching={removeContinueWatching}
-               />
+                stats={stats}
+                loading={loading}
+                movies={movies}
+                upcomingMovies={upcomingMovies}
+                upcomingError={upcomingError}
+                homeTrailers={homeTrailers}
+                homeTrailersError={homeTrailersError}
+                ownership={ownership}
+                followed={followed}
+                followedChecking={followedChecking}
+                selectedMovie={selectedMovieWithDetails}
+                selectedOwnership={selectedOwnership}
+                selectedDetails={selectedDetails}
+                onSelectSection={selectSection}
+                onOpenDiscoverList={openDiscoverList}
+                onOpenCleanup={openCleanupTab}
+                onSelectMovie={setSelectedMovie}
+                onOpenHomeTrailer={openHomeTrailerVideo}
+                onRetryHomeTrailers={loadHomeTrailers}
+                onPlay={playLocal}
+                onStream={streamMovie}
+                streamingAvailable={streamingAvailable}
+                streamingLabel={streamingLabel}
+                onFindTorrent={findTorrent}
+                onTrailer={openTrailerModal}
+                onFollow={toggleFollow}
+                userLists={homeLists}
+                onToggleSystemList={toggleHomeSystemList}
+                onEditPoster={(owned, movie) => setPosterEditor({ path: owned.path, title: movie.title })}
+                onOpenFileDetails={openOwnedFileDetails}
+                continueWatching={continueWatching}
+                onResumeWatching={(item) => playLocal(item.path_key)}
+                onRestartWatching={(item) => playLocal(item.path_key, { restart: true })}
+                onRemoveWatching={removeContinueWatching}
+              />
             </Suspense>
           </div>
         )}
@@ -935,6 +1080,7 @@ function ArchiveApp() {
                 setBrowseQuery={setBrowseQuery}
                 searchRequest={discoverSearchRequest}
                 relationshipRequest={discoverRelationshipRequest}
+                listRequest={discoverListRequest}
                 activeTab={discoverActiveTab}
                 setActiveTab={setDiscoverActiveTab}
                 onOpenFileDetails={openOwnedFileDetails}
@@ -1107,43 +1253,162 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
 
 
 function TrailerModal({ state, onClose }) {
-  const { title, year, embedUrl, searchUrl } = state;
-  const titleLabel = [title, year].filter(Boolean).join(' ');
+  const {
+    title,
+    year,
+    embedUrl,
+    searchUrl,
+    kicker = 'Trailer',
+    activeVideo: initialVideo,
+    playlistItems = []
+  } = state;
+  const [activeVideo, setActiveVideo] = useState(initialVideo);
+  const [showEndRecommendations, setShowEndRecommendations] = useState(false);
+  const iframeRef = useRef(null);
+  const playerRef = useRef(null);
+  const activeTitle = activeVideo?.title || title;
+  const activeEmbedUrl = activeVideo?.url ? toYouTubeEmbedUrl(activeVideo.url) : embedUrl;
+  const titleLabel = [activeTitle, year].filter(Boolean).join(' ');
+  const isMovieTrailer = kicker === 'Trailer';
+  const recommendations = useMemo(() => {
+    if (!playlistItems.length) return [];
+    const currentId = String(activeVideo?.video_id || '');
+    const currentIndex = playlistItems.findIndex((item) => String(item?.video_id || '') === currentId);
+    const rotated = currentIndex >= 0
+      ? [...playlistItems.slice(currentIndex + 1), ...playlistItems.slice(0, currentIndex)]
+      : playlistItems;
+    return rotated
+      .filter((item) => item?.video_id && String(item.video_id) !== currentId)
+      .slice(0, 4);
+  }, [activeVideo?.video_id, playlistItems]);
+
+  useEffect(() => {
+    setActiveVideo(initialVideo);
+  }, [initialVideo]);
+
+  useEffect(() => {
+    setShowEndRecommendations(false);
+    if (!activeEmbedUrl || !recommendations.length || !iframeRef.current) return undefined;
+
+    let disposed = false;
+    let pollId = 0;
+    let player = null;
+
+    loadYouTubeIframeApi().then((YouTube) => {
+      if (disposed || !YouTube?.Player || !iframeRef.current) return;
+      player = new YouTube.Player(iframeRef.current, {
+        events: {
+          onReady: ({ target }) => {
+            pollId = window.setInterval(() => {
+              const duration = Number(target.getDuration?.() || 0);
+              const elapsed = Number(target.getCurrentTime?.() || 0);
+              const threshold = Math.min(20, Math.max(6, duration * 0.5));
+              if (duration > 0 && duration - elapsed <= threshold) {
+                setShowEndRecommendations(true);
+              }
+            }, 500);
+          },
+          onStateChange: ({ data }) => {
+            if (data === 0) setShowEndRecommendations(true);
+          }
+        }
+      });
+      playerRef.current = player;
+    });
+
+    return () => {
+      disposed = true;
+      window.clearInterval(pollId);
+      if (playerRef.current === player) playerRef.current = null;
+      player?.destroy?.();
+    };
+  }, [activeEmbedUrl, recommendations.length]);
+
+  const selectRecommendation = (video) => {
+    setShowEndRecommendations(false);
+    setActiveVideo(video);
+  };
 
   return (
     <div className="modal-backdrop trailer-backdrop" role="presentation" onClick={onClose}>
-      <section className="trailer-dialog" role="dialog" aria-modal="true" aria-label={`Trailer for ${titleLabel}`} onClick={(event) => event.stopPropagation()}>
+      <section
+        className="trailer-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isMovieTrailer ? `Trailer for ${titleLabel}` : `${kicker}: ${titleLabel}`}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="dialog-header trailer-dialog-header">
           <div>
-            <p className="screen-kicker">Trailer</p>
+            <p className="screen-kicker">{kicker}</p>
             <h2>{titleLabel}</h2>
           </div>
-          <button type="button" className="inspector-close" onClick={onClose} aria-label="Stop trailer">
+          <button type="button" className="inspector-close" onClick={onClose} aria-label={isMovieTrailer ? 'Stop trailer' : 'Stop video'}>
             <X size={18} />
           </button>
         </div>
-        {embedUrl ? (
+        {activeEmbedUrl ? (
+          <>
           <div className="trailer-player-shell">
             <iframe
-              key={embedUrl}
-              title={`${titleLabel} trailer`}
-              src={embedUrl}
+              key={activeEmbedUrl}
+              ref={iframeRef}
+              title={isMovieTrailer ? `${titleLabel} trailer` : titleLabel}
+              src={`${activeEmbedUrl}&enablejsapi=1`}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               allowFullScreen
             />
+            {showEndRecommendations && recommendations.length ? (
+              <TrailerRecommendationGrid
+                className="trailer-end-recommendations"
+                title="Continue with Rotten Tomatoes"
+                videos={recommendations}
+                onSelect={selectRecommendation}
+              />
+            ) : null}
           </div>
+          {recommendations.length ? (
+            <TrailerRecommendationGrid
+              className="trailer-session-recommendations"
+              title="More from Rotten Tomatoes"
+              videos={recommendations}
+              onSelect={selectRecommendation}
+            />
+          ) : null}
+          </>
         ) : (
           <div className="trailer-missing">
             <Film size={32} />
-            <h3>No embeddable trailer found</h3>
-            <p>YouTube search results cannot be embedded as a player, but you can open the search externally.</p>
+            <h3>No embeddable video found</h3>
+            <p>This YouTube video cannot be embedded here, but you can open it externally.</p>
             <a className="btn btn-secondary" href={searchUrl} target="_blank" rel="noreferrer">
-              <ExternalLink size={15} /> Open YouTube search
+              <ExternalLink size={15} /> Open YouTube
             </a>
           </div>
         )}
       </section>
     </div>
+  );
+}
+
+function TrailerRecommendationGrid({ className, title, videos, onSelect }) {
+  return (
+    <section className={className} aria-label={title}>
+      <p className="screen-kicker">{title}</p>
+      <div>
+        {videos.map((video) => (
+          <button
+            type="button"
+            key={video.video_id}
+            onClick={() => onSelect(video)}
+            aria-label={`Play ${video.title} in this player`}
+          >
+            {video.thumbnail_url ? <img src={video.thumbnail_url} alt="" /> : <Film size={22} />}
+            <strong dir="auto">{video.title}</strong>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 

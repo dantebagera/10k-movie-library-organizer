@@ -2,7 +2,7 @@ import argparse
 import json
 import shutil
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 
@@ -82,7 +82,12 @@ def assemble_player_runtime(staged_runtime, output_root, metadata_path):
         raise FileNotFoundError(f"No native player files found under: {staged_runtime}")
     versions_root = output_root / "versions"
     versions_root.mkdir(parents=True, exist_ok=True)
-    temporary_parent = Path(tempfile.mkdtemp(prefix=".assembling-", dir=versions_root))
+    # Python 3.12's secure temporary-directory helper uses an owner-only ACL
+    # on Windows. A
+    # renamed runtime would keep that ACL and be unreadable by the normal
+    # desktop user when assembly runs under an isolated build identity.
+    temporary_parent = versions_root / f".assembling-{uuid.uuid4().hex}"
+    temporary_parent.mkdir()
     working_destination = temporary_parent / bundle_version
     working_destination.mkdir()
     try:

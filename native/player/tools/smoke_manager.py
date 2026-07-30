@@ -13,13 +13,13 @@ from services.player_config import PlayerConfig
 from services.player_manager import PlayerManager
 
 
-class VerifiedRuntime:
+class ResolvedRuntime:
     def __init__(self, bundle_root):
         self.bundle_root = bundle_root
 
     def resolve_bundle(self, verify_hashes=True):
-        if not verify_hashes:
-            raise AssertionError("PlayerManager must request full runtime verification.")
+        if verify_hashes:
+            raise AssertionError("PlayerManager launch must use quick runtime validation.")
         return {
             "bundle_root": self.bundle_root,
             "manifest": {"player_version": "smoke"},
@@ -41,7 +41,7 @@ def main():
     config = PlayerConfig({"mode": "built_in"})
     manager = PlayerManager(
         config,
-        VerifiedRuntime(runtime),
+        ResolvedRuntime(runtime),
         lambda path_key: {
             "path_key": path_key,
             "path": str(media),

@@ -11,7 +11,7 @@ import { MovieLanguageToggle, useTransientMovieLanguage } from './MovieLanguageT
 import { UnifiedMovieCard } from './movie-card/MovieCard.jsx';
 import { cx, formatCount } from '../utils/appUtils.js';
 import {
-  getCompactQualityLabel, getLocaleTag, getMovieIdentity, getQualityLabel, getRolePeople
+  getCompactQualityLabel, getLocaleTag, getMovieIdentity, getRolePeople
 } from '../utils/libraryUtils.js';
 import {
   formatReleaseDateLabel, formatVoteCount, isUnreleasedMovie
@@ -160,8 +160,7 @@ export function DiscoverMovieCard({
           label: expanded ? displayDetails?.certification || displayMovie.certification : '',
           tone: 'certification'
         },
-        owned ? getQualityLabel(ownedItem) : '',
-        ownedItem?.size_human || owned?.size_human
+        owned ? getCompactQualityLabel(ownedItem) : ''
       ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
@@ -456,6 +455,7 @@ export function MovieExpandedDetails({
   const expandedDirectors = directors?.length ? directors : details?.directors?.length ? details.directors : details?.director?.name ? [details.director] : [];
   const expandedCast = (cast?.length ? cast : details?.cast || []).slice(0, 8);
   const canBrowsePeople = Boolean(onPersonBrowse);
+  const personFilmographyAction = onPersonDiscover || onPersonBrowse;
 
   async function openPersonBio(role, person) {
     if (!person?.id) {
@@ -489,7 +489,7 @@ export function MovieExpandedDetails({
                   role="director"
                   canBrowse={canBrowsePeople}
                   onBrowse={onPersonBrowse}
-                  onDiscover={onPersonDiscover}
+                  onDiscover={personFilmographyAction}
                   onBio={openPersonBio}
                 />
               ))
@@ -504,7 +504,7 @@ export function MovieExpandedDetails({
                   role="actor"
                   canBrowse={canBrowsePeople}
                   onBrowse={onPersonBrowse}
-                  onDiscover={onPersonDiscover}
+                  onDiscover={personFilmographyAction}
                   onBio={openPersonBio}
                 />
               ))
@@ -564,6 +564,7 @@ function PersonCreditCard({ person, role, canBrowse, onBrowse, onDiscover, onBio
         className="person-bio-button"
         onClick={handleBioClick}
         aria-label={`Open biography for ${person.name}`}
+        title="Biography"
       >
         <BookOpen size={14} />
       </button>
@@ -572,8 +573,8 @@ function PersonCreditCard({ person, role, canBrowse, onBrowse, onDiscover, onBio
           type="button"
           className="person-discover-button"
           onClick={handleDiscoverClick}
-          aria-label={`Show all movies for ${person.name} in Discover`}
-          title="Show all movies in Discover"
+          aria-label={`Open filmography for ${person.name}`}
+          title="Filmography"
         >
           <Film size={14} />
         </button>
@@ -684,7 +685,6 @@ export function LibraryMovieCard({
   onToggleWatched,
   onToggleWatchlist,
   showOwnedBadge = true,
-  conciseFileFacts = false,
   selected,
   onSelect
 }) {
@@ -745,8 +745,7 @@ export function LibraryMovieCard({
           label: expanded ? displayDetails?.certification || displayMovie.certification : '',
           tone: 'certification'
         },
-        conciseFileFacts ? getCompactQualityLabel(item) : getQualityLabel(item),
-        conciseFileFacts ? '' : item.size_human
+        getCompactQualityLabel(item)
       ]}
       statusLabel={lowQuality ? 'Upgrade candidate' : ''}
       statusTone={lowQuality ? 'warning' : 'neutral'}

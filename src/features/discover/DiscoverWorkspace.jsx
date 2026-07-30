@@ -25,12 +25,13 @@ import {
 import TorrentActions from '../../components/TorrentActions.jsx';
 import { UnifiedMovieCard } from '../../components/movie-card/MovieCard.jsx';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
+import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import {
   buildOwnershipMap, discoverMoviePayload, filterEnrichedIndexerResults,
   listsForDiscoverMovie, ownedMovieFor, sortTorrentVariants
 } from '../../discoverUtils.js';
-import { isLowQuality, movieIdentityKey, moviePayload, resolutionRank } from '../../utils/libraryUtils.js';
+import { getCompactQualityLabel, isLowQuality, movieIdentityKey, moviePayload, resolutionRank } from '../../utils/libraryUtils.js';
 import { formatVoteCount } from '../../utils/moviePresentation.js';
 
 const discoverLists = [
@@ -80,6 +81,7 @@ export default function DiscoverWorkspace({
   setBrowseQuery,
   searchRequest,
   relationshipRequest,
+  listRequest,
   activeTab,
   setActiveTab,
   onOpenFileDetails
@@ -107,6 +109,7 @@ export default function DiscoverWorkspace({
   const [discoverKeywordError, setDiscoverKeywordError] = useState('');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discoverPage, setDiscoverPage] = useState(1);
+  const [discoverLocalPage, setDiscoverLocalPage] = useState(1);
   const [discoverTotalPages, setDiscoverTotalPages] = useState(1);
   const [discoverTotalResults, setDiscoverTotalResults] = useState(0);
   const [discoverMode, setDiscoverMode] = useState('discover');
@@ -126,6 +129,7 @@ export default function DiscoverWorkspace({
   const [selectedVariants, setSelectedVariants] = useState({});
   const [pickPrompt, setPickPrompt] = useState('');
   const [pickResults, setPickResults] = useState([]);
+  const [pickLocalPage, setPickLocalPage] = useState(1);
   const [pickModel, setPickModel] = useState('');
   const [pickLoading, setPickLoading] = useState(false);
   const [pickError, setPickError] = useState('');
@@ -154,6 +158,23 @@ export default function DiscoverWorkspace({
   const discoverAbortRef = useRef(null);
   const pickAbortRef = useRef(null);
   const handledRelationshipRequestRef = useRef(0);
+  const handledListRequestRef = useRef(0);
+  const {
+    gridRef: discoverMovieGridRef,
+    pageSize: discoverMoviePageSize
+  } = useCardGridMetrics({ target: 40, max: 100, bias: 'lower' });
+  const {
+    gridRef: discoverPeopleGridRef,
+    pageSize: discoverPeoplePageSize
+  } = useCardGridMetrics({ target: 20, max: 100, bias: 'lower' });
+  const {
+    gridRef: discoverKeywordGridRef,
+    pageSize: discoverKeywordPageSize
+  } = useCardGridMetrics({ target: 20, max: 100, bias: 'lower' });
+  const {
+    gridRef: pickMovieGridRef,
+    pageSize: pickMoviePageSize
+  } = useCardGridMetrics({ target: 20, max: 100, bias: 'lower' });
 
   useEffect(() => () => {
     discoverAbortRef.current?.abort();
@@ -281,7 +302,10 @@ export default function DiscoverWorkspace({
   }
 
   function buildDiscoverUrl(query, page) {
-    const params = new URLSearchParams({ page: String(page), page_size: '40' });
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(discoverMoviePageSize)
+    });
     if (query) {
       params.set('q', query);
       params.set('include_adult', 'false');
@@ -529,7 +553,7 @@ export default function DiscoverWorkspace({
     }
     setDiscoverMode('people');
     try {
-      const data = await fetchJson(`/api/tmdb/people/search?q=${encodeURIComponent(query)}&page=${requestedPage}&include_adult=false`, {
+      const data = await fetchJson(`/api/tmdb/people/search?q=${encodeURIComponent(query)}&page=${requestedPage}&page_size=${discoverPeoplePageSize}&include_adult=false`, {
         signal: controller.signal
       });
       if (requestSeq !== discoverRequestSeq.current) return;
@@ -578,7 +602,7 @@ export default function DiscoverWorkspace({
     }
     setDiscoverMode('keywords');
     try {
-      const data = await fetchJson(`/api/tmdb/keywords/search?q=${encodeURIComponent(query)}&page=${requestedPage}`, {
+      const data = await fetchJson(`/api/tmdb/keywords/search?q=${encodeURIComponent(query)}&page=${requestedPage}&page_size=${discoverKeywordPageSize}`, {
         signal: controller.signal
       });
       if (requestSeq !== discoverRequestSeq.current) return;
@@ -609,6 +633,7 @@ export default function DiscoverWorkspace({
     const [baseUrl, existingQuery = ''] = context.baseUrl.split('?');
     const params = new URLSearchParams(existingQuery);
     params.set('page', String(requestedPage));
+    params.set('page_size', String(isPick ? pickMoviePageSize : discoverMoviePageSize));
     if (!isPick) appendDiscoverCriteria(params);
     const url = `${baseUrl}?${params.toString()}`;
     if (isPick) {
@@ -790,6 +815,13 @@ export default function DiscoverWorkspace({
     setExpandedMovieKey('');
     loadContextPage('explore', context, { page: 1 }).finally(() => setIsNavigatingDiscoverContext(false));
   }, [relationshipRequest]);
+
+  useEffect(() => {
+    if (!listRequest?.requestId || handledListRequestRef.current === listRequest.requestId) return;
+    handledListRequestRef.current = listRequest.requestId;
+    setActiveTab('explore');
+    selectDiscoverList(listRequest.list || 'trending_week');
+  }, [listRequest]);
 
   async function browsePerson(target, movie, role, person) {
     const context = buildPersonMoviesContext(movie, role, person);
@@ -1115,7 +1147,31 @@ export default function DiscoverWorkspace({
   useEffect(() => {
     if (isNavigatingDiscoverContext || discoverContext) return;
     loadDiscover({ append: false, search: tmdbQuery });
-  }, [discoverList, discoverGenre, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, isNavigatingDiscoverContext]);
+  }, [discoverList, discoverGenre, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverMoviePageSize, isNavigatingDiscoverContext]);
+
+  useEffect(() => {
+    if (discoverContext?.baseUrl) {
+      loadContextPage('explore', discoverContext, { page: 1 });
+    }
+  }, [discoverMoviePageSize]);
+
+  useEffect(() => {
+    if (discoverMode === 'people' && tmdbQuery.trim()) {
+      searchDiscoverPeople({ page: 1, reset: false });
+    }
+  }, [discoverPeoplePageSize]);
+
+  useEffect(() => {
+    if (discoverMode === 'keywords' && tmdbQuery.trim()) {
+      searchDiscoverKeywords({ page: 1, reset: false });
+    }
+  }, [discoverKeywordPageSize]);
+
+  useEffect(() => {
+    if (pickContext?.baseUrl) {
+      loadContextPage('pick', pickContext, { page: 1 });
+    }
+  }, [pickMoviePageSize]);
 
   useEffect(() => {
     if (!discoverContext) return;
@@ -1190,6 +1246,28 @@ export default function DiscoverWorkspace({
       return discoverOwnershipFilter === 'owned' ? isOwned : !isOwned;
     });
   }, [discoverOwnershipFilter, discoverResults, ownership]);
+  const localDiscoverContext = Boolean(discoverContext && !discoverContext.baseUrl);
+  const discoverLocalTotalPages = Math.max(1, Math.ceil(filteredDiscoverResults.length / discoverMoviePageSize));
+  const safeDiscoverLocalPage = Math.min(discoverLocalPage, discoverLocalTotalPages);
+  const discoverLocalPageStart = (safeDiscoverLocalPage - 1) * discoverMoviePageSize;
+  const visibleDiscoverResults = localDiscoverContext
+    ? filteredDiscoverResults.slice(discoverLocalPageStart, discoverLocalPageStart + discoverMoviePageSize)
+    : filteredDiscoverResults;
+  const localPickContext = !pickContext?.baseUrl;
+  const pickLocalTotalPages = Math.max(1, Math.ceil(pickResults.length / pickMoviePageSize));
+  const safePickLocalPage = Math.min(pickLocalPage, pickLocalTotalPages);
+  const pickLocalPageStart = (safePickLocalPage - 1) * pickMoviePageSize;
+  const visiblePickResults = localPickContext
+    ? pickResults.slice(pickLocalPageStart, pickLocalPageStart + pickMoviePageSize)
+    : pickResults;
+
+  useEffect(() => {
+    setDiscoverLocalPage(1);
+  }, [discoverContext?.type, discoverContext?.label, discoverMoviePageSize, discoverOwnershipFilter]);
+
+  useEffect(() => {
+    setPickLocalPage(1);
+  }, [pickContext?.type, pickContext?.label, pickMoviePageSize]);
 
   const activeDiscoverSelectionMovies = activeTab === 'pick'
     ? pickResults
@@ -1486,14 +1564,15 @@ export default function DiscoverWorkspace({
                 error={discoverPeopleError}
                 people={discoverPeopleResults}
                 onOpenFilmography={openSearchedPersonFilmography}
+                gridRef={discoverPeopleGridRef}
               />
               <Pagination
                 ariaLabel="TMDB People search pagination"
                 page={discoverPeoplePage}
                 totalPages={discoverPeopleTotalPages}
                 total={discoverPeopleTotalResults}
-                pageStart={(discoverPeoplePage - 1) * 20}
-                pageEnd={(discoverPeoplePage - 1) * 20 + discoverPeopleResults.length}
+                pageStart={(discoverPeoplePage - 1) * discoverPeoplePageSize}
+                pageEnd={(discoverPeoplePage - 1) * discoverPeoplePageSize + discoverPeopleResults.length}
                 onPageChange={(nextPage) => searchDiscoverPeople({ page: nextPage, reset: false })}
               />
             </>
@@ -1504,20 +1583,22 @@ export default function DiscoverWorkspace({
                 error={discoverKeywordError}
                 keywords={discoverKeywordResults}
                 onOpenKeyword={openSearchedKeywordMovies}
+                gridRef={discoverKeywordGridRef}
               />
               <Pagination
                 ariaLabel="TMDB keyword search pagination"
                 page={discoverKeywordPage}
                 totalPages={discoverKeywordTotalPages}
                 total={discoverKeywordTotalResults}
-                pageStart={(discoverKeywordPage - 1) * 20}
-                pageEnd={(discoverKeywordPage - 1) * 20 + discoverKeywordResults.length}
+                pageStart={(discoverKeywordPage - 1) * discoverKeywordPageSize}
+                pageEnd={(discoverKeywordPage - 1) * discoverKeywordPageSize + discoverKeywordResults.length}
                 onPageChange={(nextPage) => searchDiscoverKeywords({ page: nextPage, reset: false })}
               />
             </>
           ) : <DiscoverResultGrid
             error={discoverError}
             loading={discoverLoading && !discoverResults.length}
+            gridRef={discoverMovieGridRef}
             emptyText={discoverOwnershipFilter === 'owned'
               ? 'No owned movies match this TMDB result page.'
               : discoverOwnershipFilter === 'unowned'
@@ -1529,7 +1610,7 @@ export default function DiscoverWorkspace({
                 : 'TMDB returned no collection members for this collection.'
               : undefined}
           >
-            {filteredDiscoverResults.map((movie, index) => {
+            {visibleDiscoverResults.map((movie, index) => {
               const owned = ownedMovieFor(movie, ownership);
               const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
               const collectionView = getCollectionView(details);
@@ -1572,14 +1653,26 @@ export default function DiscoverWorkspace({
             })}
           </DiscoverResultGrid>}
 
-          {discoverSearchKind !== 'people' && discoverResults.length > 0 && !discoverContext?.baseUrl && (
+          {discoverSearchKind === 'movies' && localDiscoverContext && filteredDiscoverResults.length > 0 && (
+            <Pagination
+              ariaLabel="Local Discover result pagination"
+              page={safeDiscoverLocalPage}
+              totalPages={discoverLocalTotalPages}
+              total={filteredDiscoverResults.length}
+              pageStart={discoverLocalPageStart}
+              pageEnd={Math.min(discoverLocalPageStart + discoverMoviePageSize, filteredDiscoverResults.length)}
+              onPageChange={setDiscoverLocalPage}
+            />
+          )}
+
+          {discoverSearchKind !== 'people' && discoverResults.length > 0 && !discoverContext && (
             <Pagination
               ariaLabel="TMDB movie pagination"
               page={discoverPage}
               totalPages={discoverTotalPages}
               total={discoverTotalResults || discoverResults.length}
-              pageStart={(discoverPage - 1) * 40}
-              pageEnd={(discoverPage - 1) * 40 + discoverResults.length}
+              pageStart={(discoverPage - 1) * discoverMoviePageSize}
+              pageEnd={(discoverPage - 1) * discoverMoviePageSize + discoverResults.length}
               summary={isRefinedTitleSearch()
                 ? `${formatCount(filteredDiscoverResults.length)} matching result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB search page`
                 : ''}
@@ -1593,8 +1686,8 @@ export default function DiscoverWorkspace({
               page={discoverPage}
               totalPages={discoverTotalPages}
               total={discoverTotalResults || discoverResults.length}
-              pageStart={(discoverPage - 1) * 20}
-              pageEnd={(discoverPage - 1) * 20 + discoverResults.length}
+              pageStart={(discoverPage - 1) * discoverMoviePageSize}
+              pageEnd={(discoverPage - 1) * discoverMoviePageSize + discoverResults.length}
               summary={discoverOwnershipFilter !== 'all'
                 ? `${formatCount(filteredDiscoverResults.length)} ${discoverOwnershipFilter} result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB page`
                 : ''}
@@ -1782,8 +1875,9 @@ export default function DiscoverWorkspace({
             error={pickError && pickResults.length ? pickError : ''}
             loading={pickLoading && !pickResults.length}
             emptyText={pickContext?.emptyText || 'No recommendations yet. Ask Ollama for a mood or memory.'}
+            gridRef={pickMovieGridRef}
           >
-            {pickResults.map((movie) => {
+            {visiblePickResults.map((movie) => {
               const owned = ownedMovieFor(movie, ownership);
               const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
               const collectionView = getCollectionView(details);
@@ -1826,6 +1920,17 @@ export default function DiscoverWorkspace({
               );
             })}
           </DiscoverResultGrid>
+          {localPickContext && pickResults.length > 0 && (
+            <Pagination
+              ariaLabel="Local AI Pick pagination"
+              page={safePickLocalPage}
+              totalPages={pickLocalTotalPages}
+              total={pickResults.length}
+              pageStart={pickLocalPageStart}
+              pageEnd={Math.min(pickLocalPageStart + pickMoviePageSize, pickResults.length)}
+              onPageChange={setPickLocalPage}
+            />
+          )}
           {pickContext?.baseUrl && (
             <Pagination
               ariaLabel="AI Pick relationship pagination"
@@ -1872,9 +1977,9 @@ export default function DiscoverWorkspace({
   );
 }
 
-function PeopleSearchResults({ people, loading, error, onOpenFilmography }) {
+function PeopleSearchResults({ people, loading, error, onOpenFilmography, gridRef }) {
   if (loading) {
-    return <div className="discover-grid person-search-grid"><div className="person-search-card skeleton-card" /></div>;
+    return <div ref={gridRef} className="discover-grid person-search-grid"><div className="person-search-card skeleton-card" /></div>;
   }
   if (error) {
     return <div className="empty-state discover-empty"><strong>Could not search people.</strong><span>{error}</span></div>;
@@ -1883,7 +1988,7 @@ function PeopleSearchResults({ people, loading, error, onOpenFilmography }) {
     return <div className="empty-state discover-empty"><strong>Search TMDB people by name.</strong></div>;
   }
   return (
-    <div className="discover-grid person-search-grid">
+    <div ref={gridRef} className="discover-grid person-search-grid">
       {people.map((person) => (
         <PersonSearchCard
           key={person.tmdb_id}
@@ -1898,9 +2003,9 @@ function PeopleSearchResults({ people, loading, error, onOpenFilmography }) {
   );
 }
 
-function KeywordSearchResults({ keywords, loading, error, onOpenKeyword }) {
+function KeywordSearchResults({ keywords, loading, error, onOpenKeyword, gridRef }) {
   if (loading) {
-    return <div className="discover-grid keyword-search-grid"><div className="keyword-search-card skeleton-card" /></div>;
+    return <div ref={gridRef} className="discover-grid keyword-search-grid"><div className="keyword-search-card skeleton-card" /></div>;
   }
   if (error) {
     return <div className="empty-state discover-empty"><strong>Could not search TMDB keywords.</strong><span>{error}</span></div>;
@@ -1909,7 +2014,7 @@ function KeywordSearchResults({ keywords, loading, error, onOpenKeyword }) {
     return <div className="empty-state discover-empty"><strong>Search TMDB keywords by name.</strong><span>Select a keyword identity to discover its movies.</span></div>;
   }
   return (
-    <div className="discover-grid keyword-search-grid">
+    <div ref={gridRef} className="discover-grid keyword-search-grid">
       {keywords.map((keyword) => (
         <KeywordSearchCard
           key={keyword.tmdb_id}
@@ -1923,31 +2028,6 @@ function KeywordSearchResults({ keywords, loading, error, onOpenKeyword }) {
 }
 
 
-
-function MovieFactChips({ movie, owned, lowQuality }) {
-  return (
-    <>
-      <div className="chip-row">
-        {(movie.genres || []).slice(0, 3).map((genre) => <span className="chip" key={genre}>{genre}</span>)}
-        {movie.language && <span className="chip chip-muted">{movie.language}</span>}
-        {(movie.country_flag || movie.country) && <span className="chip chip-muted">{movie.country_flag || movie.country}</span>}
-      </div>
-      <div className="ownership-row">
-        {owned ? (
-          <span className={cx('status-badge', lowQuality ? 'status-warning' : 'status-owned')}>
-            <CheckCircle2 size={14} />
-            Owned - {owned.resolution || 'Unknown'} - {owned.size_human || 'local file'}
-          </span>
-        ) : (
-          <span className="status-badge status-missing">
-            <Radio size={14} />
-            Not in library
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
 
 function IndexerMovieCard({
   movie,
@@ -1985,6 +2065,7 @@ function IndexerMovieCard({
   const lowQuality = owned && isLowQuality(owned.resolution);
   const variants = sortTorrentVariants(movie.variants || []);
   const selectedVariant = variants[selectedIndex] || variants[0] || {};
+  const ownedItem = owned?.canonical_card || owned?.library_item || owned || {};
   const baseDisplayMovie = owned?.poster_url ? { ...movie, poster_url: owned.poster_url } : movie;
   const languageView = useTransientMovieLanguage({ movie: baseDisplayMovie, details, expanded });
   const displayMovie = languageView.displayMovie;
@@ -2005,8 +2086,7 @@ function IndexerMovieCard({
       mutedChips={[
         selectedVariant.resolution || movie.best_resolution,
         selectedVariant.indexer,
-        owned?.resolution,
-        owned?.size_human
+        owned ? getCompactQualityLabel(ownedItem) : ''
       ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : `${formatCount(selectedVariant.seeders)} seeders`}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : 'neutral'}

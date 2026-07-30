@@ -39,6 +39,34 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertNotIn("Find sources", component_source)
         self.assertNotIn("Correct metadata", component_source)
 
+    def test_owned_cards_share_compact_quality_without_owned_file_size(self):
+        discover_card = SHARED_CARDS_SOURCE[
+            SHARED_CARDS_SOURCE.index("export function DiscoverMovieCard({"):
+            SHARED_CARDS_SOURCE.index("export function MovieExpandedFacts")
+        ]
+        library_card = SHARED_CARDS_SOURCE[
+            SHARED_CARDS_SOURCE.index("export function LibraryMovieCard({"):
+        ]
+        home_card = APP[
+            APP.index("function SmartMovieCard(props)"):
+            APP.index("function MovieInspector", APP.index("function SmartMovieCard(props)"))
+        ]
+        home_inspector = APP[
+            APP.index("function MovieInspector({"):
+            APP.index("function Poster(", APP.index("function MovieInspector({"))
+        ]
+        indexer_card = DISCOVER_SOURCE[
+            DISCOVER_SOURCE.index("function IndexerMovieCard({"):
+        ]
+
+        for card_source in (discover_card, library_card, home_card, home_inspector, indexer_card):
+            self.assertIn("getCompactQualityLabel", card_source)
+        self.assertNotIn("size_human", discover_card)
+        self.assertNotIn("size_human", library_card)
+        self.assertNotIn("size_human", home_card)
+        self.assertNotIn("size_human", home_inspector)
+        self.assertNotIn("owned?.size_human", indexer_card)
+
     def test_standard_poster_uses_uncropped_contain_framing(self):
         styles_source = STYLES.read_text(encoding="utf-8")
         self.assertIn(".unified-movie-poster img", styles_source)
@@ -193,7 +221,11 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("function PersonCreditCard", expanded_details)
         self.assertIn("className=\"person-bio-button\"", expanded_details)
         self.assertIn("className=\"person-discover-button\"", expanded_details)
-        self.assertIn("Show all movies for", expanded_details)
+        self.assertIn("const personFilmographyAction = onPersonDiscover || onPersonBrowse;", expanded_details)
+        self.assertIn("onDiscover={personFilmographyAction}", expanded_details)
+        self.assertIn("aria-label={`Open filmography for ${person.name}`}", expanded_details)
+        self.assertIn('title="Biography"', expanded_details)
+        self.assertIn('title="Filmography"', expanded_details)
         self.assertIn("<Film size={14} />", expanded_details)
         self.assertIn("event.stopPropagation()", expanded_details)
         self.assertIn("fetchJson(`/api/tmdb/person?person_id=${encodeURIComponent(person.id)}`)", expanded_details)
@@ -205,7 +237,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         styles_source = APP_STYLES.read_text(encoding="utf-8")
         self.assertIn(".person-bio-button", styles_source)
         self.assertIn(".person-discover-button", styles_source)
-        self.assertIn("bottom: 6px", styles_source)
+        self.assertIn(".person-discover-button {\n  top: 40px;", styles_source)
         self.assertIn(".person-bio-dialog", styles_source)
         self.assertIn(".person-bio-backdrop", styles_source)
 
@@ -250,7 +282,8 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("loadContextPage('explore', context, { page: 1 })", discover_source)
         self.assertIn("onPersonDiscover={onOpenDiscoverPerson}", library_source)
         self.assertIn("onPersonDiscover ? (role, person) => onPersonDiscover({ title: identity.title, year: identity.year }, role, person) : undefined", library_card_source)
-        self.assertIn("onDiscover={onPersonDiscover}", APP)
+        self.assertIn("const personFilmographyAction = onPersonDiscover || onPersonBrowse;", APP)
+        self.assertIn("onDiscover={personFilmographyAction}", APP)
         self.assertIn("onOpenDiscoverPerson", movie_lists_source)
         self.assertIn("onOpenDiscoverCollection", movie_lists_source)
         self.assertIn("onPersonBrowse={(role, person) => onOpenDiscoverPerson", movie_lists_source)
