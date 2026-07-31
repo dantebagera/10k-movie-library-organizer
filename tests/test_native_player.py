@@ -167,6 +167,17 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn("border.width: 0", qml)
         self.assertIn("ToolTip.text: iconControl.label", qml)
         self.assertIn('PREFIX "/icons"', cmake)
+        self.assertNotIn("RoundButton {", qml)
+        self.assertIn('label: mpv.paused ? "Play" : "Pause"', qml)
+        self.assertIn("acceptedButtons: Qt.LeftButton", qml)
+        self.assertIn("TapHandler {", qml)
+        self.assertIn("const hitsTopControls", qml)
+        self.assertIn("const hitsBottomControls", qml)
+        self.assertIn(
+            "root.visibility === Window.FullScreen && !root.controlsVisible",
+            qml,
+        )
+        self.assertIn("? Qt.BlankCursor : Qt.ArrowCursor", qml)
 
         for old_control in (
             'text: "AUDIO"',

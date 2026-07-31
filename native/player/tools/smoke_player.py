@@ -36,18 +36,40 @@ def find_visible_window(process_id):
     matches = []
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [
+        wintypes.HWND,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+    ]
+    user32.GetWindowTextW.restype = ctypes.c_int
 
     @callback_type
     def callback(handle, _parameter):
         window_process = wintypes.DWORD()
         user32.GetWindowThreadProcessId(handle, ctypes.byref(window_process))
         if window_process.value == process_id and user32.IsWindowVisible(handle):
-            matches.append(handle)
-            return False
+            title_length = user32.GetWindowTextLengthW(handle)
+            title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+            user32.GetWindowTextW(handle, title_buffer, title_length + 1)
+            matches.append((handle, title_buffer.value))
         return True
 
     user32.EnumWindows(callback, 0)
-    return matches[0] if matches else None
+    for handle, title in matches:
+        if "Cinema Paradiso" in title:
+            return handle
+    return matches[0][0] if matches else None
 
 
 def show_test_window(window):
@@ -101,14 +123,23 @@ def send_window_key(window, virtual_key):
 
 def window_client_fraction_point(window, x_fraction, y_fraction):
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetClientRect.restype = wintypes.BOOL
+    user32.ClientToScreen.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.POINT),
+    ]
+    user32.ClientToScreen.restype = wintypes.BOOL
     rectangle = wintypes.RECT()
-    user32.GetClientRect(window, ctypes.byref(rectangle))
+    if not user32.GetClientRect(window, ctypes.byref(rectangle)):
+        raise RuntimeError("The native player client bounds were unavailable.")
     client = wintypes.POINT(
         round((rectangle.right - rectangle.left) * x_fraction),
         round((rectangle.bottom - rectangle.top) * y_fraction),
     )
     screen = wintypes.POINT(client.x, client.y)
-    user32.ClientToScreen(window, ctypes.byref(screen))
+    if not user32.ClientToScreen(window, ctypes.byref(screen)):
+        raise RuntimeError("The native player client coordinates were unavailable.")
     packed = (client.x & 0xFFFF) | ((client.y & 0xFFFF) << 16)
     return user32, screen, packed
 
@@ -119,10 +150,22 @@ def click_window_fraction(window, x_fraction, y_fraction):
         x_fraction,
         y_fraction,
     )
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
     show_test_window(window)
     user32.SetCursorPos(screen.x, screen.y)
-    user32.SendMessageW(window, 0x0201, 1, packed)
-    user32.SendMessageW(window, 0x0202, 0, packed)
+    time.sleep(0.05)
+    if user32.GetForegroundWindow() == window:
+        user32.mouse_event(0x0002, 0, 0, 0, 0)
+        user32.mouse_event(0x0004, 0, 0, 0, 0)
+    else:
+        user32.SendMessageW(window, 0x0201, 1, packed)
+        user32.SendMessageW(window, 0x0202, 0, packed)
 
 
 def move_window_fraction(window, x_fraction, y_fraction):
@@ -178,6 +221,11 @@ def capture_window(window, destination):
         image = ImageGrab.grab(window=window)
     except TypeError:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.GetWindowRect.argtypes = [
+            wintypes.HWND,
+            ctypes.POINTER(wintypes.RECT),
+        ]
+        user32.GetWindowRect.restype = wintypes.BOOL
         rectangle = wintypes.RECT()
         if not user32.GetWindowRect(window, ctypes.byref(rectangle)):
             raise RuntimeError("The native player window bounds were unavailable.")
@@ -467,6 +515,24 @@ def main():
                     )
                     capture_window(window, pre_controls_path)
                 send_window_key(window, 0x20)
+                receive_until(
+                    transport,
+                    process,
+                    events,
+                    lambda event: event["type"] == "playback.state"
+                    and event.get("state") == "paused",
+                    3,
+                )
+                click_window_fraction(window, 0.50, 0.50)
+                receive_until(
+                    transport,
+                    process,
+                    events,
+                    lambda event: event["type"] == "playback.state"
+                    and event.get("state") == "playing",
+                    3,
+                )
+                click_window_fraction(window, 0.50, 0.50)
                 receive_until(
                     transport,
                     process,
@@ -847,6 +913,7 @@ def main():
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
         "controls_exercised": bool(args.exercise_controls),
+        "screen_click_play_pause_exercised": bool(args.exercise_controls),
         "timeline_exercised": bool(args.exercise_timeline),
         "timeline_click_position_ms": timeline_click_position_ms,
         "timeline_drag_position_ms": timeline_drag_position_ms,

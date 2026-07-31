@@ -371,7 +371,28 @@ ApplicationWindow {
         anchors.fill: parent
         acceptedButtons: Qt.NoButton
         hoverEnabled: true
+        cursorShape: root.visibility === Window.FullScreen && !root.controlsVisible
+                     ? Qt.BlankCursor : Qt.ArrowCursor
         onPositionChanged: root.showControls()
+
+        TapHandler {
+            enabled: !playerBridge.resumeDecisionPending
+                     && !audioPanelOpen
+                     && !subtitlePanelOpen
+                     && !chapterPanelOpen
+                     && !subtitleSearchOpen
+                     && !statisticsOpen
+            acceptedButtons: Qt.LeftButton
+            onTapped: eventPoint => {
+                const point = eventPoint.position
+                const hitsTopControls = topBar.visible && point.y < topBar.height
+                const hitsBottomControls = bottomBar.visible && point.y >= bottomBar.y
+                if (!hitsTopControls && !hitsBottomControls) {
+                    mpv.togglePause()
+                    root.showControls()
+                }
+            }
+        }
     }
 
     Rectangle {
@@ -474,31 +495,6 @@ ApplicationWindow {
                 radius: PlayerTheme.radiusMedium
                 color: parent.hovered ? "#663a3d45" : "#33000000"
             }
-        }
-    }
-
-    RoundButton {
-        anchors.centerIn: parent
-        width: 76
-        height: 76
-        visible: root.controlsVisible
-        text: mpv.paused ? "▶" : "Ⅱ"
-        font.pixelSize: 30
-        onClicked: {
-            mpv.togglePause()
-            root.showControls()
-        }
-        contentItem: Text {
-            text: parent.text
-            color: PlayerTheme.textStrong
-            font: parent.font
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            radius: width / 2
-            color: parent.hovered ? "#e6d4af37" : "#b3121316"
-            border.color: parent.hovered ? PlayerTheme.projectorGoldBright : PlayerTheme.borderStrong
         }
     }
 
