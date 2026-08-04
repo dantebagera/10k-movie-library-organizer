@@ -1263,8 +1263,40 @@ function ArchiveApp() {
 }
 
 function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
+  const [navTooltip, setNavTooltip] = useState(null);
+
+  const showNavTooltip = useCallback((label, event) => {
+    if (!collapsed) return;
+    const anchor = event.currentTarget.getBoundingClientRect();
+    setNavTooltip({
+      label,
+      top: anchor.top + anchor.height / 2
+    });
+  }, [collapsed]);
+
+  const hideNavTooltip = useCallback(() => {
+    setNavTooltip((current) => (
+      current ? { ...current, label: '' } : null
+    ));
+  }, []);
+
+  const selectNavItem = useCallback((section) => {
+    hideNavTooltip();
+    onSelect(section);
+  }, [hideNavTooltip, onSelect]);
+
+  const toggleCollapsed = useCallback(() => {
+    setNavTooltip(null);
+    onToggleCollapsed();
+  }, [onToggleCollapsed]);
+
+  useEffect(() => {
+    if (!collapsed) setNavTooltip(null);
+  }, [collapsed]);
+
   return (
-    <aside className={cx('sidebar', collapsed && 'sidebar-collapsed')} aria-label="Primary navigation">
+    <>
+      <aside className={cx('sidebar', collapsed && 'sidebar-collapsed')} aria-label="Primary navigation">
       <div className="brand-lockup">
         <img src={logoUrl} alt="" className="brand-mark" />
         <div>
@@ -1274,7 +1306,7 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
         <button
           type="button"
           className="sidebar-toggle"
-          onClick={onToggleCollapsed}
+          onClick={toggleCollapsed}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -1282,7 +1314,7 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
           {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
         </button>
       </div>
-      <nav className="nav-stack">
+      <nav className="nav-stack" onScroll={hideNavTooltip}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = activeSection === item.id;
@@ -1290,12 +1322,15 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
             <div key={item.id} className="nav-group">
               <button
                 className={cx('nav-item', active && 'nav-item-active', `accent-${item.accent}`)}
-                onClick={() => onSelect(item.id)}
+                onClick={() => selectNavItem(item.id)}
+                onMouseEnter={(event) => showNavTooltip(item.label, event)}
+                onMouseLeave={hideNavTooltip}
+                onFocus={(event) => showNavTooltip(item.label, event)}
+                onBlur={hideNavTooltip}
                 type="button"
                 aria-label={collapsed ? item.label : undefined}
-                title={collapsed ? item.label : undefined}
               >
-                <span className="nav-icon-wrap"><Icon size={20} /></span>
+                <span className="nav-icon-wrap"><Icon size={22} /></span>
                 <span className="nav-label">
                   {item.label}
                   {item.experimental && <ExperimentalBadge className="ai-control-nav-badge" />}
@@ -1307,7 +1342,7 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
       </nav>
       <div
         className="sidebar-footer"
-        title={collapsed ? `Local-first archive · ${APP_VERSION}` : undefined}
+        title={collapsed ? APP_VERSION : undefined}
       >
         <div className="sidebar-footer-status">
           <span className="status-dot" />
@@ -1315,7 +1350,18 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
         </div>
         <span className="sidebar-version">{APP_VERSION}</span>
       </div>
-    </aside>
+      </aside>
+      {collapsed && (
+        <div
+          className={cx('sidebar-tooltip', navTooltip?.label && 'sidebar-tooltip-visible')}
+          role="tooltip"
+          aria-hidden={!navTooltip?.label}
+          style={{ top: `${navTooltip?.top ?? 0}px` }}
+        >
+          {navTooltip?.label || ''}
+        </div>
+      )}
+    </>
   );
 }
 

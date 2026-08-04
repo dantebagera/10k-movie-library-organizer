@@ -278,33 +278,123 @@ test('release watcher keeps a three-row preview while View all and Following exp
 
 test('desktop sidebar collapses persistently while workspace margins stay fixed', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
 
   const sidebar = page.getByRole('complementary', { name: 'Primary navigation' });
+  const appShell = page.locator('.app-shell');
   const workspace = page.locator('.workspace');
   const pageContent = page.locator('.library-workspace');
+  const brand = page.locator('.brand-lockup');
+  const footer = page.locator('.sidebar-footer');
+  const libraryNavItem = page.getByRole('button', { name: 'Library' });
+  const libraryNavIcon = libraryNavItem.locator('.nav-icon-wrap');
+  const aiControlNavItem = page.getByRole('button', { name: /AI Control/ });
+  const aiControlBadge = aiControlNavItem.locator('.ai-control-nav-badge');
   const collapseButton = page.getByRole('button', { name: 'Collapse sidebar' });
 
-  await expect(sidebar).toHaveCSS('width', '280px');
+  await expect(sidebar).toHaveCSS('width', '220px');
+  await expect(brand).toHaveCSS('height', '76px');
+  await expect(appShell).toHaveCSS('transition-duration', '0.15s');
+  await expect(appShell).toHaveCSS('transition-timing-function', 'ease-in-out');
+  await expect(sidebar).toHaveCSS('border-right-width', '0px');
+  await expect(brand).toHaveCSS('border-bottom-width', '0px');
+  await expect(footer).toHaveCSS('border-top-width', '0px');
+  await expect(footer).toHaveCSS('justify-content', 'flex-start');
+  await expect(page.locator('.sidebar-footer-status')).toBeHidden();
+  await expect(page.locator('.status-dot')).toBeHidden();
+  expect(await footer.evaluate((element) => element.innerText)).not.toContain('Local-first archive');
+  const navScale = await libraryNavItem.evaluate((element) => {
+    const label = element.querySelector('.nav-label');
+    const icon = element.querySelector('.nav-icon-wrap svg');
+    const iconRect = icon.getBoundingClientRect();
+    return {
+      itemHeight: element.getBoundingClientRect().height,
+      labelFontSize: Number.parseFloat(getComputedStyle(label).fontSize),
+      iconWidth: iconRect.width,
+      iconHeight: iconRect.height
+    };
+  });
+  expect(navScale.itemHeight).toBeCloseTo(55.2, 1);
+  expect(navScale.labelFontSize).toBeCloseTo(17.25, 2);
+  expect(navScale.iconWidth).toBeCloseTo(25.3, 1);
+  expect(navScale.iconHeight).toBeCloseTo(25.3, 1);
+  await expect(aiControlBadge.locator('.experimental-badge-label')).toBeHidden();
+  await expect(aiControlBadge.locator('.experimental-badge-short')).toBeVisible();
+  await expect(aiControlBadge.locator('.experimental-badge-short')).toHaveText('X');
+  await expect(libraryNavItem).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(libraryNavItem).toHaveCSS('background-image', 'none');
+  await expect(libraryNavIcon).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(libraryNavItem).toHaveCSS('color', 'rgb(212, 175, 55)');
+  await expect(libraryNavIcon).toHaveCSS('color', 'rgb(212, 175, 55)');
+  await expect(page.locator('.sidebar-tooltip')).toHaveCount(0);
+  const expandedItemLeft = await libraryNavItem.evaluate((element) => element.getBoundingClientRect().left);
+  await libraryNavItem.hover();
+  await expect.poll(() => libraryNavItem.evaluate((element) => element.getBoundingClientRect().left)).toBe(expandedItemLeft);
+  await expect(page.locator('.sidebar-tooltip')).toHaveCount(0);
+
   const expandedWorkspaceWidth = await workspace.evaluate((element) => element.getBoundingClientRect().width);
   const expandedContentWidth = await pageContent.evaluate((element) => element.getBoundingClientRect().width);
   const expandedPadding = await workspace.evaluate((element) => {
     const style = getComputedStyle(element);
     return [style.paddingLeft, style.paddingRight];
   });
-  expect(expandedPadding).toEqual(['24px', '24px']);
+  expect(expandedPadding).toEqual(['14.4px', '14.4px']);
 
   await collapseButton.click();
-  await expect(sidebar).toHaveCSS('width', '84px');
+  await expect(sidebar).toHaveCSS('width', '64px');
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByRole('button', { name: 'Library' })).toHaveAttribute('title', 'Library');
+  expect(await footer.getAttribute('title')).not.toContain('Local-first archive');
+  const collapsedNavItems = page.locator('.nav-item');
+  expect(await collapsedNavItems.evaluateAll((items) => items.every((item) => !item.hasAttribute('title')))).toBeTruthy();
   const collapsedBrandOffset = await page.locator('.brand-mark').evaluate((logo) => {
     const sidebarRect = logo.closest('.sidebar').getBoundingClientRect();
     const logoRect = logo.getBoundingClientRect();
     return Math.abs((logoRect.left + logoRect.width / 2) - (sidebarRect.left + sidebarRect.width / 2));
   });
   expect(collapsedBrandOffset).toBeLessThanOrEqual(0.5);
+  expect(await brand.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(96);
+
+  const tooltip = page.locator('.sidebar-tooltip');
+  await expect(tooltip).toHaveCount(1);
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'true');
+  await libraryNavItem.hover();
+  await expect(tooltip).toHaveText('Library');
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'false');
+  await expect(tooltip).toHaveCSS('pointer-events', 'none');
+  await expect.poll(() => tooltip.evaluate((element) => {
+    const sidebarRect = document.querySelector('.sidebar').getBoundingClientRect();
+    return element.getBoundingClientRect().left - sidebarRect.right;
+  })).toBeGreaterThanOrEqual(4);
+  const tooltipGeometry = await tooltip.evaluate((element) => {
+    const tooltipRect = element.getBoundingClientRect();
+    const sidebarRect = document.querySelector('.sidebar').getBoundingClientRect();
+    return {
+      gap: tooltipRect.left - sidebarRect.right,
+      sidebarLeft: sidebarRect.left,
+      sidebarRight: sidebarRect.right,
+      tooltipLeft: tooltipRect.left,
+      tooltipCssLeft: getComputedStyle(element).left,
+      right: tooltipRect.right,
+      viewportWidth: window.innerWidth
+    };
+  });
+  expect(tooltipGeometry.gap, JSON.stringify(tooltipGeometry)).toBeGreaterThanOrEqual(4);
+  expect(tooltipGeometry.right).toBeLessThanOrEqual(tooltipGeometry.viewportWidth);
+  await page.mouse.move(500, 500);
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'true');
+
+  await page.getByRole('button', { name: 'Expand sidebar' }).focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(libraryNavItem).toBeFocused();
+  await expect(tooltip).toHaveText('Library');
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'false');
+  await expect(libraryNavItem).toHaveCSS('outline-style', 'solid');
+  await expect(libraryNavItem).toHaveCSS('outline-width', '2px');
+  await libraryNavItem.evaluate((element) => element.blur());
+  await expect(tooltip).toHaveAttribute('aria-hidden', 'true');
 
   const collapsedWorkspaceWidth = await workspace.evaluate((element) => element.getBoundingClientRect().width);
   const collapsedContentWidth = await pageContent.evaluate((element) => element.getBoundingClientRect().width);
@@ -312,16 +402,30 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
     const style = getComputedStyle(element);
     return [style.paddingLeft, style.paddingRight];
   });
-  expect(collapsedWorkspaceWidth - expandedWorkspaceWidth).toBeGreaterThanOrEqual(190);
-  expect(collapsedContentWidth - expandedContentWidth).toBeGreaterThanOrEqual(190);
-  expect(collapsedPadding).toEqual(['24px', '24px']);
+  expect(collapsedWorkspaceWidth - expandedWorkspaceWidth).toBeGreaterThanOrEqual(155);
+  expect(collapsedWorkspaceWidth - expandedWorkspaceWidth).toBeLessThanOrEqual(157);
+  expect(collapsedContentWidth - expandedContentWidth).toBeGreaterThanOrEqual(155);
+  expect(collapsedContentWidth - expandedContentWidth).toBeLessThanOrEqual(157);
+  expect(collapsedPadding).toEqual(['14.4px', '14.4px']);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('true');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '84px');
+  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '64px');
+  const reloadedLibraryNavItem = page.getByRole('button', { name: 'Library' });
+  await reloadedLibraryNavItem.hover();
+  await expect(page.locator('.sidebar-tooltip')).toHaveAttribute('aria-hidden', 'false');
   await page.getByRole('button', { name: 'Expand sidebar' }).click();
-  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '280px');
+  await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '220px');
+  await expect(page.locator('.sidebar-tooltip')).toHaveCount(0);
+  await reloadedLibraryNavItem.hover();
+  await expect(page.locator('.sidebar-tooltip')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('false');
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(appShell).toHaveCSS('transition-duration', '0s');
+  await expect(reloadedLibraryNavItem).toHaveCSS('transition-duration', '0s');
+  await expect(reloadedLibraryNavItem.locator('.nav-label')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 });
 
 test('Continue Watching uses compact uncropped posters and centralized resume restart remove actions', async ({ page }) => {
@@ -2397,6 +2501,9 @@ test('IPTV providers keep same IDs isolated, stop playback on switch, and remove
   await page.goto('/iptv', { waitUntil: 'domcontentloaded' });
   const selector = page.getByLabel('Active IPTV provider');
   await expect(selector).toHaveValue(first.provider_id);
+  const syncButton = page.getByRole('button', { name: 'Sync IPTV catalog' });
+  await expect(syncButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(syncButton).toHaveCSS('border-style', 'none');
   await page.getByRole('button', { name: 'Movies', exact: true }).click();
   await selector.selectOption(second.provider_id);
   await expect(page.getByText('Second Movie', { exact: true })).toBeVisible();

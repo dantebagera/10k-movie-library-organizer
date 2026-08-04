@@ -51,6 +51,12 @@
   color: #7ee2a3;
 }
 
+.iptv-header-status > .icon-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+}
+
 .iptv-provider-select {
   display: flex;
   align-items: center;
