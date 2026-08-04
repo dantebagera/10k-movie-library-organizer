@@ -19,6 +19,18 @@ class PortableReleasePackagingTests(unittest.TestCase):
         self.assertFalse(should_include_qbt_file("qbittorrent.pdb"))
         self.assertTrue(should_include_qbt_file("qbittorrent.exe"))
 
+    def test_release_carries_pinned_watcher_and_apache_notice(self):
+        from tools.build_portable_release import PORTABLE_ROOT_FILES
+
+        project = Path(__file__).resolve().parents[1]
+        requirements = (project / "requirements.txt").read_text(encoding="utf-8")
+        notices = (project / "THIRD-PARTY-NOTICES.md").read_text(encoding="utf-8")
+
+        self.assertIn("watchdog==6.0.0", requirements)
+        self.assertIn("THIRD-PARTY-NOTICES.md", PORTABLE_ROOT_FILES)
+        self.assertIn("Watchdog 6.0.0", notices)
+        self.assertIn("Apache License 2.0", notices)
+
     def test_release_runtime_manifest_names_bundled_qbt_version(self):
         from tools.build_portable_release import build_qbt_manifest
 

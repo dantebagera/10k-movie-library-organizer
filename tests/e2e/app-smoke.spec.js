@@ -1,4 +1,10 @@
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const ingestionEvidenceDir = path.resolve(
+  'docs/verification/online-library-ingestion/after'
+);
 
 const parityMovie = {
   tmdb_id: '42',
@@ -186,6 +192,89 @@ for (const [path, role, name] of workspaces) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+test('release watcher keeps a three-row preview while View all and Following expose the complete set', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const followedMovies = Array.from({ length: 12 }, (_, index) => ({
+    tmdb_id: String(9100 + index),
+    title: `Followed Movie ${index + 1}`,
+    year: '2026',
+    status: index < 2 ? 'available' : 'watching',
+    followed_at: 1000 - index,
+    updated_at: 1000 - index,
+    poster_url: ''
+  }));
+  let fullScanRequests = 0;
+  let ownershipReconcileRequests = 0;
+  let releaseInitialScan;
+  const initialScanGate = new Promise((resolve) => { releaseInitialScan = resolve; });
+
+  await page.route('**/api/user/followed-releases**', async (route) => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'POST' && url.pathname.endsWith('/check')) {
+      fullScanRequests += 1;
+      if (fullScanRequests === 1) await initialScanGate;
+    }
+    if (route.request().method() === 'POST' && url.pathname.endsWith('/reconcile-owned')) ownershipReconcileRequests += 1;
+    await route.fulfill({ json: {
+      movies: followedMovies,
+      newly_available: [],
+      removed_owned: [],
+      curation_generation: 1
+    } });
+  });
+  await page.route('**/api/user/lists**', (route) => route.fulfill({ json: {
+    lists: [
+      { id: 'watched', name: 'Watched', system_type: 'watched', movies: [] },
+      { id: 'watchlist', name: 'Watchlist', system_type: 'watchlist', movies: [] }
+    ],
+    curation_generation: 1
+  } }));
+  await page.route('**/api/library/check', async (route) => {
+    const movies = route.request().postDataJSON()?.movies || [];
+    await route.fulfill({ json: {
+      results: movies.map((movie) => ({ ...movie, found: false })),
+      catalog_generation: 1
+    } });
+  });
+  await page.route('**/api/tmdb/card-projections', (route) => route.fulfill({ json: { items: {}, catalog_generation: 1 } }));
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  const releasePanel = page.locator('.release-panel');
+  await expect(releasePanel.locator('.release-item')).toHaveCount(3);
+  await expect.poll(() => fullScanRequests).toBe(1);
+
+  await releasePanel.getByRole('button', { name: 'View all' }).click();
+  const drawer = page.getByRole('dialog', { name: 'Followed releases' });
+  await expect(drawer.locator('.followed-row')).toHaveCount(12);
+  await expect(drawer.getByRole('button', { name: 'All (12)' })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: 'Available (2)' })).toBeVisible();
+  await expect(drawer.getByRole('button', { name: 'Watching (10)' })).toBeVisible();
+  const lastFollowed = drawer.locator('[data-followed-title="Followed Movie 12"]');
+  await lastFollowed.scrollIntoViewIfNeeded();
+  await expect(lastFollowed).toBeInViewport();
+  await drawer.getByRole('button', { name: 'Close followed releases' }).click();
+
+  await expect(releasePanel.getByRole('button', { name: 'Scanning followed releases' })).toBeDisabled();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cp-catalog-ready', {
+    detail: { type: 'catalog-ready', generation: 2 }
+  })));
+  expect(ownershipReconcileRequests).toBe(0);
+  releaseInitialScan();
+  await expect.poll(() => ownershipReconcileRequests).toBe(1);
+  await expect(releasePanel.getByRole('button', { name: 'Scan followed releases' })).toBeEnabled();
+  await releasePanel.getByRole('button', { name: 'Scan followed releases' }).click();
+  await expect.poll(() => fullScanRequests).toBe(2);
+
+  await page.getByRole('button', { name: 'Movie Lists' }).click();
+  const followingList = page.getByRole('button', { name: 'Following 12 movies' });
+  await expect(followingList).toBeVisible();
+  await followingList.click();
+  await expect(page.getByLabel('Selected list name')).toHaveValue('Following');
+  await expect(page.getByLabel('Selected list name')).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Delete list' })).toBeDisabled();
+  await expect(page.locator('.movie-lists-card-grid .discover-movie-card')).toHaveCount(12);
+});
 
 test('desktop sidebar collapses persistently while workspace margins stay fixed', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1000 });
@@ -2868,4 +2957,209 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
   await page.getByRole('button', { name: 'View all' }).click();
   await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
   await expect(page.locator('.discover-toolbar select').first()).toHaveValue('upcoming');
+});
+
+test('bootstrap paints before the frontend entry bundle executes', async ({ page }) => {
+  let releaseEntry;
+  let markEntryRequested;
+  const entryGate = new Promise((resolve) => { releaseEntry = resolve; });
+  const entryRequested = new Promise((resolve) => { markEntryRequested = resolve; });
+  await page.route(/\/assets\/index-[^/]+\.js(?:\?.*)?$/, async (route) => {
+    markEntryRequested();
+    await entryGate;
+    await route.continue();
+  });
+
+  await page.goto('/library', { waitUntil: 'commit' });
+  await entryRequested;
+  const bootstrap = page.locator('.app-bootstrap');
+  await expect(bootstrap).toBeVisible();
+  await expect(bootstrap).toContainText('Loading Cinema Paradiso');
+  const bootstrapStyle = await bootstrap.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      color: style.color,
+      display: style.display,
+      fullViewport: Number.parseFloat(style.minHeight) >= window.innerHeight
+    };
+  });
+  expect(bootstrapStyle).toEqual({
+    color: 'rgb(212, 175, 55)',
+    display: 'grid',
+    fullViewport: true
+  });
+
+  releaseEntry();
+  await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
+  await expect(bootstrap).toHaveCount(0);
+});
+
+test('cold Library navigation measures the grid once and defers unrelated startup work', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1000 });
+  await page.addInitScript(() => {
+    window.__cpInitialSyncEmitted = false;
+    window.EventSource = class InitialSyncEventSource {
+      constructor() {
+        this.listeners = new Map();
+        window.setTimeout(() => {
+          window.__cpInitialSyncEmitted = true;
+          this.listeners.get('catalog-sync')?.({
+            data: JSON.stringify({ type: 'catalog-sync', generation: 1 })
+          });
+        }, 25);
+      }
+      addEventListener(name, handler) { this.listeners.set(name, handler); }
+      close() {}
+    };
+  });
+
+  const libraryRequests = [];
+  const deferredHomeRequests = [];
+  const deferredCurationRequests = [];
+  let releaseLibrary;
+  const libraryGate = new Promise((resolve) => { releaseLibrary = resolve; });
+  await page.route('**/api/stats', (route) => {
+    deferredHomeRequests.push('/api/stats');
+    return route.fulfill({ json: {} });
+  });
+  await page.route('**/api/home/trailers', (route) => {
+    deferredHomeRequests.push('/api/home/trailers');
+    return route.fulfill({ json: { items: [] } });
+  });
+  await page.route('**/api/tmdb/discover**', (route) => {
+    deferredHomeRequests.push('/api/tmdb/discover');
+    return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
+  });
+  await page.route('**/api/user/followed-releases**', (route) => {
+    const url = new URL(route.request().url());
+    deferredCurationRequests.push(`${route.request().method()} ${url.pathname}`);
+    return route.fulfill({ json: {
+      movies: [], newly_available: [], removed_owned: [], curation_generation: 1
+    } });
+  });
+  await page.route('**/api/streaming/config', (route) => {
+    deferredCurationRequests.push(`${route.request().method()} /api/streaming/config`);
+    return route.fulfill({ json: { enabled: false, label: 'Stream', url_template: '' } });
+  });
+  await page.route('**/api/library?view=cards*', async (route) => {
+    libraryRequests.push(new URL(route.request().url()));
+    await libraryGate;
+    await route.fulfill({ json: {
+      items: [parityLibraryItem], count: 1, total: 1, page: 1,
+      page_size: Number(libraryRequests.at(-1).searchParams.get('page_size')),
+      total_pages: 1, page_start: 1, page_end: 1,
+      facets: { genres: [], sources: [], languages: [], countries: [] },
+      stats: { total: 1, low: 0, matched: 1, pending: 0, unmatched: 0 },
+      catalog_generation: 1
+    } });
+  });
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await expect.poll(() => libraryRequests.length).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__cpInitialSyncEmitted)).toBe(true);
+  await page.waitForTimeout(75);
+  expect(libraryRequests).toHaveLength(1);
+  expect(libraryRequests[0].searchParams.get('page_size')).toBe('39');
+  expect(deferredHomeRequests).toEqual([]);
+  expect(deferredCurationRequests).toEqual([]);
+
+  releaseLibrary();
+  const card = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await expect(card).toBeVisible();
+  const grid = page.locator('.library-results').filter({ has: card });
+  await grid.evaluate((element) => { element.dataset.initialMountProof = 'same-grid'; });
+  await page.waitForTimeout(75);
+  expect(libraryRequests).toHaveLength(1);
+  await expect(grid).toHaveAttribute('data-initial-mount-proof', 'same-grid');
+  await expect(page.locator('.library-status .spin')).toHaveCount(0);
+  await expect(page.locator('.app-bootstrap')).toHaveCount(0);
+  await expect.poll(() => deferredCurationRequests).toEqual([
+    'GET /api/user/followed-releases',
+    'GET /api/streaming/config',
+    'POST /api/user/followed-releases/check'
+  ]);
+});
+
+test('committed catalog event quietly adds a final Library card without unmounting or losing state', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.EventSource = class SilentEventSource {
+      addEventListener() {}
+      close() {}
+    };
+  });
+  const added = {
+    ...parityLibraryItem,
+    path: 'C:/fixture/Quiet Added Movie.mkv',
+    filename: 'Quiet Added Movie.mkv',
+    title: 'Quiet Added Movie',
+    canonical_metadata: {
+      ...parityLibraryItem.canonical_metadata,
+      movie_key: 'tmdb:9002', tmdb_id: '9002', title: 'Quiet Added Movie', year: '2026'
+    }
+  };
+  let requestCount = 0;
+  let releaseRefresh;
+  let markRefreshStarted;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const refreshStarted = new Promise((resolve) => { markRefreshStarted = resolve; });
+  await page.route('**/api/library?view=cards*', async (route) => {
+    requestCount += 1;
+    if (requestCount > 1) {
+      markRefreshStarted();
+      await refreshGate;
+    }
+    const items = requestCount > 1 ? [parityLibraryItem, added] : [parityLibraryItem];
+    await route.fulfill({ json: {
+      items, count: items.length, total: items.length, page: 1, page_size: 40,
+      total_pages: 1, page_start: 1, page_end: items.length,
+      facets: { genres: [], sources: [], languages: [], countries: [] },
+      stats: { total: items.length, low: 0, matched: items.length, pending: 0, unmatched: 0 },
+      catalog_generation: requestCount > 1 ? 2 : 1
+    } });
+  });
+  await page.route('**/api/library/details**', (route) => route.fulfill({
+    json: { item: { ...parityDeferredDetails, collection: {} }, catalog_generation: 1 }
+  }));
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  const firstCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
+  await expect(firstCard).toBeVisible();
+  await firstCard.getByRole('heading', { name: parityMovie.title }).click();
+  await firstCard.getByRole('checkbox').check({ force: true });
+  const search = page.getByLabel('Search your offline library');
+  await search.focus();
+  const grid = page.locator('.library-results');
+  await grid.evaluate((element) => { element.dataset.quietMountProof = 'same-grid'; });
+
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cp-catalog-ready', {
+    detail: { type: 'catalog-ready', generation: 2 }
+  })));
+  await refreshStarted;
+  await expect(grid).toBeVisible();
+  await expect(grid).toHaveAttribute('data-quiet-mount-proof', 'same-grid');
+  await expect(page.locator('.library-status .spin')).toHaveCount(0);
+  await expect(firstCard).toBeVisible();
+  await expect(firstCard.getByRole('checkbox')).toBeChecked();
+  await expect(firstCard).toHaveClass(/library-movie-card-expanded/);
+  await expect(search).toBeFocused();
+  if (process.env.CP_CAPTURE_INGESTION_EVIDENCE === '1') {
+    fs.mkdirSync(ingestionEvidenceDir, { recursive: true });
+    await page.screenshot({
+      path: path.join(ingestionEvidenceDir, 'library-background-refresh-during.png'),
+      fullPage: false
+    });
+  }
+
+  releaseRefresh();
+  await expect(page.getByRole('heading', { name: 'Quiet Added Movie', exact: true })).toBeVisible();
+  await expect(grid).toHaveAttribute('data-quiet-mount-proof', 'same-grid');
+  await expect(firstCard.getByRole('checkbox')).toBeChecked();
+  await expect(firstCard).toHaveClass(/library-movie-card-expanded/);
+  await expect(search).toBeFocused();
+  if (process.env.CP_CAPTURE_INGESTION_EVIDENCE === '1') {
+    await page.screenshot({
+      path: path.join(ingestionEvidenceDir, 'library-background-refresh-complete.png'),
+      fullPage: false
+    });
+  }
 });

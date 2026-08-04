@@ -9,6 +9,7 @@ export default function useCardGridMetrics({
 }) {
   const cleanupRef = useRef(() => {});
   const [columns, setColumns] = useState(1);
+  const [measured, setMeasured] = useState(false);
 
   const gridRef = useCallback((node) => {
     cleanupRef.current();
@@ -23,6 +24,7 @@ export default function useCardGridMetrics({
       );
       if (nextColumns > 0) {
         setColumns((current) => current === nextColumns ? current : nextColumns);
+        setMeasured(true);
       }
     };
 
@@ -46,5 +48,5 @@ export default function useCardGridMetrics({
     bias
   }), [bias, columns, max, min, target]);
 
-  return { columns, gridRef, pageSize };
+  return { columns, gridRef, measured, pageSize };
 }

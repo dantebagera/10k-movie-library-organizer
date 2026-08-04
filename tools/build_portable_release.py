@@ -31,6 +31,7 @@ PORTABLE_ROOT_FILES = {
     "package-lock.json",
     "package.json",
     "README.md",
+    "THIRD-PARTY-NOTICES.md",
     "requirements.txt",
     "run.bat",
     "vite.config.js",

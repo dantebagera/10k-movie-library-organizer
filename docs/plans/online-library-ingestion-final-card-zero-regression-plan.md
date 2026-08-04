@@ -1,6 +1,6 @@
 # Online Library Ingestion and Final-Card Publication — Zero-Regression Plan
 
-**Status:** Planning and implementation handoff only. No implementation has started.
+**Status:** Complete. Gates 0-8 pass; Gate 9 was measured unnecessary and introduced no schema/file-ID migration. Gate 10A and Gate 10B corrected the two mandatory-stop findings in the existing owners and pass full isolated qualification. Dante approved the final exact Rao Bahadur retry. After a stale deployed frontend bundle was caught and rolled back before copy, the qualified source was built into `dist`; the corrected live run passed startup stability, targeted external ingestion, final-card SQL publication, one post-commit event, no-flicker desktop preservation, and exact cleanup rollback. Production SQL/source/configuration/qBittorrent are restored or unchanged, and the accepted live catalog is preserved in the fresh backup.
 
 **Prepared:** 2026-07-31
 
@@ -20,15 +20,11 @@ Dante approved creating and saving this plan. That approval does **not** authori
 
 Implementation begins only after Dante approves a named gate and its scope.
 
-At planning time, the worktree already contains unrelated native-player work:
+**Approval addendum (2026-08-01):** Gate 0 completed as a read-only baseline. Dante then approved Gate 1, Gate 2, and continuation through the remaining isolated implementation plan without intermediate approval pauses. Corrective Gate 2A resolved the initial frontend collection-cache/navigation failure. Gates 3-8 implemented and qualified the native observer, strict final-card publication, post-commit event transport, no-flicker desktop refresh, qBittorrent targeted handoff, and startup catch-up. Gate 9 remained intentionally unused. Dante subsequently approved the exact Rao Bahadur live fixture. Gate 10 stopped before media copy after queue saturation and unrelated startup artwork mutation; its catalog rollback is complete. Dante approved corrective Gate 10A and exact orphan cleanup. Gate 10A corrected those existing owners, passed its full isolated qualification, and moved the exact 36 orphan files into the recoverable Gate 10 backup quarantine. Dante approved the exact live retry. That retry stopped before browser/media work after a separate populated-catalog startup-transition mutation, and its rollback is exact. Dante then approved Gate 10B; it corrected the deployment transition and generation idempotence in the existing owners and passed the complete isolated qualification. Dante approved the final exact live retry. A stale deployed `dist` bundle was stopped and rolled back before media copy, then rebuilt from the qualified source. The corrected live run passed, and the approved cleanup restored production exactly. Evidence is indexed in [the verification README](../verification/online-library-ingestion/README.md).
 
-- `native/player/qml/Main.qml`
-- `native/player/runtime-metadata.json`
-- `native/player/tools/smoke_player.py`
-- `tests/test_native_player.py`
-- `aqtinstall.log` (untracked)
+At planning time, the worktree contained unrelated native-player work and `aqtinstall.log`. At the Gate 0 and Gate 1 baselines, the listed native-player files were tracked and clean; `aqtinstall.log` remained pre-existing and untracked. Gate 0 and Gate 1 owned only verification evidence. Gate 2 owns the explicitly listed parity-refactor code, tests, and evidence; `aqtinstall.log` remains preserved and unrelated.
 
-Every implementation gate must re-run `git status --short`, preserve these files, and stop if its intended edits overlap unreviewed user work.
+Every implementation gate must re-run `git status --short`, preserve every pre-existing modified or untracked file, and stop if its intended edits overlap unreviewed user work.
 
 ---
 
@@ -300,6 +296,7 @@ When the qBittorrent stage is approved:
 - retain `QBittorrentManager` ownership of runtime, submission, job state, cleanup, seeding, and recovery;
 - retain existing journal and idempotency behavior;
 - after CP finishes its current import/move step, pass the exact destination path to `reconcile_paths`;
+- do not accept identity or metadata before the shared coordinator completes stability checking and a current probe; the current `probe=False` pre-acceptance shortcut must not survive the targeted handoff;
 - remove the normal forced full reconciliation only after path-targeted parity is proven;
 - preserve restart recovery for a qBittorrent process that outlives CP;
 - make no seeding, hardlink, category, download-directory, or cleanup-policy changes in this project.
@@ -422,7 +419,7 @@ This is a recommendation, not an implementation mandate. Gate 1 must prove:
 - no leaked request/thread per event;
 - no effect on normal API latency.
 
-If SSE cannot pass that proof, bounded generation polling is the fallback. WebSockets are not justified for this one-way use case unless another approved CP feature already establishes a shared transport.
+Gate 1 freezes SSE as the transport to qualify. If SSE cannot pass that proof, Gate 5 fails and returns for a new architecture decision; bounded polling must not be introduced silently as a fallback. WebSockets are not justified for this one-way use case unless another approved CP feature already establishes a shared transport.
 
 ### 6.2 One frontend subscriber
 
@@ -462,6 +459,7 @@ Compared with the Gate 0 baseline on the same machine and catalog:
 - warm Library API p50 and p95 may regress by no more than the larger of 5% or 50 ms;
 - cold Library API p50 and p95 may regress by no more than the larger of 5% or 50 ms;
 - ordinary Library requests perform zero filesystem walks;
+- ordinary Library requests perform zero per-file `isfile`, `stat`, or equivalent media-root filesystem checks;
 - ordinary Library requests perform zero media probes;
 - ordinary Library requests perform zero metadata-provider calls;
 - SQL statement count for the same page/filter request must not increase without a measured and approved reason;
@@ -532,7 +530,7 @@ Stop conditions:
 
 - process ownership is unclear;
 - baseline imports mutate live state;
-- current catalog cannot be backed up/read consistently;
+- the isolated test catalog cannot be created and read consistently. Production-catalog backup or inspection is deferred to separately approved Gate 10;
 - unrelated dirty work overlaps planned files;
 - a current authoritative owner cannot be identified.
 
@@ -585,6 +583,8 @@ Acceptance:
 - performance budgets pass.
 
 Rollback: revert only the refactor; no schema/data rollback should be required.
+
+**Gate 2 outcome (2026-08-01): passed after Gate 2A.** Backend, ownership, isolation, performance, Node, packaging, and build proof pass. A pending collection request was initially aborted on route departure without recovery; Gate 2A corrected the existing shared cache owner and the full desktop suite passed 48/48. See [Gate 2 verification](../verification/online-library-ingestion/gate-2-verification.md) and [Gate 2A verification](../verification/online-library-ingestion/gate-2a-verification.md).
 
 ### Gate 3 — Online external-add detection
 
@@ -652,6 +652,7 @@ Acceptance:
 - no spinner, white frame, layout jump, scroll jump, or current-card remount;
 - filter, sort, search, page, selection, focus, and expansion stay correct;
 - failed background refresh leaves the old view intact and retries safely;
+- an already idle-mounted Library receives a later committed event and performs exactly one quiet authoritative refetch;
 - Desktop Chrome/Chromium Playwright video and screenshots prove the sequence.
 
 Mobile/responsive redesign or testing is out of scope.
@@ -747,6 +748,16 @@ Suggested bounded acceptance:
 7. verify catalog parity and no unrelated file/catalog changes.
 
 Stop immediately on any unexplained mutation, mass deletion signal, duplicate, placeholder frame, performance breach, or process-ownership ambiguity.
+
+**2026-08-01 live result and required plan correction:** The approved Rao Bahadur run stopped before step 3. Recursive Watchdog directory-modification hints filled all 4,096 coordinator slots, while ordinary startup artwork backfill created 36 asset rows/files. Forty-seven processed directory jobs also rewrote the operational library inventory and falsely advanced the global/media/canonical-media generations by 47 even though movie tables did not change. The SQL catalog is restored byte-for-byte and the exact 36 unreferenced files are preserved. Before retrying this gate, correct the existing observer/coordinator owners to collapse or ignore directory metadata noise, eliminate unchanged inventory writes and media-generation bumps, and prevent startup artwork work from mutating the bounded acceptance pre-state. Add isolated regressions for a greater-than-capacity directory event storm and a mutation-free pre-acceptance startup, then rerun Gates 3, 7, and 8. No second observer/importer, schema migration, durable file ID, or parallel generation owner is authorized by this correction.
+
+**2026-08-02 Gate 10A result:** The correction is complete in the existing owners. Directory `modified` noise is ignored; created/moved directory hints remain bounded; parent/child queue work collapses; operational inventory uses a SQL checkpoint without advancing catalog generations; and normal startup no longer launches implicit artwork backfill. The greater-than-capacity storm test, mutation-free startup test, full 1,059-test backend suite, 76 Node tests, 49 desktop Playwright tests, portable/package/player checks, performance budgets, and 30-minute observer soak pass. The exact 36 cache orphans are checksum-verified in a recoverable quarantine and zero remain active. Gate 10 may now be retried only after explicit approval; its original source, destination, backup, desktop workflow, and stop conditions remain unchanged.
+
+**2026-08-02 first live retry result and required Gate 10B correction:** The approved retry stopped before the browser opened and before media copy. The populated production catalog predates operational key `library_directory_revisions_v1`; `LibraryStartupCatchup.run_once()` therefore treated the first upgraded start as an empty snapshot and invoked `reconcile_all_now()`. The global recovery reprocessed one unchanged manually accepted movie (`The Loved Ones`), changed only timestamps and identity revisions across existing rows, and nevertheless advanced global/media/canonical-media generations six times. Queue depth remained zero, no artwork asset changed, and no row count changed. CP was stopped immediately; the changed catalog is preserved; production SQL is restored byte-for-byte; source/destination and qBittorrent remain untouched. Before another live retry, add a populated pre-feature catalog transition fixture, preserve conservative offline change recovery, and make semantically unchanged enrichment persistence idempotent across the existing repository/metadata owners. Then rerun Gates 7, 8, and 10A. No schema migration, second scanner, alternative inventory, or duplicate catalog owner is authorized.
+
+**2026-08-02 Gate 10B result:** The correction is complete in the existing startup catch-up, coordinator, AppMetadataStore, and CatalogRepository owners. First-checkpoint recovery remains conservative but disables enrichment of unchanged accepted cards; changed-directory recovery uses the same rule. Operational timestamp/revision persistence no longer advances global, media, or canonical-media generations, while material card changes still advance generation. Bounded directory recovery prunes deleted SQL/inventory paths only within the named root. The populated-upgrade fixture, final 1,062-test backend suite, 76 Node tests, 49 desktop Playwright tests, package/player checks, frozen performance budgets, forward/reverse critical repeats, and 30-minute native observer soak pass. No schema migration, durable file ID, second scanner, second inventory, or alternative writer was introduced. Production SQL/source remain byte-identical, the destination remains absent, CP remains stopped, and qBittorrent remains untouched. The exact Rao Bahadur live retry remains separately approval-gated.
+
+**2026-08-02 final Gate 10 result:** Dante approved the exact retry. Its first preflight start was stopped before copy because the live server exposed a stale July 30 `dist` bundle with zero catalog-event subscribers. SQL was restored byte-for-byte, the old bundle was preserved, and the already-qualified source was built without source/dependency changes; the corrected server then exposed exactly one subscriber. First-checkpoint recovery created `library_directory_revisions_v1` with media generation 7,629 unchanged. The literal four-file Rao Bahadur copy entered the native observer and authoritative coordinator, completed probe, accepted TMDB identity/metadata, checksum-ready poster preparation, canonical projection, ready publication, and one post-commit event. Movie View added one final card while preserving the 1080p filter, newly-added sort, page, selection, expanded card, search focus, and visually anchored scroll position with no spinner, placeholder, blank grid, or reload. The accepted catalog is healthy and preserved. Approved cleanup re-hashed and removed only the copied destination and one new poster, restored production SQL to its original SHA-256 with zero Rao rows and no WAL/SHM, and left the source/configuration/qBittorrent unchanged. Gate 10 passes and the plan is complete. See [the final live verification](../verification/online-library-ingestion/gate-10-final-verification.md).
 
 ---
 
@@ -874,6 +885,7 @@ Instrument DOM presence, bounding boxes, network timing, and screenshots/video:
 - test a new movie sorted onto another page;
 - test a new movie excluded by the current filter;
 - test event burst while a request is in flight;
+- mount the Library while idle, publish later, and assert one post-commit notification produces exactly one quiet authoritative refetch;
 - test background request failure and recovery;
 - test browser reconnect after backend restart;
 - verify Home, Cleanup, Movie Lists, Discover, AI Control, Continue Watching, and playback entry points show no ownership regression.
@@ -1074,6 +1086,7 @@ Before live acceptance, the project must contain or link:
 - this approved plan;
 - Gate 0 baseline and ownership inventory;
 - Gate 1 architecture/contract decision record;
+- Gate 1 API/event contract, publication state machine, dependency/license review, rollback design, and frozen contract-to-test map;
 - fixture manifest;
 - automated test inventory with contract-to-test mapping;
 - per-gate implementation and rollback reports;

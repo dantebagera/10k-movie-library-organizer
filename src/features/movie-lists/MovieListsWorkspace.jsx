@@ -82,7 +82,19 @@ export default function MovieListsWorkspace({
     return () => window.removeEventListener(CURATION_GENERATION_CHANGED_EVENT, clearCurationCaches);
   }, [clearCollectionCache]);
 
-  const selectedList = lists.find((list) => list.id === selectedListId) || lists[0] || null;
+  const displayLists = useMemo(() => {
+    const following = {
+      id: 'following',
+      name: 'Following',
+      system_type: 'following',
+      movies: followed
+    };
+    const next = [...lists];
+    const watchlistIndex = next.findIndex((list) => list.id === 'watchlist' || list.system_type === 'watchlist');
+    next.splice(watchlistIndex >= 0 ? watchlistIndex + 1 : 0, 0, following);
+    return next;
+  }, [followed, lists]);
+  const selectedList = displayLists.find((list) => list.id === selectedListId) || displayLists[0] || null;
   const model = useMemo(() => buildMovieListViewModel({
     libraryItems,
     list: selectedList,
@@ -100,6 +112,7 @@ export default function MovieListsWorkspace({
   const selectedRows = model.rows.filter((row) => selectedKeys.has(row.identityKey));
   const allRowsSelected = model.rows.length > 0 && model.rows.every((row) => selectedKeys.has(row.identityKey));
   const selectedListIsSystem = Boolean(selectedList?.system_type);
+  const selectedListIsFollowing = selectedList?.system_type === 'following';
   const selectedCopyMovies = selectedRows.map((row) => (row.ownedItem ? moviePayload(row.ownedItem) : movieListRowMovie(row)));
   const missingCardProjectionMovies = useMemo(() => {
     const seen = new Set();
@@ -124,7 +137,11 @@ export default function MovieListsWorkspace({
       const listsData = await fetchUserListsCached({ force: forceLists });
       const nextLists = listsData.lists || [];
       setLists(nextLists);
-      setSelectedListId((current) => (nextLists.some((list) => list.id === current) ? current : nextLists[0]?.id || ''));
+      setSelectedListId((current) => (
+        current === 'following' || nextLists.some((list) => list.id === current)
+          ? current
+          : nextLists[0]?.id || 'following'
+      ));
     } catch (loadError) {
       setError(loadError.message);
       notify?.(`Movie lists unavailable: ${loadError.message}`, 'error');
@@ -375,6 +392,14 @@ export default function MovieListsWorkspace({
 
   async function removeSelectedFromActiveList() {
     if (!selectedList || !selectedRows.length) return;
+    if (selectedListIsFollowing) {
+      for (const row of selectedRows) {
+        await onFollow(movieListRowMovie(row));
+      }
+      setSelectedKeys(new Set());
+      notify?.(`${formatCount(selectedRows.length)} movie${selectedRows.length === 1 ? '' : 's'} unfollowed`);
+      return;
+    }
     for (const row of selectedRows) {
       await removeMovieFromList(selectedList.id, row.ownedItem ? moviePayload(row.ownedItem) : movieListRowMovie(row));
     }
@@ -384,6 +409,11 @@ export default function MovieListsWorkspace({
 
   async function addTmdbMovieToSelectedList(movie) {
     if (!selectedList) return;
+    if (selectedListIsFollowing) {
+      if (!followed.some((item) => movieKey(item) === movieKey(movie))) await onFollow(movie);
+      setTmdbAddOpen(false);
+      return;
+    }
     await addMovieToList(selectedList.id, movie);
     setTmdbAddOpen(false);
   }
@@ -467,7 +497,7 @@ export default function MovieListsWorkspace({
               <CirclePlus size={13} /> New list
             </button>
           </form>
-          {lists.length ? lists.map((list) => (
+          {displayLists.length ? displayLists.map((list) => (
             <button
               type="button"
               key={list.id}

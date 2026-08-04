@@ -2,3 +2,4 @@ flask>=3.0.0
 send2trash>=1.8.0
 pymediainfo>=6.0.0
 Pillow>=11.0.0
+watchdog==6.0.0

@@ -1,0 +1,138 @@
+{
+  "captured_at": "2026-07-31T06:00:00+03:00",
+  "gate": 0,
+  "repository": {
+    "branch": "master",
+    "head": "eaf6a749133fc3dec279f82f707719a3e5ed1bf0",
+    "schema_version": 10,
+    "application_version": "2.8.2",
+    "player_bundle_version": "0.1.20-qt6.10.3-mpv20260610-lgpl"
+  },
+  "isolation": {
+    "cp_test_mode": true,
+    "test_root": "C:\\Users\\dante\\AppData\\Local\\Temp\\cinema-paradiso-gate0-ui-4f6cc8d5d018497e9cdf84f37b16c745",
+    "test_root_is_os_temp_child": true,
+    "production_catalog_opened_by_test": false,
+    "configured_live_media_root_scanned_by_test": false,
+    "fixture_file_count": 1555,
+    "accepted_card_count": 55
+  },
+  "movie_view_test_client": {
+    "route": "/api/library?view=cards&page=1&page_size=40&sort=added",
+    "cold": {
+      "latency_ms": 223.9,
+      "sql_statements": 22,
+      "sql_selects": 22,
+      "payload_bytes": 82924,
+      "gzip_bytes": 3498,
+      "filesystem_walks": 0,
+      "isfile_calls": 1555,
+      "probe_calls": 0,
+      "provider_calls": 0,
+      "returned_cards": 40,
+      "total_cards": 55,
+      "catalog_generation": 1667
+    },
+    "warm": {
+      "request_count": 30,
+      "latency_p50_ms": 16.732,
+      "latency_p95_ms": 17.842,
+      "latency_min_ms": 16.235,
+      "latency_max_ms": 18.222,
+      "sql_statements_min": 13,
+      "sql_statements_p50": 13,
+      "sql_statements_max": 13,
+      "payload_bytes": 82924,
+      "gzip_bytes": 3498,
+      "filesystem_walks_total": 0,
+      "isfile_calls_total": 0,
+      "probe_calls_total": 0,
+      "provider_calls_total": 0
+    }
+  },
+  "movie_view_http": {
+    "request_count": 50,
+    "latency_p50_ms": 53.625,
+    "latency_p95_ms": 62.569,
+    "latency_min_ms": 49.074,
+    "latency_max_ms": 118.469,
+    "payload_bytes": 82924,
+    "cpu_seconds_delta": 0.8438,
+    "working_set_before_bytes": 101998592,
+    "working_set_after_bytes": 104873984,
+    "private_before_bytes": 81301504,
+    "private_after_bytes": 84127744
+  },
+  "full_scan_micro_fixture": {
+    "test_root": "C:\\Users\\dante\\AppData\\Local\\Temp\\cinema-paradiso-gate0-scan-1ddf3d0c8c764af8b9ea1a292a178d02",
+    "file_count": 3,
+    "elapsed_ms": 162.771,
+    "filesystem_walks": 1,
+    "yielded_files": 3,
+    "probe_calls": 3,
+    "provider_calls": 0,
+    "provider": "filename",
+    "result": {
+      "checked": 3,
+      "matched": 0,
+      "review": 3,
+      "pending": 0,
+      "failed": 0,
+      "removed": 0,
+      "facts_refreshed": 0
+    }
+  },
+  "foreground_rescan_visual_fixture": {
+    "fixture_file_count": 1500,
+    "capture_delay_ms": 100,
+    "mounted_article_count_during_load": 0,
+    "placeholder": "Rescanning library folders...",
+    "still_running_after_seconds": 42,
+    "qualification": "visual baseline only; isolated server stopped after capture"
+  },
+  "startup_existing_process_read_only": {
+    "api_ready_ms": 776.339,
+    "database_open_ms": 345.808,
+    "first_library_query_ms": 1007.356,
+    "generation_check_ms": 1.798,
+    "migration_check_ms": 2.107,
+    "reconcile_decision_ms": 734.982,
+    "reconcile_decision": "skip",
+    "reconcile_reason": "current_inventory"
+  },
+  "startup_isolated_preseeded": {
+    "api_ready_ms": 29.551,
+    "database_open_ms": 4.142,
+    "first_library_query_ms": 82.414,
+    "generation_check_ms": 0,
+    "migration_check_ms": 1.996,
+    "reconcile_decision": "not_checked",
+    "background_queue_started": false
+  },
+  "existing_process_idle_sample": {
+    "interval_seconds": 5.002,
+    "logical_processor_count": 32,
+    "processes": [
+      {
+        "role": "cp",
+        "pid": 38300,
+        "cpu_seconds_delta": 0.0156,
+        "machine_cpu_percent": 0.01,
+        "working_set_bytes": 269901824,
+        "private_bytes": 250437632,
+        "threads": 4,
+        "handles": 288
+      },
+      {
+        "role": "qbittorrent",
+        "pid": 6340,
+        "cpu_seconds_delta": 0,
+        "machine_cpu_percent": 0,
+        "working_set_bytes": 56291328,
+        "private_bytes": 28569600,
+        "threads": 15,
+        "handles": 527
+      }
+    ]
+  }
+}

@@ -22,6 +22,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from './api/client.js';
 import { announceLibraryReconciled, CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks, observeCatalogGeneration } from './api/library.js';
+import { CATALOG_READY_EVENT, startCatalogEvents } from './api/catalogEvents.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from './api/movieDetails.js';
 import {
   announceCurationChanged,
@@ -278,6 +279,8 @@ function ArchiveApp() {
   const [activeSection, setActiveSection] = useState(() => (
     typeof window === 'undefined' ? 'home' : sectionFromPath(window.location.pathname, navItems)
   ));
+  const [startupWorkAllowed, setStartupWorkAllowed] = useState(() => activeSection !== 'library');
+  useEffect(() => startCatalogEvents(), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed);
   const [mountedSections, setMountedSections] = useState(() => new Set([activeSection]));
   const [stats, setStats] = useState(null);
@@ -330,12 +333,18 @@ function ArchiveApp() {
   const sourceSearchTokenRef = useRef(0);
   const libraryReconcileSignatureRef = useRef('');
   const homeTrailersRequestRef = useRef(0);
+  const followedOperationRef = useRef(null);
+  const followedOwnershipQueuedRef = useRef(false);
+  const followedOwnershipRetryDelayRef = useRef(0);
 
   useEffect(() => {
     setMountedSections((sections) => (
       sections.has(activeSection) ? sections : new Set([...sections, activeSection])
     ));
+    if (activeSection !== 'library') setStartupWorkAllowed(true);
   }, [activeSection]);
+
+  const allowStartupWork = useCallback(() => setStartupWorkAllowed(true), []);
 
   useEffect(() => {
     try {
@@ -386,9 +395,10 @@ function ArchiveApp() {
   }, [notify]);
 
   useEffect(() => {
+    if (activeSection !== 'home') return undefined;
     window.addEventListener('cp-library-changed', refreshHealthStats);
     return () => window.removeEventListener('cp-library-changed', refreshHealthStats);
-  }, [refreshHealthStats]);
+  }, [activeSection, refreshHealthStats]);
 
   const loadHomeLists = useCallback(async (options = {}) => {
     try {
@@ -400,10 +410,11 @@ function ArchiveApp() {
   }, []);
 
   useEffect(() => {
+    if (activeSection !== 'home') return undefined;
     loadHomeLists();
     window.addEventListener('cp-curation-changed', loadHomeLists);
     return () => window.removeEventListener('cp-curation-changed', loadHomeLists);
-  }, [loadHomeLists]);
+  }, [activeSection, loadHomeLists]);
 
   const loadContinueWatching = useCallback(async () => {
     try {
@@ -469,6 +480,7 @@ function ArchiveApp() {
   }, [notify]);
 
   useEffect(() => {
+    if (activeSection !== 'home') return undefined;
     let cancelled = false;
     async function loadStats() {
       setLoading((state) => ({ ...state, stats: true }));
@@ -485,9 +497,10 @@ function ArchiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [notify]);
+  }, [activeSection, notify]);
 
   useEffect(() => {
+    if (activeSection !== 'home') return undefined;
     let cancelled = false;
     async function loadHomeMovies() {
       setLoading((state) => ({ ...state, movies: true, upcoming: true }));
@@ -533,7 +546,7 @@ function ArchiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [notify]);
+  }, [activeSection, notify]);
 
   const loadHomeTrailers = useCallback(async () => {
     const requestId = homeTrailersRequestRef.current + 1;
@@ -561,19 +574,73 @@ function ArchiveApp() {
   }, []);
 
   useEffect(() => {
+    if (activeSection !== 'home') return undefined;
     loadHomeTrailers();
     return () => {
       homeTrailersRequestRef.current += 1;
     };
-  }, [loadHomeTrailers]);
+  }, [activeSection, loadHomeTrailers]);
+
+  const executeFollowedOperation = useCallback((mode = 'full', options = {}) => {
+    if (followedOperationRef.current) {
+      if (mode === 'ownership') followedOwnershipQueuedRef.current = true;
+      return followedOperationRef.current;
+    }
+    const operation = (async () => {
+      setFollowedChecking(true);
+      try {
+        const endpoint = mode === 'ownership'
+          ? '/api/user/followed-releases/reconcile-owned'
+          : '/api/user/followed-releases/check';
+        const result = await fetchCurationJson(endpoint, { method: 'POST' });
+        setFollowed(sortFollowedReleases(result.movies || []));
+        if (result.scan_in_progress) {
+          if (mode === 'ownership') {
+            followedOwnershipQueuedRef.current = true;
+            followedOwnershipRetryDelayRef.current = 2000;
+          } else if (options.announceCompletion) {
+            notify('A Following scan is already running', 'neutral');
+          }
+          return result;
+        }
+        const newlyAvailable = result.newly_available || [];
+        const removedOwned = result.removed_owned || [];
+        if (newlyAvailable.length) {
+          notify(`${formatCount(newlyAvailable.length)} followed release${newlyAvailable.length === 1 ? '' : 's'} now available`, 'success');
+          playReleaseAlertSound();
+        }
+        if (removedOwned.length) {
+          notify(`${formatCount(removedOwned.length)} followed release${removedOwned.length === 1 ? '' : 's'} already in library`, 'neutral');
+        } else if (options.announceCompletion) {
+          notify(`Following scan complete - ${formatCount((result.movies || []).length)} still followed`, 'success');
+        }
+        return result;
+      } catch (error) {
+        notify(`Release watchlist ${mode === 'ownership' ? 'reconciliation' : 'scan'} failed: ${error.message}`, 'error');
+        return null;
+      } finally {
+        followedOperationRef.current = null;
+        setFollowedChecking(false);
+        if (followedOwnershipQueuedRef.current) {
+          followedOwnershipQueuedRef.current = false;
+          const retryDelay = followedOwnershipRetryDelayRef.current;
+          followedOwnershipRetryDelayRef.current = 0;
+          window.setTimeout(() => executeFollowedOperation('ownership'), retryDelay);
+        }
+      }
+    })();
+    followedOperationRef.current = operation;
+    return operation;
+  }, [notify]);
 
   useEffect(() => {
+    if (!startupWorkAllowed) return undefined;
     let cancelled = false;
     async function loadFollowedReleases() {
-      setFollowedChecking(true);
       try {
         const initial = await fetchCurationJson('/api/user/followed-releases');
         let serverMovies = initial.movies || [];
+        if (!cancelled) setFollowed(sortFollowedReleases(serverMovies));
         let legacy = [];
         try {
           legacy = JSON.parse(localStorage.getItem('cp.followedMovies') || '[]');
@@ -582,34 +649,33 @@ function ArchiveApp() {
         }
         if (legacy.length && !serverMovies.length) {
           for (const movie of legacy) {
-            await fetchCurationJson('/api/user/followed-releases', {
+            const migrated = await fetchCurationJson('/api/user/followed-releases', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ movie })
             });
+            serverMovies = migrated.movies || serverMovies;
           }
           localStorage.removeItem('cp.followedMovies');
+          if (!cancelled) setFollowed(sortFollowedReleases(serverMovies));
         }
-        const checked = await fetchCurationJson('/api/user/followed-releases/check', { method: 'POST' });
-        if (cancelled) return;
-        serverMovies = sortFollowedReleases(checked.movies || []);
-        setFollowed(serverMovies);
-        if ((checked.newly_available || []).length) {
-          notify(`${formatCount(checked.newly_available.length)} followed release${checked.newly_available.length === 1 ? '' : 's'} now available`, 'success');
-          playReleaseAlertSound();
-        }
-        if ((checked.removed_owned || []).length) {
-          notify(`${formatCount(checked.removed_owned.length)} followed release${checked.removed_owned.length === 1 ? '' : 's'} already in library`, 'neutral');
-        }
+        if (!cancelled) executeFollowedOperation('full');
       } catch (error) {
         if (!cancelled) notify(`Release watchlist unavailable: ${error.message}`, 'error');
-      } finally {
-        if (!cancelled) setFollowedChecking(false);
       }
     }
     loadFollowedReleases();
     return () => { cancelled = true; };
-  }, [notify]);
+  }, [executeFollowedOperation, notify, startupWorkAllowed]);
+
+  useEffect(() => {
+    const reconcileCommittedMovie = (event) => {
+      if (event?.detail?.type !== 'catalog-ready') return;
+      executeFollowedOperation('ownership');
+    };
+    window.addEventListener(CATALOG_READY_EVENT, reconcileCommittedMovie);
+    return () => window.removeEventListener(CATALOG_READY_EVENT, reconcileCommittedMovie);
+  }, [executeFollowedOperation]);
 
   const selectedOwnership = selectedMovie ? ownedMovieFor(selectedMovie, ownership) : null;
   const selectedDetailsKey = movieDetailsCacheKey(selectedMovie, selectedOwnership);
@@ -624,7 +690,7 @@ function ArchiveApp() {
   } : null;
 
   useEffect(() => {
-    if (loading.movies || !selectedDetailsKey || (details[selectedDetailsKey] && !details[selectedDetailsKey].stale)) return;
+    if (activeSection !== 'home' || loading.movies || !selectedDetailsKey || (details[selectedDetailsKey] && !details[selectedDetailsKey].stale)) return;
     let cancelled = false;
     async function loadDetails() {
       try {
@@ -640,11 +706,12 @@ function ArchiveApp() {
     return () => {
       cancelled = true;
     };
-  }, [details, loading.movies, selectedDetailsKey, selectedMovie, selectedOwnership]);
+  }, [activeSection, details, loading.movies, selectedDetailsKey, selectedMovie, selectedOwnership]);
   const streamingAvailable = Boolean(streamingConfig.enabled && String(streamingConfig.url_template || '').trim());
   const streamingLabel = String(streamingConfig.label || '').trim() || 'Stream';
 
   useEffect(() => {
+    if (!startupWorkAllowed) return undefined;
     let cancelled = false;
     fetchJson('/api/streaming/config')
       .then((config) => {
@@ -654,7 +721,7 @@ function ArchiveApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [startupWorkAllowed]);
 
   useEffect(() => {
     function handlePopState() {
@@ -990,6 +1057,7 @@ function ArchiveApp() {
                 ownership={ownership}
                 followed={followed}
                 followedChecking={followedChecking}
+                onScanFollowed={() => executeFollowedOperation('full', { announceCompletion: true })}
                 selectedMovie={selectedMovieWithDetails}
                 selectedOwnership={selectedOwnership}
                 selectedDetails={selectedDetails}
@@ -1035,6 +1103,7 @@ function ArchiveApp() {
                 onFilterRequestConsumed={consumeLibraryFilterRequest}
                 fileDetailsRequest={libraryFileRequest}
                 onFileDetailsRequestConsumed={consumeLibraryFileRequest}
+                onInitialReady={allowStartupWork}
               />
             </Suspense>
           </div>
@@ -1493,11 +1562,14 @@ function TorrentModal({ state, onClose, notify }) {
   const [identityError, setIdentityError] = useState('');
 
   useEffect(() => {
-    setManualQuery(`${state.title || ''} ${state.year || ''}`.trim());
     setVariants(state.variants || []);
     setLoading(state.loading);
     setError(state.error || '');
     setSourceSearch(state.sourceSearch || null);
+  }, [state.variants, state.loading, state.error, state.sourceSearch]);
+
+  useEffect(() => {
+    setManualQuery(`${state.title || ''} ${state.year || ''}`.trim());
     setIdentity({
       tmdb_id: state.tmdb_id || '',
       imdb_id: state.imdb_id || '',
@@ -1510,7 +1582,7 @@ function TorrentModal({ state, onClose, notify }) {
     setResolutionFilter('all');
     setIndexerFilter('all');
     setSortMode('size-desc');
-  }, [state]);
+  }, [state.title, state.year, state.tmdb_id, state.imdb_id, state.upgrade]);
 
   async function resolveIdentity(query = manualQuery) {
     const q = String(query || '').trim();

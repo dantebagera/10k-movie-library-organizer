@@ -384,6 +384,26 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual(actual, expected)
         self.assertEqual(len(actual), len(set(actual)))
 
+    def test_movie_view_hides_new_pending_publications_but_preserves_legacy_rows(self):
+        documents = self._paging_documents(2)
+        file_records = list(documents["app_metadata/files.json"]["files"].values())
+        file_records[1]["movie_view_publication"] = "pending"
+        pending_tmdb_id = file_records[1]["tmdb_id"]
+        documents["app_metadata/tmdb_metadata.json"]["movies"][pending_tmdb_id]["keywords"] = [
+            {"id": "pending-only", "name": "PendingOnly"}
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+            page = store.library_page({"sort": "title"}, page=1, page_size=20)
+            selection = store.library_selection_paths({"sort": "title"})
+            keywords = store.library_keywords("PendingOnly", page=1, page_size=20)
+
+        self.assertEqual(page["total"], 1)
+        self.assertEqual([row["path"] for row in page["candidates"]], [file_records[0]["path"]])
+        self.assertEqual(selection, [file_records[0]["path"]])
+        self.assertEqual(keywords["total_results"], 0)
+
     def test_library_sql_combined_filters_people_lists_and_custom_poster(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")

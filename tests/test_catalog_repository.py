@@ -228,6 +228,64 @@ class CatalogRepositoryTest(unittest.TestCase):
             self.assertEqual(repository.generation('media'), media_before + 1)
             self.assertEqual(repository.generation('curation'), curation_before)
 
+    def test_operational_timestamp_and_revision_refresh_is_not_a_card_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            user_data = self._user_data(root)
+            repository = self._repository(
+                user_data,
+                Path(root) / "catalog.sqlite",
+                export_delay=60,
+            )
+            repository.activate_from_json()
+            file_key = "e:/movies/alien.mkv"
+            current_file = repository.get_record(
+                "app_metadata/files.json", file_key, {}
+            )
+            current_tmdb = repository.get_record(
+                "app_metadata/tmdb_metadata.json", "348", {}
+            )
+            before = {
+                "global": repository.generation(),
+                "media": repository.generation("media"),
+                "canonical": repository.catalog_meta("canonical_media_generation"),
+            }
+
+            repository.upsert_record("app_metadata/files.json", file_key, {
+                **current_file,
+                "identity_revision": 42,
+                "observed_at": 100.0,
+                "probed_at": 101.0,
+                "updated_at": 102.0,
+            })
+            repository.upsert_record("app_metadata/tmdb_metadata.json", "348", {
+                **current_tmdb,
+                "release_years_checked_at": 103.0,
+                "updated_at": 104.0,
+            })
+
+            after = {
+                "global": repository.generation(),
+                "media": repository.generation("media"),
+                "canonical": repository.catalog_meta("canonical_media_generation"),
+            }
+            saved_file = repository.get_record(
+                "app_metadata/files.json", file_key, {}
+            )
+            saved_tmdb = repository.get_record(
+                "app_metadata/tmdb_metadata.json", "348", {}
+            )
+            repository.upsert_record("app_metadata/files.json", file_key, {
+                **saved_file,
+                "identity_title": "Alien: Material Change",
+            })
+            final_media_generation = repository.generation("media")
+
+        self.assertEqual(after, before)
+        self.assertEqual(saved_file["identity_revision"], 42)
+        self.assertEqual(saved_file["probed_at"], 101.0)
+        self.assertEqual(saved_tmdb["release_years_checked_at"], 103.0)
+        self.assertEqual(final_media_generation, before["media"] + 1)
+
     def test_provider_write_updates_relational_projection_before_generation_advances(self):
         with tempfile.TemporaryDirectory() as root:
             user_data = self._user_data(root)

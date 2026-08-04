@@ -1,11 +1,13 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import app
+from services.media_file_facts import MediaFileFacts
 
 
 class SqlMigrationParityTest(unittest.TestCase):
@@ -28,6 +30,7 @@ class SqlMigrationParityTest(unittest.TestCase):
             "plex_cache": dict(app._plex_cache),
             "plex_by_filename": dict(app._plex_matched_by_fname),
             "plex_token": app._plex_token,
+            "ingestion_coordinator": app._library_ingestion_coordinator_instance,
         }
         app._movies_dirs = [str(self.movies_dir)]
         app._movies_dir = str(self.movies_dir)
@@ -39,12 +42,17 @@ class SqlMigrationParityTest(unittest.TestCase):
         app._plex_cache = {}
         app._plex_matched_by_fname = {}
         app._plex_token = ""
+        app._library_ingestion_coordinator_instance = None
         self.paths = self._seed_fixture_library()
         self.expected = json.loads(
             (Path(__file__).parent / "fixtures" / "catalog_performance_expected.json").read_text(encoding="utf-8")
         )
 
     def tearDown(self):
+        coordinator = app._library_ingestion_coordinator_instance
+        if coordinator is not None and coordinator is not self.original_state["ingestion_coordinator"]:
+            coordinator.shutdown(timeout_seconds=2)
+        app._library_ingestion_coordinator_instance = self.original_state["ingestion_coordinator"]
         app._movies_dirs = self.original_state["movies_dirs"]
         app._movies_dir = self.original_state["movies_dir"]
         app._user_data_dir = self.original_state["user_data_dir"]
@@ -62,6 +70,17 @@ class SqlMigrationParityTest(unittest.TestCase):
         path = self.movies_dir / filename
         path.write_bytes(b"movie")
         return path
+
+    @staticmethod
+    def _successful_probe(path):
+        stat_result = path.stat()
+        return MediaFileFacts(
+            probe_status="ok",
+            probe_size=stat_result.st_size,
+            probe_modified_time=stat_result.st_mtime,
+            quality_class="1080p",
+            quality_source="measured",
+        )
 
     def _accepted_movie(self, filename, metadata, *, resolution="1080p", rip_source="WEB-DL", size=100):
         path = self._movie_path(filename)
@@ -753,7 +772,7 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(after_delete_stats["total_files"], before_delete_stats["total_files"] - 1)
         self.assertEqual(after_delete_audit["generation"], after_delete_generation)
 
-    def test_completed_import_invalidates_runtime_cache_before_reconciliation_persists_the_new_generation(self):
+    def test_completed_import_invalidates_runtime_cache_and_never_starts_a_global_reconciliation(self):
         manager = unittest.mock.Mock()
         app._library_cache = {"items": [{"path": str(self.paths["imported"])}]}
         generation = self.store.catalog.generation("media")
@@ -769,16 +788,13 @@ class SqlMigrationParityTest(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual(app._library_cache, {})
-        self.assertEqual(self.store.catalog.generation("media"), generation)
-        start_reconcile.assert_called_once_with(force=True)
-        manager.jobs.upsert.assert_called_once_with("fixture-import", {
-            "library_scan_pending": False,
-            "identity_handoff": {
-                "state": "deferred",
-                "reason": "The download job has no stable identity",
-                "paths": [],
-            },
-        })
+        self.assertGreaterEqual(self.store.catalog.generation("media"), generation)
+        start_reconcile.assert_not_called()
+        job_patch = manager.jobs.upsert.call_args.args[1]
+        self.assertTrue(job_patch["library_scan_pending"])
+        self.assertEqual(job_patch["identity_handoff"]["state"], "queued")
+        self.assertEqual(job_patch["identity_handoff"]["paths"], [])
+        self.assertEqual(job_patch["identity_handoff"]["queue"]["accepted"], 1)
 
     def test_cancelled_download_does_not_touch_catalog_reconciliation_or_identity_handoff(self):
         manager = unittest.mock.Mock()
@@ -956,6 +972,8 @@ class SqlMigrationParityTest(unittest.TestCase):
 
     def test_completed_download_hands_its_stable_identity_to_the_imported_library_file(self):
         downloaded = self._movie_path("Downloaded.Identity.2026.1080p.mkv")
+        stable_time = time.time() - app._FILE_STABILITY_SECONDS - 1
+        os.utime(downloaded, (stable_time, stable_time))
         manager = unittest.mock.Mock()
         app._library_cache = {"items": [{"path": str(self.paths["imported"])}]}
         completion = [{
@@ -969,7 +987,8 @@ class SqlMigrationParityTest(unittest.TestCase):
             "year": "2026",
         }]
 
-        with patch("app._fetch_tmdb_metadata_by_id", return_value={
+        with patch("app.probe_media_file", return_value=self._successful_probe(downloaded)), patch(
+            "app._fetch_tmdb_metadata_by_id", return_value={
             "tmdb_id": "800",
             "imdb_id": "tt0000800",
             "title": "Downloaded Identity",
@@ -993,10 +1012,12 @@ class SqlMigrationParityTest(unittest.TestCase):
         self.assertEqual(job_patch["identity_handoff"]["state"], "applied")
         self.assertEqual(job_patch["identity_handoff"]["paths"], [str(downloaded)])
         self.assertFalse(job_patch["library_scan_pending"])
-        start_reconcile.assert_called_once_with(force=True)
+        start_reconcile.assert_not_called()
 
     def test_imdb_download_identity_resolves_before_startup_reconciliation(self):
         downloaded = self._movie_path("IMDb.Identity.2026.1080p.mkv")
+        stable_time = time.time() - app._FILE_STABILITY_SECONDS - 1
+        os.utime(downloaded, (stable_time, stable_time))
         manager = unittest.mock.Mock()
         before_generation = self.store.catalog.generation("media")
         completion = [{
@@ -1009,7 +1030,8 @@ class SqlMigrationParityTest(unittest.TestCase):
             "year": "2026",
         }]
 
-        with patch("app._fetch_tmdb_metadata_by_imdb", return_value={
+        with patch("app.probe_media_file", return_value=self._successful_probe(downloaded)), patch(
+            "app._fetch_tmdb_metadata_by_imdb", return_value={
             "tmdb_id": "900",
             "imdb_id": "tt0000900",
             "title": "IMDb Identity",

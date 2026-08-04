@@ -3,7 +3,7 @@ import unittest
 import urllib.error
 from email.message import Message
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app
 
@@ -319,7 +319,7 @@ class QBittorrentApiTests(unittest.TestCase):
 
         self.assertEqual(finalized.get_json()["results"][0]["state"], "imported")
 
-    def test_finalize_scans_imported_payload_even_when_qbittorrent_cleanup_failed(self):
+    def test_finalize_keeps_invalid_cleanup_payload_pending_without_a_global_scan(self):
         imported = Path(self.temp.name) / "Splice.2009"
         imported.mkdir()
         self.manager.completed_results = [{
@@ -333,11 +333,35 @@ class QBittorrentApiTests(unittest.TestCase):
             response = self.client.post("/api/qbittorrent/finalize")
 
         self.assertEqual(response.status_code, 200)
-        reconcile.assert_called_once_with(force=True)
+        reconcile.assert_not_called()
         job = self.manager.existing_jobs["abc"]
-        self.assertFalse(job["library_scan_pending"])
+        self.assertTrue(job["library_scan_pending"])
         self.assertEqual(job["identity_handoff"]["state"], "deferred")
         self.assertEqual(job["identity_handoff"]["reason"], "The download job has no stable identity")
+
+    def test_completed_video_uses_exact_path_coordinator_and_keeps_journal_pending_until_commit(self):
+        movie = Path(self.temp.name) / "Movie.2026.mkv"
+        movie.write_bytes(b"fixture")
+        item = {"hash": "abc", "state": "imported", "imported_paths": [str(movie)], "library_scan_pending": True}
+        coordinator = Mock()
+        coordinator.reconcile_paths.return_value = {"accepted": 1, "rejected": 0}
+        repository = Mock()
+        repository.final_card_publication.return_value = []
+        handoff = {"state": "ready", "paths": [str(movie)], "tmdb_id": "1", "metadata": {"tmdb_id": "1"}}
+        with (
+            patch.object(app, "_library_ingestion_coordinator", return_value=coordinator),
+            patch.object(app, "_catalog_repository", return_value=repository),
+            patch.object(app, "_apply_completed_download_identity", return_value=handoff),
+            patch.object(app, "_prepare_final_card_assets"),
+            patch.object(app, "_start_library_reconcile") as full_scan,
+        ):
+            self.assertTrue(app._handle_completed_qbittorrent_imports(self.manager, [item]))
+        full_scan.assert_not_called()
+        coordinator.reconcile_paths.assert_called_once()
+        args, kwargs = coordinator.reconcile_paths.call_args
+        self.assertEqual(args[0], [str(movie)])
+        self.assertEqual(kwargs["reason"], "qbittorrent")
+        self.assertTrue(self.manager.existing_jobs["abc"]["library_scan_pending"])
 
 
 if __name__ == "__main__":

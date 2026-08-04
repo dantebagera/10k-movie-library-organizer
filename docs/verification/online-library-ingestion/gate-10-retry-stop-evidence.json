@@ -1,0 +1,79 @@
+{
+  "gate": "10-retry-1",
+  "result": "aborted_before_browser_or_media_copy",
+  "stop_reason": "startup_media_generation_changed",
+  "repository": {
+    "branch": "master",
+    "head": "eaf6a749133fc3dec279f82f707719a3e5ed1bf0",
+    "remote": "https://github.com/dantebagera/cinema-paradiso.git",
+    "owner": "DANTE-PCX\\dante",
+    "current_user": "DANTE-PCX\\dante"
+  },
+  "backup": {
+    "directory": "C:\\Users\\dante\\AppData\\Local\\Temp\\cp-gate10-retry-backup-6f5d5c4f9c594875b39c3c0e4eb74c90",
+    "files": 60,
+    "bytes": 249992608,
+    "catalog_sha256": "C8E0F52C65C9A61D8CEF45A522EA897876C73B889783999E3A17EBB90FA47961"
+  },
+  "processes": {
+    "cp_pid": 45036,
+    "cp_stopped": true,
+    "cp_port_5000_listening_after_stop": false,
+    "qbittorrent_pid": 42792,
+    "qbittorrent_port": 8686,
+    "qbittorrent_restarted_or_changed": false
+  },
+  "startup_status": {
+    "writer_lease_acquired": true,
+    "observer_implementation": "watchdog-native",
+    "observer_alive": true,
+    "root": "E:\\Movies",
+    "root_kind": "local",
+    "root_online": true,
+    "queue_depth": 0,
+    "queue_capacity": 4096,
+    "active_work": false,
+    "dirty_root": false,
+    "media_generation_before": 7629,
+    "media_generation_at_stop": 7635
+  },
+  "catalog_diff": {
+    "changed_catalog_sha256": "020FA4C613C2981677034DAA2EB65DAEC30F98BA7D930C1952D8C6BDD14798B0",
+    "restored_catalog_sha256": "C8E0F52C65C9A61D8CEF45A522EA897876C73B889783999E3A17EBB90FA47961",
+    "row_count_changes": 0,
+    "changed_movie_path": "E:\\Movies\\The Loved Ones (2009) [BluRay] [1080p] [YTS.AM]\\The.Loved.Ones.2009.1080p.BluRay.x264-[YTS.AM].mp4",
+    "changed_movie_semantic_fields": [],
+    "changed_operational_fields": [
+      "identity_revision",
+      "revision",
+      "probed_at",
+      "observed_at",
+      "updated_at"
+    ],
+    "global_generation_delta": 6,
+    "media_generation_delta": 6,
+    "canonical_media_generation_delta": 6,
+    "quick_check": "ok",
+    "foreign_key_errors": 0,
+    "production_wal_exists_after_restore": false,
+    "production_shm_exists_after_restore": false
+  },
+  "cause": {
+    "missing_operational_key": "library_directory_revisions_v1",
+    "first_snapshot_behavior": "reconcile_all_now",
+    "existing_test_that_allowed_behavior": "test_first_snapshot_uses_authoritative_full_recovery",
+    "gap": "populated_upgrade_catalog_without_directory_revision_checkpoint"
+  },
+  "representative_item": {
+    "source_sha256": "3DFCF693F87A50822BCFF340D4308BB0039749C7EF6EF5A21176DC623BF90587",
+    "source_bytes": 2989813923,
+    "destination_exists": false,
+    "copied_or_moved": false
+  },
+  "unrelated_state": {
+    "config_curation_metadata_mismatches": 0,
+    "app_metadata_files": 55,
+    "assets_created_or_modified": 0,
+    "browser_opened": false
+  }
+}

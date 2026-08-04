@@ -11,6 +11,7 @@ export default function useMovieCollectionCache() {
   const cacheRef = useRef(cache);
   const pendingRef = useRef(new Map());
   const generationRef = useRef(0);
+  const loadRef = useRef(null);
 
   const updateCache = useCallback((updater) => {
     setCache((current) => {
@@ -21,11 +22,15 @@ export default function useMovieCollectionCache() {
   }, []);
 
   const clear = useCallback(() => {
+    const interrupted = Array.from(pendingRef.current.values(), ({ details }) => details).filter(Boolean);
     generationRef.current += 1;
     pendingRef.current.forEach(({ controller }) => controller.abort());
     pendingRef.current.clear();
     cacheRef.current = {};
     setCache({});
+    if (interrupted.length) {
+      queueMicrotask(() => interrupted.forEach((details) => loadRef.current?.(details, { force: true })));
+    }
   }, []);
 
   const storeLoaded = useCallback((details, data) => {
@@ -92,9 +97,11 @@ export default function useMovieCollectionCache() {
         if (pending?.promise === promise) pendingRef.current.delete(cacheKey);
       });
 
-    pendingRef.current.set(cacheKey, { controller, promise });
+    pendingRef.current.set(cacheKey, { controller, promise, details });
     return promise;
   }, [updateCache]);
+
+  loadRef.current = load;
 
   const getView = useCallback((details) => movieCollectionView(cache, details), [cache]);
 

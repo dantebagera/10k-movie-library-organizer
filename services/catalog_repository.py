@@ -5,9 +5,12 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from services.catalog_store import CatalogError, CatalogStore, _bool, _json_text, _number, _text
+from services.canonical_catalog import CANONICAL_CARD_FIELDS, CANONICAL_CONTRACT_VERSION
+from services.media_file_facts import FILE_FACTS_VERSION, QUALITY_CLASSIFIER_VERSION
 
 
 CORE_DOCUMENTS = {
@@ -21,6 +24,30 @@ CORE_DOCUMENTS = {
     "followed_releases.json",
 }
 EXTERNAL_DOCUMENTS = {"qbittorrent/jobs.json"}
+OPERATIONAL_DOCUMENTS = {"app_metadata/library_inventory.json"}
+ROW_DOCUMENT_TABLES = {
+    "app_metadata/files.json": ("media_files", "path_key"),
+    "app_metadata/tmdb_metadata.json": ("tmdb_movies", "tmdb_id"),
+    "app_metadata/plex_metadata.json": ("plex_files", "path_key"),
+    "app_metadata/manual_matches.json": ("manual_matches", "path_key"),
+    "app_metadata/identity_audit_fingerprints.json": (
+        "identity_audit_fingerprints",
+        "path_key",
+    ),
+}
+NON_CARD_FIELDS = {
+    "updated_at",
+}
+NON_CARD_FIELDS_BY_DOCUMENT = {
+    "app_metadata/files.json": {
+        "identity_revision",
+        "observed_at",
+        "probed_at",
+    },
+    "app_metadata/tmdb_metadata.json": {
+        "release_years_checked_at",
+    },
+}
 
 
 def _document_domain(name):
@@ -57,6 +84,12 @@ class CatalogRepository:
     @property
     def database_path(self):
         return self.store.database_path
+
+    @contextmanager
+    def transaction(self):
+        """Open one repository-owned immediate transaction for future atomic work."""
+        with self._lock, self.store.transaction() as connection:
+            yield connection
 
     def authority_enabled(self):
         connection = self.store.connect()
@@ -217,6 +250,99 @@ class CatalogRepository:
     def owned_movie(self, *, path="", movie_key=""):
         path_key = os.path.normcase(os.path.normpath(str(path or ""))) if path else ""
         return self.store.owned_movie_candidate(path_key=path_key, movie_key=movie_key)
+
+    def final_card_publication(self, paths):
+        """Atomically publish paths satisfying the authoritative final-card predicate.
+
+        Existing catalog rows predate the online-ingestion publication marker and
+        remain visible. New ingestion writes ``movie_view_publication=pending``;
+        this method is the one transition that makes those rows queryable by Movie
+        View, and its media-generation bump is committed before an event is sent.
+        """
+        path_keys = [
+            os.path.normcase(os.path.normpath(str(path or "")))
+            for path in paths or () if str(path or "").strip()
+        ]
+        if not path_keys:
+            return []
+        ready = []
+        changed = False
+        with self._lock, self.store.transaction() as connection:
+            candidates = self.store._candidates_for_path_keys(connection, path_keys)
+            for candidate in candidates:
+                raw_value = candidate.get("raw_json") or {}
+                if isinstance(raw_value, str):
+                    try:
+                        raw_value = json.loads(raw_value)
+                    except (TypeError, ValueError):
+                        raw_value = {}
+                raw = dict(raw_value) if isinstance(raw_value, dict) else {}
+                card_value = candidate.get("relational_canonical") or {}
+                if isinstance(card_value, str):
+                    try:
+                        card_value = json.loads(card_value)
+                    except (TypeError, ValueError):
+                        card_value = {}
+                card = dict(card_value) if isinstance(card_value, dict) else {}
+                stable_probe = (
+                    raw.get("ingest_status") == "stable"
+                    and raw.get("probe_status") == "ok"
+                    and int(raw.get("probe_size") or -1) == int(raw.get("size") or -2)
+                    and float(raw.get("probe_modified_time") or -1) == float(raw.get("modified_time") or -2)
+                    and not str(raw.get("probe_error") or "")
+                    and int(raw.get("file_facts_version") or 0) == FILE_FACTS_VERSION
+                    and int(raw.get("classifier_version") or 0) == QUALITY_CLASSIFIER_VERSION
+                )
+                identity_ready = (
+                    bool(raw.get("metadata_accepted"))
+                    and raw.get("identity_status") == "accepted"
+                    and bool(card.get("accepted")) and bool(card.get("movie_key"))
+                    and bool(card.get("title")) and bool(str(card.get("year") or ""))
+                    and bool(card.get("selected_provider"))
+                    and bool(card.get("selected_provider_snapshot"))
+                    and card.get("enrichment_status") == "complete"
+                    and not bool(card.get("fallback_active"))
+                    and int(card.get("metadata_contract_version") or 0) == CANONICAL_CONTRACT_VERSION
+                    and card.get("projection_contract") == "canonical_movie_card"
+                    and card.get("people_status") in {"complete", "empty"}
+                    and all(field in card for field in CANONICAL_CARD_FIELDS)
+                )
+                poster = str(card.get("poster_url") or "")
+                local_poster = str(card.get("local_poster_url") or "")
+                poster_ready = not poster
+                if local_poster.startswith("/api/assets/"):
+                    checksum = local_poster.rsplit("/", 1)[-1]
+                    asset = connection.execute(
+                        "SELECT status, checksum, local_path FROM media_assets "
+                        "WHERE checksum=? AND status='ready' LIMIT 1",
+                        (checksum,),
+                    ).fetchone()
+                    poster_ready = bool(
+                        asset and asset[0] == "ready" and asset[1] == checksum
+                        and len(checksum) == 64 and Path(asset[2]).is_file()
+                    )
+                if not (stable_probe and identity_ready and poster_ready):
+                    continue
+                if raw.get("movie_view_publication") != "ready":
+                    raw["movie_view_publication"] = "ready"
+                    key = candidate.get("path_key") or os.path.normcase(
+                        os.path.normpath(str(raw.get("path") or candidate.get("path") or ""))
+                    )
+                    connection.execute(
+                        "UPDATE media_files SET raw_json=? WHERE path_key=?",
+                        (_json_text(raw), key),
+                    )
+                    changed = True
+                ready.append({
+                    "path": raw.get("path") or candidate.get("path") or "",
+                    "movie_key": card.get("movie_key"),
+                })
+            if changed:
+                self._bump_generation(connection, ("app_metadata/files.json",))
+                self._cache.pop("app_metadata/files.json", None)
+        if changed:
+            self.schedule_export("app_metadata/files.json")
+        return ready
 
     @staticmethod
     def _normalize_filter_paths(filters):
@@ -408,6 +534,30 @@ class CatalogRepository:
             self._cache.pop(name, None)
         self.schedule_export(name)
 
+    def replace_operational_document(self, name, document):
+        """Persist bounded bookkeeping without advancing catalog generations."""
+        name = str(name).replace("\\", "/")
+        if name not in OPERATIONAL_DOCUMENTS:
+            raise CatalogError(f"Unsupported operational document: {name}")
+        document = json.loads(json.dumps(document))
+        payload = _json_text(document)
+        changed = False
+        with self._lock, self.store.transaction() as connection:
+            current = connection.execute(
+                "SELECT payload_json FROM source_documents WHERE name=?",
+                (name,),
+            ).fetchone()
+            if not current or current[0] != payload:
+                connection.execute(
+                    "INSERT OR REPLACE INTO source_documents(name, payload_json) VALUES(?, ?)",
+                    (name, payload),
+                )
+                self._cache.pop(name, None)
+                changed = True
+        if changed:
+            self.schedule_export(name)
+        return changed
+
     def _replace_normalized_document(self, connection, name, document):
         if name == "app_metadata/files.json":
             connection.execute("DELETE FROM media_identity_keys")
@@ -447,19 +597,9 @@ class CatalogRepository:
     def get_record(self, name, key, fallback=None):
         name = str(name).replace("\\", "/")
         key = str(key)
-        table_map = {
-            "app_metadata/files.json": ("media_files", "path_key"),
-            "app_metadata/tmdb_metadata.json": ("tmdb_movies", "tmdb_id"),
-            "app_metadata/plex_metadata.json": ("plex_files", "path_key"),
-            "app_metadata/manual_matches.json": ("manual_matches", "path_key"),
-            "app_metadata/identity_audit_fingerprints.json": (
-                "identity_audit_fingerprints",
-                "path_key",
-            ),
-        }
-        if name not in table_map:
+        if name not in ROW_DOCUMENT_TABLES:
             raise KeyError(f"Document does not support row reads: {name}")
-        table, key_column = table_map[name]
+        table, key_column = ROW_DOCUMENT_TABLES[name]
         connection = self.store.connect()
         try:
             row = connection.execute(
@@ -474,8 +614,31 @@ class CatalogRepository:
         records = {str(key): json.loads(json.dumps(record or {})) for key, record in dict(records or {}).items()}
         if not records:
             return {}
+        if name not in ROW_DOCUMENT_TABLES:
+            raise KeyError(f"Document does not support row writes: {name}")
+        table, key_column = ROW_DOCUMENT_TABLES[name]
+        ignored = NON_CARD_FIELDS | NON_CARD_FIELDS_BY_DOCUMENT.get(name, set())
+
+        def card_payload(record):
+            return {
+                key: value
+                for key, value in dict(record or {}).items()
+                if key not in ignored
+            }
+
         with self._lock, self.store.transaction() as connection:
+            material_change = False
             for key, record in records.items():
+                current = connection.execute(
+                    f"SELECT raw_json FROM {table} WHERE {key_column} = ?",
+                    (key,),
+                ).fetchone()
+                try:
+                    current_record = json.loads(current[0]) if current else None
+                except (TypeError, ValueError):
+                    current_record = None
+                if current_record is None or card_payload(current_record) != card_payload(record):
+                    material_change = True
                 self._upsert_record(connection, name, key, record)
             self.store.canonical.sync_changes(connection, name, records.keys())
             if name in {
@@ -488,7 +651,12 @@ class CatalogRepository:
                     connection,
                     None if name == "app_metadata/tmdb_metadata.json" else records.keys(),
                 )
-            self._bump_generation(connection, (name,))
+            if material_change:
+                self._bump_generation(connection, (name,))
+            else:
+                connection.execute(
+                    "INSERT OR REPLACE INTO catalog_meta(key, value) VALUES('export_dirty', '1')"
+                )
             self._cache.pop(name, None)
         self.schedule_export(name)
         return records

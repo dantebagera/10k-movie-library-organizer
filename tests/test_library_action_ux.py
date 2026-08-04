@@ -248,7 +248,12 @@ class LibraryActionUxTest(unittest.TestCase):
     def test_library_refreshes_quietly_for_background_changes(self):
         self.assertIn("function LibraryWorkspace({", self.source)
         self.assertIn("window.addEventListener('cp-library-changed', handleLibraryChanged)", self.source)
-        self.assertIn("loadLibrary(false, { quiet: true })", self.source)
+        self.assertIn(
+            "loadLibrary(false, { background: true, quiet: true, silentSuccess: true })",
+            self.source,
+        )
+        self.assertIn("if (!background) {", self.source)
+        self.assertIn("if (!background && requestSeq === libraryRequestSeq.current) setLoading(false)", self.source)
         self.assertIn("const requestedPage = forceScan ? 1 : currentPage", self.source)
         self.assertNotIn("if (!quiet) setCurrentPage(1)", self.source)
         self.assertNotIn("Library changed. Refresh view", self.source)
@@ -506,6 +511,22 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("/api/sources/review/submit", self.source_review_api_source)
         self.assertIn("source-review-dialog", self.source_review_dialog_source)
 
+    def test_following_is_a_protected_projection_of_the_release_watcher(self):
+        movie_lists_source = self.movie_lists_workspace_source
+        self.assertIn("name: 'Following'", movie_lists_source)
+        self.assertIn("system_type: 'following'", movie_lists_source)
+        self.assertIn("movies: followed", movie_lists_source)
+        self.assertIn("selectedListIsFollowing", movie_lists_source)
+        self.assertNotIn("/api/user/lists/following", movie_lists_source)
+
+    def test_release_watcher_keeps_three_row_preview_and_exposes_manual_scan(self):
+        home_source = (Path(__file__).resolve().parents[1] / "src" / "features" / "home" / "HomeWorkspace.jsx").read_text(encoding="utf-8")
+        self.assertIn("sortFollowedReleases(followed).slice(0, 3)", home_source)
+        self.assertIn("aria-label={checking ? 'Scanning followed releases' : 'Scan followed releases'}", home_source)
+        self.assertIn("filterCounts", home_source)
+        self.assertIn("onScanFollowed={() => executeFollowedOperation('full', { announceCompletion: true })}", self.source)
+        self.assertIn("/api/user/followed-releases/reconcile-owned", self.source)
+
     def test_movie_lists_reuses_global_movie_cards_and_normal_per_card_source_search(self):
         movie_lists_source = self.movie_lists_workspace_source
         self.assertIn("<LibraryMovieCard", movie_lists_source)
@@ -534,14 +555,16 @@ class LibraryActionUxTest(unittest.TestCase):
 
     def test_library_loads_ignore_older_responses(self):
         library_workspace = (Path(__file__).resolve().parents[1] / "src" / "features" / "library" / "LibraryWorkspace.jsx").read_text(encoding="utf-8")
-        self.assertRegex(
-            library_workspace,
-            re.compile(
-                r"const requestSeq = libraryRequestSeq\.current \+ 1;.*"
-                r"libraryRequestSeq\.current = requestSeq;.*"
-                r"if \(requestSeq !== libraryRequestSeq\.current\) return;",
-                re.S,
+        self.assertIn("const backgroundRequestSeq = useRef(0)", library_workspace)
+        self.assertIn("? backgroundRequestSeq.current + 1", library_workspace)
+        self.assertIn(": libraryRequestSeq.current + 1", library_workspace)
+        self.assertIn("if (background) backgroundRequestSeq.current = requestSeq", library_workspace)
+        self.assertIn("else libraryRequestSeq.current = requestSeq", library_workspace)
+        self.assertGreaterEqual(
+            library_workspace.count(
+                "requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)"
             ),
+            3,
         )
 
     def test_ai_control_ownership_checks_ignore_a_previous_page_or_plan(self):

@@ -1,0 +1,96 @@
+{
+  "captured_at": "2026-08-01T18:05:37+03:00",
+  "gate": 2,
+  "outcome": "passed_after_gate_2a_playwright_correction",
+  "repository": {
+    "branch": "master",
+    "head": "eaf6a749133fc3dec279f82f707719a3e5ed1bf0",
+    "schema_version": 10
+  },
+  "isolation": {
+    "cp_test_mode": true,
+    "unique_test_root_for_every_run": true,
+    "test_roots_are_os_temp_children": true,
+    "isolated_catalogs": true,
+    "isolated_fixture_media": true,
+    "production_catalog_opened_by_test": false,
+    "configured_live_media_root_scanned_by_test": false,
+    "live_processes_restarted": false
+  },
+  "movie_view_test_client": {
+    "test_root": "C:\\Users\\dante\\AppData\\Local\\Temp\\cp-gate2-api-performance-final-8cf8322e0f3943a4900e0334c077b416",
+    "fixture_file_count": 1555,
+    "accepted_card_count": 55,
+    "route": "/api/library?view=cards&page=1&page_size=40&sort=added",
+    "cold": {
+      "latency_ms": 153.918,
+      "sql_statements": 22,
+      "payload_bytes": 81454,
+      "gzip_bytes": 3350,
+      "filesystem_walks": 0,
+      "isfile_calls": 0,
+      "probe_calls": 0,
+      "provider_calls": 0,
+      "returned_cards": 40,
+      "total_cards": 55
+    },
+    "warm": {
+      "request_count": 30,
+      "latency_p50_ms": 16.078,
+      "latency_p95_ms": 16.595,
+      "sql_statements_min": 13,
+      "sql_statements_p50": 13,
+      "sql_statements_max": 13,
+      "filesystem_walks_total": 0,
+      "isfile_calls_total": 0,
+      "probe_calls_total": 0,
+      "provider_calls_total": 0
+    }
+  },
+  "reconciliation_micro_fixture": {
+    "test_root": null,
+    "test_root_recording": "A unique GUID-named CP_TEST_ROOT below the OS temp directory was printed and validated before execution; the exact root string was not retained in the summarized console record.",
+    "file_count": 3,
+    "full_scan": {
+      "elapsed_ms": 79.278,
+      "filesystem_walks": 1,
+      "probe_calls": 3,
+      "provider_calls": 0,
+      "provider": "filename",
+      "result": {
+        "checked": 3,
+        "matched": 0,
+        "review": 3,
+        "pending": 0,
+        "failed": 0,
+        "removed": 0,
+        "facts_refreshed": 0
+      }
+    },
+    "known_path": {
+      "elapsed_ms": 33.461,
+      "global_filesystem_walks": 0,
+      "probe_calls": 1,
+      "result_review": 1
+    }
+  },
+  "catalog_startup": {
+    "isolated_repository_open_with_writer_lease_ms": 6.616,
+    "gate_0_isolated_database_open_ms": 4.142,
+    "delta_ms": 2.474,
+    "budget_ms": 250,
+    "passed": true
+  },
+  "gate_0_comparison": {
+    "cold_latency_ms": {"gate_0": 223.9, "gate_2": 153.918, "regression": false},
+    "cold_sql_statements": {"gate_0": 22, "gate_2": 22, "regression": false},
+    "cold_payload_bytes": {"gate_0": 82924, "gate_2": 81454, "regression": false},
+    "cold_isfile_calls": {"gate_0": 1555, "gate_2": 0, "regression": false},
+    "warm_p50_ms": {"gate_0": 16.732, "gate_2": 16.078, "regression": false},
+    "warm_p95_ms": {"gate_0": 17.842, "gate_2": 16.595, "regression": false},
+    "warm_sql_statements": {"gate_0": 13, "gate_2": 13, "regression": false},
+    "full_scan_ms": {"gate_0": 162.771, "gate_2": 79.278, "regression": false}
+  },
+  "budgets_passed": true,
+  "qualification": "The fixture text differs from Gate 0, so payload size is a growth guard rather than byte-for-byte fixture parity. Counts and response shape are comparable; payload is smaller. Gate 2A subsequently restored the desktop Playwright suite to 48/48."
+}

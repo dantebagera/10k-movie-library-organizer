@@ -15,8 +15,25 @@ class LibraryReconcileTest(unittest.TestCase):
         self.original_tmdb_key = app._tmdb_key
         self.original_library_cache = dict(app._library_cache)
         self.original_plex_cache = dict(app._plex_cache)
+        self.probe_patcher = patch(
+            "app.probe_media_file",
+            side_effect=self._accepted_fixture_probe,
+        )
+        self.probe_patcher.start()
+
+    @staticmethod
+    def _accepted_fixture_probe(path):
+        stat_result = Path(path).stat()
+        return MediaFileFacts(
+            probe_status="ok",
+            probe_size=stat_result.st_size,
+            probe_modified_time=stat_result.st_mtime,
+            quality_class="1080p",
+            quality_source="measured",
+        )
 
     def tearDown(self):
+        self.probe_patcher.stop()
         app._movies_dirs = self.original_dirs
         app._movies_dir = self.original_dir
         app._user_data_dir = self.original_user_data

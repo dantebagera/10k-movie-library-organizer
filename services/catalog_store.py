@@ -1393,7 +1393,11 @@ class CatalogStore:
                 FROM media_files mf
                 JOIN canonical_movie_files cmf ON cmf.path_key = mf.path_key
                 JOIN canonical_movies cm ON cm.movie_key = cmf.movie_key
-                WHERE mf.identity_status = 'accepted' OR mf.metadata_accepted = 1
+                WHERE (mf.identity_status = 'accepted' OR mf.metadata_accepted = 1)
+                  AND (
+                    json_type(mf.raw_json, '$.movie_view_publication') IS NULL
+                    OR json_extract(mf.raw_json, '$.movie_view_publication') = 'ready'
+                  )
             ),
             effective AS (
                 SELECT
@@ -1748,7 +1752,11 @@ class CatalogStore:
                 JOIN canonical_movie_files AS cmf ON cmf.path_key = mf.path_key
                 JOIN canonical_movies AS cm ON cm.movie_key = cmf.movie_key
                 JOIN provider_movie_snapshots AS pms ON pms.movie_key = cm.movie_key
-                WHERE mf.identity_status = 'accepted' OR mf.metadata_accepted = 1
+                WHERE (mf.identity_status = 'accepted' OR mf.metadata_accepted = 1)
+                  AND (
+                    json_type(mf.raw_json, '$.movie_view_publication') IS NULL
+                    OR json_extract(mf.raw_json, '$.movie_view_publication') = 'ready'
+                  )
             ),
             effective AS MATERIALIZED (
                 SELECT path_key, snapshot_key

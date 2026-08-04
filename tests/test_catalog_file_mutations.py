@@ -266,8 +266,17 @@ class CatalogFileMutationTest(unittest.TestCase):
                 app._movies_dir = movies_tmp
                 app._user_data_dir = data_tmp
                 app._tmdb_key = "test-key"
+                stat_result = movie_path.stat()
+                accepted_probe = MediaFileFacts(
+                    probe_status="ok",
+                    probe_size=stat_result.st_size,
+                    probe_modified_time=stat_result.st_mtime,
+                    quality_class="1080p",
+                    quality_source="measured",
+                )
                 with patch("app._active_metadata_provider", return_value="tmdb"), \
                         patch("app._resolve_tmdb_identity", return_value=app._identity_resolution("unmatched")), \
+                        patch("app.probe_media_file", return_value=accepted_probe), \
                         patch("app._file_copy_is_stable", return_value=True):
                     first = app._reconcile_library_files()
                     second = app._reconcile_library_files()

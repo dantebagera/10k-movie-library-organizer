@@ -1,3 +1,4 @@
+import atexit
 import os
 import re
 import stat
@@ -25,7 +26,8 @@ from services.movie_identity import (
     ownership_keys as _ownership_keys,
     same_public_identity as _same_public_identity,
 )
-from services.catalog_repository import CatalogRepository
+from services.catalog_repository import CatalogRepository, catalog_database_path
+from services.catalog_writer_lease import CatalogWriterLease
 from services.canonical_catalog import (
     CANONICAL_CONTRACT_VERSION,
     WRITER_JOBS,
@@ -83,8 +85,16 @@ from services.qbittorrent import (
     is_path_within,
     magnet_hash,
 )
-from flask import Flask, jsonify, request, make_response, send_file, send_from_directory
+from flask import Flask, Response, jsonify, request, make_response, send_file, send_from_directory
+from services.catalog_events import CatalogEventBroker
 from services.library_mutations import LibraryMutationError, LibraryMutationService
+from services.library_ingestion import (
+    LibraryIngestionCoordinator,
+    LibraryIngestionDependencies,
+    file_copy_is_stable as _ingestion_file_copy_is_stable,
+)
+from services.library_observer import LibraryObserverAdapter
+from services.library_startup_catchup import LibraryStartupCatchup
 from services.source_search import ProwlarrClient
 from services.download_monitor import DownloadImportMonitor
 from services.media_assets import MediaAssetError, MediaAssetService
@@ -253,6 +263,7 @@ FOLLOWED_RELEASE_QUERY_TIMEOUT_SECONDS = 8
 FOLLOWED_RELEASE_DEADLINE_SECONDS = 25
 _source_search_jobs = {}
 _source_search_jobs_lock = threading.Lock()
+_followed_release_scan_lock = threading.Lock()
 _ai_control_plan_store = ai_control.PlanStore(ttl_seconds=900)
 
 
@@ -372,6 +383,7 @@ _plex_matched_by_fname   = {}  # filename.lower() -> matched entry   (path-misma
 _plex_unmatched_by_fname = {}  # filename.lower() -> unmatched entry (path-mismatch fallback)
 
 _catalog_repository_cache = {}
+_catalog_writer_lease_cache = {}
 _media_asset_service_cache = {}
 
 
@@ -387,17 +399,32 @@ def _catalog_repository_for(base_dir):
         database_path = (
             base_dir / '.catalog-test.sqlite'
             if is_temporary or base_dir != configured
-            else None
+            else catalog_database_path(base_dir)
         )
-        repository = CatalogRepository(
-            base_dir,
-            database_path=database_path,
-            export_delay=0 if is_temporary else 0.5,
-        )
-        _startup_metrics['database_open_ms'] = round((time.perf_counter() - repository_started) * 1000, 3)
-        migration_started = time.perf_counter()
-        repository.activate_from_json()
-        _startup_metrics['migration_check_ms'] = round((time.perf_counter() - migration_started) * 1000, 3)
+        lease = CatalogWriterLease(
+            database_path,
+            lease_root=(_TEST_ROOT / 'catalog-leases') if _TEST_MODE else None,
+        ).acquire()
+        try:
+            repository = CatalogRepository(
+                base_dir,
+                database_path=database_path,
+                export_delay=0 if is_temporary else 0.5,
+            )
+            _startup_metrics['database_open_ms'] = round(
+                (time.perf_counter() - repository_started) * 1000,
+                3,
+            )
+            migration_started = time.perf_counter()
+            repository.activate_from_json()
+            _startup_metrics['migration_check_ms'] = round(
+                (time.perf_counter() - migration_started) * 1000,
+                3,
+            )
+        except Exception:
+            lease.close()
+            raise
+        _catalog_writer_lease_cache[cache_key] = lease
         _catalog_repository_cache[cache_key] = repository
     return repository
 
@@ -419,6 +446,43 @@ def _media_asset_service():
         service = MediaAssetService(repository, metadata_root)
         _media_asset_service_cache[cache_key] = service
     return service
+
+
+def _prepare_final_card_assets(paths):
+    """Finish only poster assets required by the named candidate paths."""
+    candidates = _catalog_repository().library_candidates_for_paths(paths)
+    service = _media_asset_service()
+    for candidate in candidates:
+        canonical = dict(candidate.get('relational_canonical') or {})
+        local_url = str(canonical.get('local_poster_url') or '')
+        if local_url.startswith('/api/assets/'):
+            continue
+        poster_url = str(
+            canonical.get('remote_poster_url') or canonical.get('poster_url') or ''
+        )
+        if not poster_url.startswith(('http://', 'https://')):
+            continue
+        movie_key = str(canonical.get('movie_key') or '')
+        provider = str(canonical.get('selected_provider') or 'provider')
+        if not movie_key:
+            raise MediaAssetError('Canonical movie key is required before poster preparation')
+        asset_key = service.queue_movie(
+            movie_key,
+            'poster',
+            provider,
+            poster_url,
+            retention_class='owned',
+            selected=True,
+        )
+        asset = service.download(asset_key)
+        checksum = str((asset or {}).get('checksum') or '')
+        local_path = Path((asset or {}).get('local_path') or '')
+        if (
+            (asset or {}).get('status') != 'ready'
+            or len(checksum) != 64
+            or not local_path.is_file()
+        ):
+            raise MediaAssetError('Poster asset did not reach checksum-verified ready state')
 
 
 def _resolve_player_local_poster(reference):
@@ -1499,10 +1563,25 @@ class AppMetadataStore:
     def get_library_inventory(self):
         return self._read_json(self.library_inventory_file, {'files': {}}).get('files', {})
 
+    def has_library_inventory(self):
+        return self.library_inventory_file.exists() or self.catalog.has_document(
+            self._document_name(self.library_inventory_file)
+        )
+
     def save_library_inventory(self, inventory):
-        payload = {'files': inventory or {}, 'updated_at': time.time()}
-        self._write_json(self.library_inventory_file, payload)
-        return payload['files']
+        files = inventory or {}
+        lock = self._path_lock(self.library_inventory_file)
+        with lock:
+            document_name = self._document_name(self.library_inventory_file)
+            if self.has_library_inventory() and self.get_library_inventory() == files:
+                return files
+            payload = {'files': files, 'updated_at': time.time()}
+            self.catalog.replace_operational_document(
+                document_name,
+                payload,
+            )
+            self.catalog.flush_exports()
+        return files
 
     def migrate_path_records(self, old_path, new_path):
         old_key = self._key(old_path)
@@ -1534,10 +1613,27 @@ class AppMetadataStore:
     def remove_path_records(self, path):
         self._remove_path_keys({self._key(path)})
 
-    def prune_missing_path_records(self, current_path_keys):
+    def prune_missing_path_records(self, current_path_keys, roots=None):
         current = {self._key(path) for path in current_path_keys}
         records = self._read_json(self.files_file, {'files': {}}).get('files', {})
-        stale = set(records) - current
+        roots = [self._key(root) for root in (roots or []) if root]
+
+        def inside_roots(path_key):
+            if not roots:
+                return True
+            for root in roots:
+                try:
+                    if os.path.commonpath((path_key, root)) == root:
+                        return True
+                except ValueError:
+                    continue
+            return False
+
+        stale = {
+            path_key
+            for path_key in records
+            if inside_roots(path_key) and path_key not in current
+        }
         if stale:
             self._remove_path_keys(stale)
         return len(stale)
@@ -2221,8 +2317,10 @@ _identity_audit_coordinator = None
 _identity_audit_store_dir = ''
 _smart_match_tmdb_alias_cache = {}
 _library_reconcile_lock = threading.RLock()
-_library_reconcile_run_lock = threading.Lock()
 _library_reconcile_thread = None
+_library_ingestion_coordinator_instance = None
+_library_observer_instance = None
+_catalog_event_broker = CatalogEventBroker()
 _library_reconcile_state = {
     'status': 'idle',
     'checked': 0,
@@ -2388,14 +2486,12 @@ def _apply_completed_download_identity(job, store=None):
         'title': str(metadata.get('title') or job.get('title') or '').strip(),
         'year': str(metadata.get('year') or job.get('year') or '').strip(),
     }
-    store.accept_tmdb_identity(
-        path,
-        metadata,
-        source='download_submission',
-        decision_origin=DECISION_ORIGIN_LIBRARY_RECONCILE,
-        facts=_metadata_file_facts(path, probe=False),
-    )
-    return {'state': 'applied', 'paths': [path], 'tmdb_id': tmdb_id}
+    return {
+        'state': 'ready',
+        'paths': [path],
+        'tmdb_id': tmdb_id,
+        'metadata': metadata,
+    }
 
 
 def _handle_completed_qbittorrent_imports(manager, results):
@@ -2436,15 +2532,56 @@ def _handle_completed_qbittorrent_imports(manager, results):
                     'reason': str(error),
                     'paths': [],
                 }
-        if any(handoff.get('state') != 'failed' for handoff in handoffs.values()):
-            _start_library_reconcile(force=True)
         for item in pending:
             if not item.get('hash'):
                 continue
             handoff = handoffs.get(str(item.get('hash') or ''), {})
+            paths = [] if handoff.get('state') == 'failed' else list(
+                handoff.get('paths') or _completed_download_video_paths(item.get('imported_paths') or [])
+            )
+            committed = _catalog_repository().final_card_publication(paths)
+            complete = bool(paths) and len(committed) == len(paths)
+            queue_result = {'accepted': 0, 'rejected': 0}
+            if not complete and paths:
+                identity_hints = {
+                    path: handoff.get('metadata')
+                    for path in paths
+                    if handoff.get('metadata')
+                }
+                coordinator = _library_ingestion_coordinator()
+                coordinator.reconcile_paths_now(paths, identity_hints=identity_hints)
+                try:
+                    _prepare_final_card_assets(paths)
+                    committed = _catalog_repository().final_card_publication(paths)
+                except MediaAssetError:
+                    committed = []
+                complete = len(committed) == len(paths)
+                if complete:
+                    _catalog_event_broker.publish(
+                        _catalog_repository().generation('media'),
+                        reason='qbittorrent',
+                        movie_keys=[publication['movie_key'] for publication in committed],
+                        changed_count=len(committed),
+                        correlation_id=f"qbt:{item['hash']}",
+                    )
+                else:
+                    queue_result = coordinator.reconcile_paths(
+                        paths,
+                        reason='qbittorrent',
+                        correlation_id=f"qbt:{item['hash']}",
+                        identity_hints=identity_hints,
+                    )
+            journal_handoff = {
+                key: value for key, value in handoff.items() if key != 'metadata'
+            }
+            if paths:
+                journal_handoff.update({
+                    'state': 'applied' if complete else 'queued',
+                    'queue': queue_result,
+                })
             manager.jobs.upsert(item['hash'], {
-                'library_scan_pending': handoff.get('state') == 'failed',
-                'identity_handoff': handoff,
+                'library_scan_pending': not complete,
+                'identity_handoff': journal_handoff,
             })
     for item in outside_library:
         if item.get('hash'):
@@ -3422,9 +3559,9 @@ def _check_followed_releases():
     removed_owned = []
     newly_available = []
     now = time.time()
-    for item in current:
+    owned_matches = _find_owned_movies(current)
+    for item, owned in zip(current, owned_matches):
         before_status = item.get('status', 'watching')
-        owned = _find_owned_movie(item)
         if owned:
             removed_owned.append({**item, 'status': 'owned', 'owned': owned, 'updated_at': now, 'last_checked': now})
             continue
@@ -3447,6 +3584,46 @@ def _check_followed_releases():
         'removed_owned': removed_owned,
         'newly_available': newly_available,
         'checked_at': now,
+    }
+
+
+def _reconcile_followed_release_ownership():
+    """Remove followed releases that the committed catalog now owns.
+
+    This deliberately avoids Prowlarr. Catalog publication events can call it
+    cheaply after ingestion without turning every imported movie into a full
+    release-availability scan.
+    """
+    store = _curation_store()
+    current = store.followed_all()
+    owned_matches = _find_owned_movies(current)
+    remaining = []
+    removed_owned = []
+    now = time.time()
+    for item, owned in zip(current, owned_matches):
+        if owned:
+            removed_owned.append({**item, 'status': 'owned', 'owned': owned, 'updated_at': now})
+        else:
+            remaining.append(item)
+    remaining = _sort_followed_releases(remaining)
+    if removed_owned:
+        store.save_followed_all(remaining)
+    return {
+        'movies': remaining,
+        'removed_owned': removed_owned,
+        'newly_available': [],
+        'checked_at': now,
+    }
+
+
+def _followed_release_scan_in_progress():
+    store = _curation_store()
+    return {
+        'movies': _sort_followed_releases(store.followed_all()),
+        'removed_owned': [],
+        'newly_available': [],
+        'scan_in_progress': True,
+        'checked_at': time.time(),
     }
 
 
@@ -4686,6 +4863,42 @@ def library_reconcile():
     return jsonify(_start_library_reconcile(force=True))
 
 
+@app.route('/api/library/ingestion/status')
+def library_ingestion_status():
+    coordinator = _library_ingestion_coordinator()
+    cache_key = str(Path(_user_data_dir).resolve())
+    repository = _catalog_repository_cache.get(cache_key)
+    lease = _catalog_writer_lease_cache.get(cache_key)
+    return jsonify({
+        'writer': {
+            'pid': os.getpid(),
+            'lease_acquired': bool(lease and lease.acquired),
+        },
+        'coordinator': coordinator.status(),
+        'observer': (
+            _library_observer_instance.status()
+            if _library_observer_instance is not None
+            else {'implementation': 'watchdog-native', 'version': '6.0.0', 'started': False, 'alive': False, 'roots': []}
+        ),
+        'catalog_generation': repository.generation('media') if repository else 0,
+        'events': _catalog_event_broker.status(),
+    })
+
+
+@app.route('/api/catalog/events')
+def catalog_events():
+    last_event_id = request.headers.get('Last-Event-ID', '')
+    current_generation = _catalog_repository().generation('media')
+    response = Response(
+        _catalog_event_broker.stream(last_event_id, current_generation),
+        content_type='text/event-stream; charset=utf-8',
+    )
+    response.headers['Cache-Control'] = 'no-cache, no-transform'
+    response.headers['Connection'] = 'keep-alive'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+
 def _catalog_file_record(candidate):
     """Expose the normalized SQL-backed file contract."""
     raw_record = candidate.get('raw_json')
@@ -4824,16 +5037,16 @@ def library_details():
 
 
 def _maintenance_audit_from_catalog():
-    """Project maintenance queues from the SQLite catalog, never from a tab scan."""
+    """Project maintenance queues from authoritative stored file facts.
+
+    Physical existence is reconciler/File View ownership. An ordinary Movie View
+    request must not restat every catalog path to build its upgrade annotations.
+    """
     repository = _catalog_repository()
     generation = repository.generation('media')
     if _maintenance_audit_cache.get('generation') == generation and _maintenance_audit_cache.get('audit') is not None:
         return _maintenance_audit_cache['audit']
-    candidates = [
-        candidate
-        for candidate in _catalog_maintenance_candidates(repository)
-        if candidate.get('path') and os.path.isfile(candidate['path'])
-    ]
+    candidates = _catalog_maintenance_candidates(repository)
     audit = build_maintenance_audit(candidates, generation=generation)
     _maintenance_audit_cache['generation'] = generation
     _maintenance_audit_cache['audit'] = audit
@@ -7330,21 +7543,6 @@ def artwork_cleanup():
     ))
 
 
-def _run_startup_artwork_backfill():
-    service = _media_asset_service()
-    service.migrate_custom_posters(_metadata_store().posters_dir)
-    service.queue_owned_artwork()
-    while True:
-        state = service.run_backfill(limit=200, workers=4)
-        remaining = int(state.get('counts', {}).get('queued', 0))
-        retryable = int(state.get('counts', {}).get('failed', 0))
-        if not remaining and not retryable:
-            return
-        if not remaining and retryable and state.get('failed', 0) == 0:
-            return
-        time.sleep(2)
-
-
 def _normalize_tmdb_person(person, include_character=False):
     name = person.get('name', '')
     if not name:
@@ -7791,101 +7989,156 @@ def _metadata_file_facts(path, *, probe=True):
     return record
 
 
-def _file_copy_is_stable(file_facts, previous=None, now=None):
-    previous = previous or {}
-    now = time.time() if now is None else float(now)
-    size = int(file_facts.get('size') or 0)
-    modified_time = float(file_facts.get('modified_time') or 0)
-    if modified_time and now - modified_time >= _FILE_STABILITY_SECONDS:
-        return True
-    same_observation = (
-        int(previous.get('observed_size') or -1) == size
-        and float(previous.get('observed_modified_time') or -1) == modified_time
+_file_copy_is_stable = _ingestion_file_copy_is_stable
+
+
+def _read_library_reconcile_state():
+    with _library_reconcile_lock:
+        return dict(_library_reconcile_state)
+
+
+def _write_library_reconcile_state(state):
+    global _library_reconcile_state
+    with _library_reconcile_lock:
+        _library_reconcile_state = dict(state or {})
+
+
+def _clear_library_reconcile_cache():
+    global _library_cache
+    _library_cache = {}
+
+
+def _coordinator_plex_data(path_key, filename, snapshot):
+    return dict(
+        (snapshot or {}).get('plex_files', {}).get(path_key, {})
+        or _plex_cache.get(_norm(path_key), {})
+        or _plex_matched_by_fname.get(str(filename).lower(), {})
+        or {}
     )
-    observed_at = float(previous.get('observed_at') or 0)
-    return bool(same_observation and observed_at and now - observed_at >= _FILE_STABILITY_SECONDS)
+
+
+def _library_ingestion_coordinator():
+    global _library_ingestion_coordinator_instance
+    if _library_ingestion_coordinator_instance is None:
+        dependencies = LibraryIngestionDependencies(
+            store=lambda: _metadata_store(),
+            roots=lambda: get_movies_dirs(),
+            iter_video_files=lambda: _iter_video_files(),
+            metadata_file_facts=lambda path, probe=True: _metadata_file_facts(
+                path,
+                probe=probe,
+            ),
+            stability_check=lambda facts, previous=None, now=None: _file_copy_is_stable(
+                facts,
+                previous,
+                now,
+                stability_seconds=_FILE_STABILITY_SECONDS,
+            ),
+            reconcile_path=lambda path, provider, store=None, previous=None: _reconcile_library_path(
+                path,
+                provider,
+                store=store,
+                previous=previous,
+            ),
+            active_metadata_provider=lambda store=None: _active_metadata_provider(store),
+            migrate_metadata_path=lambda path, provider, **kwargs: _migrate_metadata_path(
+                path,
+                provider,
+                **kwargs,
+            ),
+            resolve_authoritative_identity=lambda record: resolve_authoritative_identity(record),
+            record_has_unresolved_identity=lambda record: _record_has_unresolved_identity(record),
+            record_needs_metadata_enrichment=lambda record, path_key, snapshot: _record_needs_metadata_enrichment(
+                record,
+                path_key,
+                snapshot,
+            ),
+            accepted_identity_evidence_changed=lambda path, record, facts, plex_data: _accepted_identity_evidence_changed(
+                path,
+                record,
+                facts,
+                plex_data,
+            ),
+            identity_evidence_fingerprint=lambda path, facts, plex_data: _identity_evidence_fingerprint(
+                path,
+                facts,
+                plex_data,
+            ),
+            record_needs_identity_decision_refresh=lambda record, fingerprint='': _record_needs_identity_decision_refresh(
+                record,
+                fingerprint,
+            ),
+            plex_data=lambda path_key, filename, snapshot: _coordinator_plex_data(
+                path_key,
+                filename,
+                snapshot,
+            ),
+            plex_rescan=lambda: _plex_rescan(),
+            auto_sync_plex=lambda **kwargs: _auto_sync_plex(**kwargs),
+            inventory_bootstrap_cutoff=lambda store: _library_inventory_bootstrap_cutoff(store),
+            clear_library_cache=lambda: _clear_library_reconcile_cache(),
+            run_detail_backfill=lambda: _run_tmdb_detail_contract_backfill(),
+            run_file_facts_backfill=lambda: _run_media_file_facts_backfill(),
+            read_state=lambda: _read_library_reconcile_state(),
+            write_state=lambda state: _write_library_reconcile_state(state),
+            mark_complete=lambda: _mark_library_reconcile_complete(),
+            identity_decision_version=IDENTITY_DECISION_VERSION,
+            video_extensions=frozenset(VIDEO_EXTENSIONS),
+            stability_seconds=_FILE_STABILITY_SECONDS,
+            final_card_publication=lambda paths: _catalog_repository().final_card_publication(paths),
+            publish_catalog_event=lambda **event: _catalog_event_broker.publish(
+                _catalog_repository().generation('media'),
+                **event,
+            ),
+            apply_identity_hint=lambda path, identity, facts: bool(
+                _metadata_store().accept_tmdb_identity(
+                    path,
+                    identity,
+                    source='download_submission',
+                    decision_origin=DECISION_ORIGIN_LIBRARY_RECONCILE,
+                    facts=facts,
+                )
+            ),
+            prepare_final_card_assets=lambda paths: _prepare_final_card_assets(paths),
+        )
+        _library_ingestion_coordinator_instance = LibraryIngestionCoordinator(dependencies)
+    return _library_ingestion_coordinator_instance
+
+
+def _library_observer():
+    global _library_observer_instance
+    if _library_observer_instance is None:
+        _library_observer_instance = LibraryObserverAdapter(
+            get_movies_dirs(),
+            _library_ingestion_coordinator(),
+        )
+    return _library_observer_instance
+
+
+def _shutdown_library_background_services():
+    _catalog_event_broker.shutdown()
+    if _library_observer_instance is not None:
+        _library_observer_instance.shutdown()
+    if _library_ingestion_coordinator_instance is not None:
+        _library_ingestion_coordinator_instance.shutdown()
+
+
+atexit.register(_shutdown_library_background_services)
 
 
 def _reconcile_library_path(path, provider, store=None, previous=None):
-    store = store or _metadata_store()
-    previous = previous or {}
-    observation = _metadata_file_facts(path, probe=False)
-    if not _file_copy_is_stable(observation, previous):
-        pending_patch = {
-            **observation,
-            'ingest_status': 'pending',
-            'observed_size': observation.get('size', 0),
-            'observed_modified_time': observation.get('modified_time', 0),
-            'observed_at': time.time(),
-        }
-        if not resolve_authoritative_identity(previous).get('accepted'):
-            pending_patch.update({
-                'metadata_status': 'pending',
-                'metadata_accepted': False,
-            })
-        store.update_file_record(path, pending_patch)
-        return 'pending'
+    """Delegate legacy private call sites to the coordinator-owned path operation.
 
-    facts = _metadata_file_facts(path, probe=True)
-    if provider == 'filename':
-        store.update_file_record(path, {
-            **facts,
-            'display_provider': 'filename',
-            'metadata_status': 'unmatched',
-            'metadata_source': 'filename',
-            'metadata_accepted': False,
-            'ingest_status': 'stable',
-            'identity_decision_version': IDENTITY_DECISION_VERSION,
-            'observed_size': facts.get('size', 0),
-            'observed_modified_time': facts.get('modified_time', 0),
-            'observed_at': time.time(),
-        })
-        return 'review'
-
-    outcome = _migrate_metadata_path(
+    Existing reconciliation tests patch this symbol, and the current startup/manual
+    callers still use the private synchronous contract. Remove this seam only after
+    those callers and their parity tests move to the public queued coordinator API.
+    """
+    return _library_ingestion_coordinator().reconcile_path_now(
         path,
         provider,
         store=store,
-        revalidate_accepted=bool(previous.get('_revalidate_identity')),
+        previous=previous,
     )
-    patch = {
-        **facts,
-        'ingest_status': 'stable',
-        'observed_size': facts.get('size', 0),
-        'observed_modified_time': facts.get('modified_time', 0),
-        'observed_at': time.time(),
-    }
-    if outcome == 'review':
-        post_migration = store.snapshot().get('files', {}).get(store._key(path), {})
-        post_status = str(post_migration.get('identity_status') or '')
-        if post_status == 'conflict':
-            patch.update({
-                'identity_status': 'conflict',
-                'metadata_status': 'conflict',
-                'metadata_accepted': False,
-                'identity_decision_version': IDENTITY_DECISION_VERSION,
-            })
-        elif post_status == 'unmatched':
-            patch.update({
-                'metadata_status': 'unmatched',
-                'metadata_accepted': False,
-                'identity_decision_version': IDENTITY_DECISION_VERSION,
-            })
-        else:
-            patch.update({
-                'identity_status': 'review',
-                'metadata_status': 'needs_review',
-                'metadata_accepted': False,
-                'identity_decision_version': IDENTITY_DECISION_VERSION,
-            })
-    elif outcome == 'failed':
-        patch.update({
-            'metadata_status': 'unmatched',
-            'metadata_accepted': False,
-            'identity_decision_version': IDENTITY_DECISION_VERSION,
-        })
-    store.update_file_record(path, patch)
-    return outcome
 
 
 def _library_inventory_bootstrap_cutoff(store):
@@ -8006,167 +8259,15 @@ def _record_needs_identity_decision_refresh(record, current_fingerprint=''):
 
 
 def _reconcile_library_files(force_unresolved=False):
-    global _library_cache
-    with _library_reconcile_run_lock:
-        store = _metadata_store()
-        snapshot = store.snapshot()
-        records = snapshot.get('files', {})
-        inventory_exists = store.library_inventory_file.exists()
-        previous_inventory = store.get_library_inventory()
-        bootstrap_cutoff = _library_inventory_bootstrap_cutoff(store) if not inventory_exists else 0
-        provider = _active_metadata_provider(store)
-        candidates = []
-        current_inventory = {}
-        for _, _, file, path in _iter_video_files():
-            try:
-                stat_result = os.stat(path)
-            except OSError:
-                continue
-            key = store._key(path)
-            fingerprint = {
-                'path': path,
-                'size': int(stat_result.st_size),
-                'modified_time': float(stat_result.st_mtime),
-            }
-            current_inventory[key] = fingerprint
-            record = records.get(key, {})
-            if record.get('metadata_accepted') or record.get('metadata_status') == 'accepted':
-                facts_changed = (
-                    int(record.get('size') or -1) != fingerprint['size']
-                    or float(record.get('modified_time') or -1) != fingerprint['modified_time']
-                    or (
-                        bool(record.get('filename'))
-                        and record.get('filename') != file
-                    )
-                )
-                facts = records[key]
-                if facts_changed:
-                    facts = _metadata_file_facts(path, probe=False)
-                    records[key] = {**record, **facts}
-                plex_data = dict(
-                    snapshot.get('plex_files', {}).get(key, {})
-                    or _plex_cache.get(_norm(path), {})
-                    or _plex_matched_by_fname.get(str(file).lower(), {})
-                    or {}
-                )
-                if provider in {'tmdb', 'plex'} and _accepted_identity_evidence_changed(
-                    path,
-                    record,
-                    facts,
-                    plex_data,
-                ):
-                    candidates.append((path, {**record, '_revalidate_identity': True}))
-                    continue
-                if facts_changed:
-                    candidates.append((path, {**record, '_refresh_file_facts': True}))
-                    continue
-                if provider in {'tmdb', 'plex'} and _record_needs_metadata_enrichment(records[key], key, snapshot):
-                    candidates.append((path, records[key]))
-                continue
-            if force_unresolved and (
-                record.get('identity_status') in {'unmatched', 'review', 'conflict'}
-                or record.get('metadata_status') in {'unmatched', 'needs_review', 'conflict'}
-            ):
-                candidates.append((path, record))
-                continue
-            current_identity_fingerprint = ''
-            if _record_has_unresolved_identity(record):
-                file_facts = _metadata_file_facts(path, probe=False)
-                filename = file_facts.get('filename', file)
-                plex_data = dict(
-                    snapshot.get('plex_files', {}).get(key, {})
-                    or _plex_cache.get(_norm(path), {})
-                    or _plex_matched_by_fname.get(str(filename).lower(), {})
-                    or {}
-                )
-                current_identity_fingerprint = _identity_evidence_fingerprint(path, file_facts, plex_data)
-            if _record_needs_identity_decision_refresh(record, current_identity_fingerprint):
-                candidates.append((path, record))
-                continue
-            if not record:
-                candidates.append((path, record))
-                continue
-            if record.get('metadata_status') == 'pending':
-                candidates.append((path, record))
-                continue
-            if not inventory_exists:
-                record_changed = (
-                    record
-                    and (
-                        int(record.get('size') or -1) != fingerprint['size']
-                        or float(record.get('modified_time') or -1) != fingerprint['modified_time']
-                    )
-                )
-                try:
-                    newly_added = os.path.getctime(path) > bootstrap_cutoff
-                except OSError:
-                    newly_added = False
-                if record_changed or (not record and newly_added):
-                    candidates.append((path, record))
-                continue
-            previous = previous_inventory.get(key, {})
-            changed = (
-                not previous
-                or int(previous.get('size') or -1) != fingerprint['size']
-                or float(previous.get('modified_time') or -1) != fingerprint['modified_time']
-            )
-            if changed:
-                candidates.append((path, record))
+    """Delegate the legacy full-scan contract to the one coordinator owner.
 
-        removed = 0
-        configured_roots = [root for root in get_movies_dirs() if root]
-        if configured_roots and all(os.path.isdir(root) for root in configured_roots):
-            removed = store.prune_missing_path_records(current_inventory.keys())
-        store.save_library_inventory(current_inventory)
-
-        if provider == 'plex' and candidates:
-            _plex_rescan()
-            time.sleep(1)
-            _auto_sync_plex(force=True)
-
-        result = {
-            'checked': 0,
-            'matched': 0,
-            'review': 0,
-            'pending': 0,
-            'failed': 0,
-            'removed': removed,
-            'facts_refreshed': 0,
-            'provider': provider,
-        }
-        for path, previous in candidates:
-            if previous.get('_refresh_file_facts'):
-                observation = _metadata_file_facts(path, probe=False)
-                if not _file_copy_is_stable(observation, previous):
-                    store.update_file_record(path, {
-                        **observation,
-                        'ingest_status': 'pending',
-                        'observed_size': observation.get('size', 0),
-                        'observed_modified_time': observation.get('modified_time', 0),
-                        'observed_at': time.time(),
-                    })
-                    result['pending'] += 1
-                    continue
-                refreshed_facts = _metadata_file_facts(path, probe=True)
-                store.update_file_record(path, {
-                    **refreshed_facts,
-                    'ingest_status': 'stable',
-                    'observed_size': refreshed_facts.get('size', 0),
-                    'observed_modified_time': refreshed_facts.get('modified_time', 0),
-                    'observed_at': time.time(),
-                })
-                result['facts_refreshed'] += 1
-                continue
-            result['checked'] += 1
-            try:
-                outcome = _reconcile_library_path(path, provider, store=store, previous=previous)
-            except Exception:
-                outcome = 'failed'
-            key = outcome if outcome in result else 'failed'
-            result[key] += 1
-        if result['checked'] or result['removed']:
-            _library_cache = {}
-        return result
+    The foreground force-scan route and existing parity tests still depend on this
+    synchronous return shape. It can be removed when those callers are converted
+    to the public queued operation in their separately approved gate.
+    """
+    return _library_ingestion_coordinator().reconcile_all_now(
+        force_unresolved=force_unresolved
+    )
 
 def _tmdb_detail_contract_backfill_ids(store=None, limit=None):
     store = store or _metadata_store()
@@ -8264,52 +8365,16 @@ def _run_library_reconcile_loop(
     run_detail_backfill=False,
     run_file_facts=False,
 ):
-    global _library_reconcile_state
-    detail_backfill = (
-        _run_tmdb_detail_contract_backfill()
-        if run_detail_backfill
-        else dict(_library_reconcile_state.get('detail_backfill') or {})
+    """Retain the startup thread target while the coordinator owns its loop body.
+
+    Startup thread/state tests depend on this target. Remove it when startup is
+    changed to submit public coordinator work in the separately approved Gate 7.
+    """
+    return _library_ingestion_coordinator().run_reconcile_loop(
+        run_inventory=run_inventory,
+        run_detail_backfill=run_detail_backfill,
+        run_file_facts=run_file_facts,
     )
-    if not run_inventory:
-        file_facts_backfill = (
-            _run_media_file_facts_backfill()
-            if run_file_facts
-            else dict(_library_reconcile_state.get('file_facts_backfill') or {})
-        )
-        with _library_reconcile_lock:
-            _library_reconcile_state = {
-                **_library_reconcile_state,
-                'status': 'completed',
-                'detail_backfill': detail_backfill,
-                'file_facts_backfill': file_facts_backfill,
-                'updated_at': time.time(),
-            }
-        _mark_library_reconcile_complete()
-        return
-    while True:
-        result = _reconcile_library_files()
-        with _library_reconcile_lock:
-            _library_reconcile_state = {
-                **result,
-                'detail_backfill': detail_backfill,
-                'status': 'running' if result.get('pending') else 'completed',
-                'updated_at': time.time(),
-            }
-        if not result.get('pending'):
-            file_facts_backfill = (
-                _run_media_file_facts_backfill()
-                if run_file_facts
-                else dict(_library_reconcile_state.get('file_facts_backfill') or {})
-            )
-            with _library_reconcile_lock:
-                _library_reconcile_state = {
-                    **_library_reconcile_state,
-                    'file_facts_backfill': file_facts_backfill,
-                    'updated_at': time.time(),
-                }
-            _mark_library_reconcile_complete()
-            return
-        time.sleep(_FILE_STABILITY_SECONDS)
 
 
 def _library_root_signature():
@@ -8852,14 +8917,14 @@ def _revalidate_accepted_identity(path, provider, store, current_record, facts, 
     return 'review'
 
 
-def _migrate_metadata_path(path, target, store=None, revalidate_accepted=False):
+def _migrate_metadata_path(path, target, store=None, revalidate_accepted=False, facts=None):
     if not os.path.isfile(path) or not _path_library_root(path):
         return 'failed'
     store = store or _metadata_store()
     snapshot = store.snapshot()
     path_key = store._key(path)
     current_record = snapshot.get('files', {}).get(path_key, {})
-    facts = _metadata_file_facts(path, probe=False)
+    facts = dict(facts or _metadata_file_facts(path, probe=False))
     filename = facts['filename']
     plex_data = dict(
         snapshot.get('plex_files', {}).get(path_key, {})
@@ -8916,7 +8981,7 @@ def _migrate_metadata_path(path, target, store=None, revalidate_accepted=False):
                 })
                 return 'matched'
             if _tmdb_key:
-                return _migrate_metadata_path(path, 'tmdb', store=store)
+                return _migrate_metadata_path(path, 'tmdb', store=store, facts=facts)
             store.update_file_record(path, {
                 **facts,
                 'migration_status': 'needs_review',
@@ -10835,10 +10900,26 @@ def user_followed_releases():
 
 @app.route('/api/user/followed-releases/check', methods=['POST'])
 def check_user_followed_releases():
+    if not _followed_release_scan_lock.acquire(blocking=False):
+        return jsonify(_curation_payload(_followed_release_scan_in_progress()))
     try:
         return jsonify(_curation_payload(_check_followed_releases()))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        _followed_release_scan_lock.release()
+
+
+@app.route('/api/user/followed-releases/reconcile-owned', methods=['POST'])
+def reconcile_owned_user_followed_releases():
+    if not _followed_release_scan_lock.acquire(blocking=False):
+        return jsonify(_curation_payload(_followed_release_scan_in_progress()))
+    try:
+        return jsonify(_curation_payload(_reconcile_followed_release_ownership()))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        _followed_release_scan_lock.release()
 
 
 def _normalize_download_quality(value):
@@ -11631,18 +11712,30 @@ def ollama_recommend():
     return jsonify({'results': results, 'model': _ollama_model})
 
 
+def _start_background_services():
+    """Start normal runtime owners; global artwork backfill stays explicit-only."""
+    _start_library_reconcile()
+    _library_observer().start()
+    threading.Thread(
+        target=LibraryStartupCatchup(
+            get_movies_dirs,
+            _library_ingestion_coordinator(),
+            _catalog_repository(),
+        ).run_once,
+        name='cinema-library-offline-catchup',
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_qbittorrent_import_monitor.run_forever,
+        args=(lambda: _qbt_mode == 'embedded',),
+        daemon=True,
+    ).start()
+    _startup_metrics['background_queue_started'] = True
+
+
 if __name__ == '__main__':
     if not _TEST_MODE:
-        _start_library_reconcile()
-        threading.Thread(
-            target=_qbittorrent_import_monitor.run_forever,
-            args=(lambda: _qbt_mode == 'embedded',),
-            daemon=True,
-        ).start()
-        _startup_metrics['background_queue_started'] = True
-        artwork_timer = threading.Timer(1.0, _run_startup_artwork_backfill)
-        artwork_timer.daemon = True
-        artwork_timer.start()
+        _start_background_services()
     _startup_metrics['api_ready_ms'] = round((time.perf_counter() - _process_started_at) * 1000, 3)
     app.run(
         debug=False,

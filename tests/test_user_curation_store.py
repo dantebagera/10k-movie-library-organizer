@@ -428,7 +428,7 @@ class UserCurationStoreTest(unittest.TestCase):
                     "poster_url": "poster-a",
                 })
 
-                with patch("app._find_owned_movie", return_value=None), \
+                with patch("app._find_owned_movies", return_value=[None]), \
                      patch("app._find_best_followed_release", return_value=None), \
                      patch("app._fetch_tmdb_metadata_by_id", return_value={"release_date": "2026-07-15"}):
                     checked = app._check_followed_releases()
@@ -437,6 +437,23 @@ class UserCurationStoreTest(unittest.TestCase):
 
         self.assertEqual(checked["movies"][0]["release_date"], "2026-07-15")
         self.assertEqual(checked["movies"][0]["status"], "watching")
+
+    def test_followed_ownership_reconcile_removes_only_committed_library_movies(self):
+        original_user_data_dir = app._user_data_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                store = app._curation_store()
+                store.follow_movie({"tmdb_id": "100", "title": "Downloaded", "year": "2026"})
+                store.follow_movie({"tmdb_id": "200", "title": "Still Following", "year": "2026"})
+                owned = {"found": True, "path": "E:/Movies/Downloaded.mkv", "resolution": "1080p"}
+                with patch("app._find_owned_movies", return_value=[None, owned]):
+                    reconciled = app._reconcile_followed_release_ownership()
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        self.assertEqual([movie["title"] for movie in reconciled["movies"]], ["Still Following"])
+        self.assertEqual([movie["title"] for movie in reconciled["removed_owned"]], ["Downloaded"])
 
     def test_followed_releases_get_backfills_missing_release_date_without_release_check(self):
         original_user_data_dir = app._user_data_dir

@@ -5,6 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
 import { announceLibraryChanged, CATALOG_GENERATION_CHANGED_EVENT, observeCatalogGeneration } from '../../api/library.js';
+import { CATALOG_READY_EVENT } from '../../api/catalogEvents.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
@@ -16,6 +17,18 @@ import PersonSearchCard from '../../components/PersonSearchCard.jsx';
 import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
+
+async function preloadFinalPosters(items) {
+  const urls = [...new Set((items || []).map((item) => item?.poster_url || item?.canonical_metadata?.poster_url || '')
+    .filter((url) => String(url).startsWith('/api/assets/')))];
+  await Promise.all(urls.map((url) => new Promise((resolve, reject) => {
+    const image = new Image();
+    const timeout = window.setTimeout(() => reject(new Error(`Poster preload timed out: ${url}`)), 5000);
+    image.onload = () => { window.clearTimeout(timeout); resolve(); };
+    image.onerror = () => { window.clearTimeout(timeout); reject(new Error(`Poster preload failed: ${url}`)); };
+    image.src = url;
+  })));
+}
 import WorkspacePathBar from '../../components/WorkspacePathBar.jsx';
 import { LibraryMovieCard } from '../../components/SharedMovieCards.jsx';
 import Pagination from '../../components/Pagination.jsx';
@@ -186,10 +199,12 @@ export default function LibraryWorkspace({
   filterRequest,
   onFilterRequestConsumed,
   fileDetailsRequest,
-  onFileDetailsRequestConsumed
+  onFileDetailsRequestConsumed,
+  onInitialReady
 }) {
   const {
     gridRef: libraryMovieGridRef,
+    measured: libraryGridMeasured,
     pageSize
   } = useCardGridMetrics({ target: 40, max: 200, bias: 'lower' });
   const [items, setItems] = useState([]);
@@ -263,6 +278,11 @@ export default function LibraryWorkspace({
     stats: { total: 0, low: 0, matched: 0, pending: 0, unmatched: 0 }
   });
   const libraryRequestSeq = useRef(0);
+  const backgroundRequestSeq = useRef(0);
+  const backgroundRefreshRef = useRef({ running: false, pending: false });
+  const initialLibraryLoadRef = useRef({ complete: false, pending: false, generation: 0, unconditional: false });
+  const initialReadyNotifiedRef = useRef(false);
+  const libraryLoadSignatureRef = useRef(null);
   const libraryKeywordRequestSeq = useRef(0);
   const peopleLoadPromiseRef = useRef(null);
   const movieViewStateRef = useRef(null);
@@ -323,16 +343,24 @@ export default function LibraryWorkspace({
   }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
 
   const loadLibrary = useCallback(async (forceScan = false, options = {}) => {
-    const requestSeq = libraryRequestSeq.current + 1;
-    libraryRequestSeq.current = requestSeq;
+    const background = Boolean(options.background);
+    const requestSeq = background
+      ? backgroundRequestSeq.current + 1
+      : libraryRequestSeq.current + 1;
+    if (background) backgroundRequestSeq.current = requestSeq;
+    else libraryRequestSeq.current = requestSeq;
     const quiet = Boolean(options.quiet);
-    setLoading(true);
-    setError('');
-    setStatus(forceScan ? 'Rescanning library folders...' : 'Loading library...');
+    if (!background) {
+      setLoading(true);
+      setError('');
+      setStatus(forceScan ? 'Rescanning library folders...' : 'Loading library...');
+    }
     try {
       const requestedPage = forceScan ? 1 : currentPage;
       const data = await fetchJson(libraryFilterQuery(serverFilters, requestedPage, pageSize, forceScan));
-      if (requestSeq !== libraryRequestSeq.current) return;
+      if (requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)) return;
+      if (background) await preloadFinalPosters(data.items || []);
+      if (requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)) return;
       observeCatalogGeneration(data.catalog_generation);
       setItems(data.items || []);
       setLibraryResult({
@@ -359,21 +387,107 @@ export default function LibraryWorkspace({
         notify(summary || 'Library rescan complete — no changes found', discovered || identified ? 'success' : 'neutral');
         announceLibraryChanged({ source: 'manual-rescan', library: data });
       } else {
-        setStatus('');
+        if (!background) setStatus('');
         if (!quiet && !options.silentSuccess) notify(`${formatCount(data.count)} library files loaded`, 'success');
       }
+      return data;
     } catch (loadError) {
-      if (requestSeq !== libraryRequestSeq.current) return;
-      setError(loadError.message);
-      notify(`Library unavailable: ${loadError.message}`, 'error');
+      if (requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)) return;
+      if (background) setStatus(`Background library update deferred: ${loadError.message}`);
+      else {
+        setError(loadError.message);
+        notify(`Library unavailable: ${loadError.message}`, 'error');
+      }
+      return null;
     } finally {
-      if (requestSeq === libraryRequestSeq.current) setLoading(false);
+      if (!background && requestSeq === libraryRequestSeq.current) setLoading(false);
     }
   }, [currentPage, notify, pageSize, serverFilters]);
 
+  const refreshLibraryInBackground = useCallback(async () => {
+    if (backgroundRefreshRef.current.running) {
+      backgroundRefreshRef.current.pending = true;
+      return;
+    }
+    backgroundRefreshRef.current.running = true;
+    let latest = null;
+    try {
+      do {
+        backgroundRefreshRef.current.pending = false;
+        latest = await loadLibrary(false, { background: true, quiet: true, silentSuccess: true });
+      } while (backgroundRefreshRef.current.pending);
+    } finally {
+      backgroundRefreshRef.current.running = false;
+    }
+    return latest;
+  }, [loadLibrary]);
+
+  const requestLibraryBackgroundRefresh = useCallback((detail = {}) => {
+    if (initialLibraryLoadRef.current.complete) return refreshLibraryInBackground();
+    const generation = Number(detail?.generation || detail?.catalog_generation || detail?.reconcile?.catalog_generation || 0);
+    initialLibraryLoadRef.current.pending = true;
+    if (Number.isFinite(generation) && generation > 0) {
+      initialLibraryLoadRef.current.generation = Math.max(initialLibraryLoadRef.current.generation, generation);
+    } else {
+      initialLibraryLoadRef.current.unconditional = true;
+    }
+    return Promise.resolve(null);
+  }, [refreshLibraryInBackground]);
+
+  const libraryQuerySignature = useMemo(() => JSON.stringify({
+    page: currentPage,
+    filters: serverFilters
+  }), [currentPage, serverFilters]);
+
   useEffect(() => {
-    if (mode === 'movie' && librarySearchKind === 'movies') loadLibrary(false, { quiet: true, silentSuccess: true });
-  }, [librarySearchKind, loadLibrary, mode]);
+    if (mode !== 'movie' || librarySearchKind !== 'movies' || !libraryGridMeasured) return undefined;
+    let cancelled = false;
+    const previous = libraryLoadSignatureRef.current;
+    const pageSizeOnlyChange = Boolean(
+      initialLibraryLoadRef.current.complete
+      && previous
+      && previous.query === libraryQuerySignature
+      && previous.pageSize !== pageSize
+    );
+    libraryLoadSignatureRef.current = { query: libraryQuerySignature, pageSize };
+
+    async function refresh() {
+      if (pageSizeOnlyChange) {
+        await refreshLibraryInBackground();
+        return;
+      }
+      const data = await loadLibrary(false, { quiet: true, silentSuccess: true });
+      if (cancelled || !data || initialLibraryLoadRef.current.complete) return;
+      const pending = { ...initialLibraryLoadRef.current };
+      initialLibraryLoadRef.current.complete = true;
+      initialLibraryLoadRef.current.pending = false;
+      initialLibraryLoadRef.current.generation = 0;
+      initialLibraryLoadRef.current.unconditional = false;
+      const loadedGeneration = Number(data.catalog_generation || 0);
+      if (pending.pending && (pending.unconditional || pending.generation > loadedGeneration)) {
+        await refreshLibraryInBackground();
+      }
+    }
+
+    refresh();
+    return () => { cancelled = true; };
+  }, [libraryGridMeasured, libraryQuerySignature, librarySearchKind, loadLibrary, mode, pageSize, refreshLibraryInBackground]);
+
+  useEffect(() => {
+    if (
+      initialReadyNotifiedRef.current
+      || !initialLibraryLoadRef.current.complete
+      || loading
+    ) return;
+    initialReadyNotifiedRef.current = true;
+    onInitialReady?.();
+  }, [items, loading, onInitialReady]);
+
+  useEffect(() => {
+    const refresh = (event) => requestLibraryBackgroundRefresh(event.detail);
+    window.addEventListener(CATALOG_READY_EVENT, refresh);
+    return () => window.removeEventListener(CATALOG_READY_EVENT, refresh);
+  }, [requestLibraryBackgroundRefresh]);
 
   useEffect(() => {
     if (mode !== 'file' || fileItemsLoaded) return;
@@ -488,11 +602,11 @@ export default function LibraryWorkspace({
       if (event.detail?.source === 'manual-rescan') {
         return;
       }
-      loadLibrary(false, { quiet: true });
+      requestLibraryBackgroundRefresh(event.detail);
     }
     window.addEventListener('cp-library-changed', handleLibraryChanged);
     return () => window.removeEventListener('cp-library-changed', handleLibraryChanged);
-  }, [loadLibrary]);
+  }, [requestLibraryBackgroundRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1412,6 +1526,14 @@ export default function LibraryWorkspace({
             {listMissingCoverage.missingCount > 5 && `, +${formatCount(listMissingCoverage.missingCount - 5)} more`}
           </span>
         </div>
+      )}
+
+      {mode === 'movie' && librarySearchKind === 'movies' && !libraryGridMeasured && (
+        <div
+          ref={libraryMovieGridRef}
+          className="library-results library-movie-results library-grid-metrics-probe"
+          aria-hidden="true"
+        />
       )}
 
       {!activeLoading && !error && (

@@ -5,10 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0a10" />
     <title>Cinema Paradiso</title>
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; background: #0a0a0b; }
+      .app-bootstrap {
+        display: grid;
+        min-height: 100vh;
+        place-items: center;
+        align-content: center;
+        gap: 12px;
+        background: radial-gradient(circle at 50% 42%, #d4af3714 0, transparent 24%), #0a0a0b;
+        color: #d4af37;
+        font: 800 0.78rem/1.4 system-ui, sans-serif;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .app-bootstrap-mark {
+        width: 34px;
+        height: 34px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: cp-bootstrap-spin 900ms linear infinite;
+      }
+      @keyframes cp-bootstrap-spin { to { transform: rotate(360deg); } }
+    </style>
     <link rel="icon" type="image/svg+xml" href="/static/logo.svg" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="app-bootstrap" role="status" aria-label="Loading Cinema Paradiso">
+        <span class="app-bootstrap-mark" aria-hidden="true"></span>
+        <span>Loading Cinema Paradiso</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

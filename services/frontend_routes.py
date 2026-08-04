@@ -19,7 +19,16 @@ REACT_SECTION_PATHS = (
 
 
 def register_frontend_routes(app, base_dir):
-    dist_dir = os.path.join(base_dir, "dist")
+    test_root = os.environ.get("CP_TEST_ROOT", "") if os.environ.get("CP_TEST_MODE") == "1" else ""
+    test_dist = os.environ.get("CP_TEST_DIST_DIR", "") if test_root else ""
+    if test_dist:
+        resolved_root = os.path.abspath(test_root)
+        resolved_dist = os.path.abspath(test_dist)
+        if os.path.commonpath((resolved_root, resolved_dist)) != resolved_root:
+            raise RuntimeError("CP_TEST_DIST_DIR must be inside CP_TEST_ROOT")
+        dist_dir = resolved_dist
+    else:
+        dist_dir = os.path.join(base_dir, "dist")
 
     def frontend_index():
         dist_index = os.path.join(dist_dir, "index.html")

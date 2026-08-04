@@ -1,0 +1,171 @@
+{
+  "captured_at": "2026-08-02T01:30:00+03:00",
+  "gate": "10-final-live-acceptance",
+  "result": "pass",
+  "repository": {
+    "branch": "master",
+    "head": "eaf6a749133fc3dec279f82f707719a3e5ed1bf0",
+    "remote": "https://github.com/dantebagera/cinema-paradiso.git",
+    "owner": "DANTE-PCX\\dante",
+    "staged_files": 0
+  },
+  "preflight_stop": {
+    "occurred_before_media_copy": true,
+    "reason": "live server was serving a stale dist bundle with no catalog event subscriber",
+    "old_index_sha256": "612ADF4290DB009558235F981E7206D3AE652E78639163F6C94903BCA5D4EEBE",
+    "old_entry": "/assets/index-CKG_Outm.js",
+    "old_bundle_has_catalog_events": false,
+    "catalog_restored_byte_for_byte": true,
+    "source_or_destination_changed": false
+  },
+  "deployment_correction": {
+    "source_changes": false,
+    "dependency_changes": false,
+    "production_build_modules": 1652,
+    "new_index_sha256": "980CE500BDA6B8A12C77CE67B34C03BD7194EFD2C2ED1242E013C9BB8E99A37C",
+    "new_entry": "/assets/index-tzQbeasi.js",
+    "new_entry_sha256": "D8DB8CA25CC7E5942309F70BD71ED8026334D99731178E73446A2527788574D8",
+    "new_bundle_has_catalog_events": true,
+    "old_bundle_backup": "C:\\Users\\dante\\AppData\\Local\\Temp\\cp-gate10-retry2-backup-ad893b6a4320401c80bf9066219b62b8\\dist-before-gate10c"
+  },
+  "backup": {
+    "directory": "C:\\Users\\dante\\AppData\\Local\\Temp\\cp-gate10-retry2-backup-ad893b6a4320401c80bf9066219b62b8",
+    "files_before_runtime_logs": 60,
+    "bytes_before_runtime_logs": 249992608,
+    "app_metadata_files": 55,
+    "catalog_sha256": "C8E0F52C65C9A61D8CEF45A522EA897876C73B889783999E3A17EBB90FA47961",
+    "accepted_catalog_sha256": "017A4411D2C24EA20C97C3244EC0FEEBE35AFD14EAB4B4FFB6C430D0320CE8A4"
+  },
+  "startup": {
+    "cp_pid": 52532,
+    "writer_lease_acquired": true,
+    "observer_implementation": "watchdog-native",
+    "observer_alive": true,
+    "root_online": true,
+    "root_degraded": false,
+    "queue_depth": 0,
+    "queue_capacity": 4096,
+    "dirty_roots": 0,
+    "directory_revision_checkpoint_created": true,
+    "media_generation_before": 7629,
+    "media_generation_after_startup": 7629,
+    "event_clients_after_corrected_bundle": 1
+  },
+  "representative_item": {
+    "source_directory": "G:\\0t\\Rao Bahadur (2026) [1080p] [WEBRip] [x265] [10bit] [5.1] [YTS.GG - YTS.BZ]",
+    "destination_directory": "E:\\Movies\\Rao Bahadur (2026) [1080p] [WEBRip] [x265] [10bit] [5.1] [YTS.GG - YTS.BZ]",
+    "files": 4,
+    "bytes": 2989992644,
+    "video_bytes": 2989813923,
+    "video_sha256": "3DFCF693F87A50822BCFF340D4308BB0039749C7EF6EF5A21176DC623BF90587",
+    "source_destination_hash_mismatches": 0
+  },
+  "timeline_utc": {
+    "sql_file_added_at": "2026-08-01T22:24:58.642Z",
+    "probe_completed_at": "2026-08-01T22:25:07.093Z",
+    "accepted_file_updated_at": "2026-08-01T22:25:15.203Z",
+    "poster_record_created_at": "2026-08-01T22:25:15.461Z",
+    "poster_ready_at": "2026-08-01T22:25:18.276Z",
+    "authoritative_library_refetch_log_second": "2026-08-01T22:25:21Z",
+    "final_card_screenshot_at": "2026-08-01T22:26:52Z"
+  },
+  "accepted_catalog": {
+    "quick_check": "ok",
+    "foreign_key_errors": 0,
+    "media_files_delta": 1,
+    "canonical_movies_delta": 1,
+    "canonical_movie_files_delta": 1,
+    "provider_movie_snapshots_delta": 1,
+    "media_assets_delta": 1,
+    "global_generation_before": 30626,
+    "global_generation_after": 30632,
+    "media_generation_before": 7629,
+    "media_generation_after": 7634,
+    "canonical_media_generation_before": 7629,
+    "canonical_media_generation_after": 7634,
+    "asset_generation_before": 23658,
+    "asset_generation_after": 23660,
+    "retained_post_commit_events": 1,
+    "duplicates": 0
+  },
+  "final_card": {
+    "movie_view_publication": "ready",
+    "probe_status": "ok",
+    "identity_status": "accepted",
+    "identity_title": "Rao Bahadur",
+    "identity_year": "2026",
+    "tmdb_id": "1443961",
+    "metadata_status": "accepted",
+    "metadata_accepted": true,
+    "selected_provider": "tmdb",
+    "canonical_projection": "canonical_movie_card",
+    "resolution": "1080p",
+    "rip_source": "WEBRip",
+    "video_width": 1920,
+    "video_height": 806,
+    "video_codec": "HEVC",
+    "video_bit_depth": 10,
+    "poster_status": "ready",
+    "poster_checksum": "E4B95FDAC031F11A0ABF9727D6E041CBF17EB2ECE96251CA98805E44C4069C17",
+    "poster_bytes": 67082,
+    "library_api_source": "catalog",
+    "targeted_library_api_total": 1,
+    "targeted_library_api_ms": 509.636
+  },
+  "desktop": {
+    "viewport": "1600x1000",
+    "resolution_filter": "1080p",
+    "sort": "added",
+    "page_before": 1,
+    "page_after": 1,
+    "filtered_total_before": 2986,
+    "filtered_total_after": 2987,
+    "selected_before": 1,
+    "selected_after": 1,
+    "expanded_before": "Nirvanna the Band the Show the Movie",
+    "expanded_after": "Nirvanna the Band the Show the Movie",
+    "search_focus_preserved": true,
+    "loading_spinner_observed": false,
+    "placeholder_observed": false,
+    "grid_connected_before": true,
+    "grid_connected_after": true,
+    "scroll_top_before": 600,
+    "scroll_top_after_anchoring": 892.7999877929688,
+    "visual_content_anchored_without_jump": true,
+    "browser_console_errors": 0,
+    "browser_console_warnings": 0
+  },
+  "screenshots": [
+    {
+      "file": "after/gate-10-retry2-live-before.png",
+      "sha256": "E87FB9A427E895E20332A2C12B002A2FB032F9094A48E7564CD4711F761E53BC"
+    },
+    {
+      "file": "after/gate-10-retry2-during-copy.png",
+      "sha256": "E87FB9A427E895E20332A2C12B002A2FB032F9094A48E7564CD4711F761E53BC"
+    },
+    {
+      "file": "after/gate-10-retry2-during-ingestion.png",
+      "sha256": "1D9D315D182ECF14369C6F63AED6772D2E18229B60A708DD4AD1BDC49FA1BF8B"
+    },
+    {
+      "file": "after/gate-10-retry2-final-card.png",
+      "sha256": "D0A34B95F7126FC55C5C16385425812E079439215DEFE077C47A56B21CC0813C"
+    }
+  ],
+  "cleanup": {
+    "cp_stopped": true,
+    "port_5000_listening": false,
+    "production_catalog_restored_sha256": "C8E0F52C65C9A61D8CEF45A522EA897876C73B889783999E3A17EBB90FA47961",
+    "production_catalog_wal_exists": false,
+    "production_catalog_shm_exists": false,
+    "production_rao_rows": 0,
+    "destination_exists": false,
+    "new_poster_exists": false,
+    "assets_changed_since_backup": 0,
+    "configuration_or_curation_mismatches": 0,
+    "source_hashes_unchanged": true,
+    "qbittorrent_pid": 42792,
+    "qbittorrent_restarted": false
+  }
+}

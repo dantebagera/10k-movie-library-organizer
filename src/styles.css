@@ -56,6 +56,48 @@ body {
   overflow: hidden;
 }
 
+.app-bootstrap,
+.loading-state {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  color: var(--projector-gold, #d4af37);
+}
+
+.loading-state {
+  gap: 12px;
+  align-content: center;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.app-bootstrap {
+  gap: 12px;
+  align-content: center;
+  background:
+    radial-gradient(circle at 50% 42%, #d4af3714 0, transparent 24%),
+    #0a0a0b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.app-bootstrap-mark {
+  width: 34px;
+  height: 34px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  border-right-color: transparent;
+  animation: spin 900ms linear infinite;
+}
+
+.workspace-panel .loading-state {
+  min-height: calc(100vh - 48px);
+}
+
 button,
 input,
 a {
@@ -1256,6 +1298,31 @@ kbd {
   gap: var(--space-2);
 }
 
+.release-sync-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #121316;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 160ms var(--ease-out), color 160ms var(--ease-out), background 160ms var(--ease-out);
+}
+
+.release-sync-button:hover:not(:disabled),
+.release-sync-button:focus-visible {
+  border-color: #d4af3770;
+  background: #d4af3714;
+  color: var(--projector-gold);
+}
+
+.release-sync-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .ghost-link-small {
   min-height: 30px;
   padding: 0 10px;
@@ -1348,6 +1415,8 @@ kbd {
 }
 
 .followed-drawer {
+  display: flex;
+  flex-direction: column;
   width: min(720px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 40px));
   border: 1px solid var(--border-strong);
@@ -1401,10 +1470,14 @@ kbd {
 }
 
 .followed-list-full {
+  flex: 1 1 auto;
   display: grid;
+  align-content: start;
   gap: var(--space-2);
-  max-height: calc(100vh - 220px);
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding-right: 4px;
 }
 
@@ -3108,6 +3181,13 @@ kbd {
 
 .library-movie-results {
   align-items: start;
+}
+
+.library-grid-metrics-probe {
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+  visibility: hidden;
 }
 
 .library-item-card {

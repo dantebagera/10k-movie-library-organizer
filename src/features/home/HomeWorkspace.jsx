@@ -1,6 +1,6 @@
 import {
   AlertTriangle, Bell, ChevronLeft, ChevronRight, ExternalLink, Film, HardDrive, Link as LinkIcon, Loader2, MonitorPlay,
-  Play, ScanSearch, Search, Sparkles, Trash2, Wand2, X, Youtube
+  Play, RefreshCw, ScanSearch, Search, Sparkles, Trash2, Wand2, X, Youtube
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import headerCropUrl from '../../assets/header.png';
@@ -26,6 +26,7 @@ export default function HomeWorkspace(props) {
     ownership,
     followed,
     followedChecking,
+    onScanFollowed,
     selectedMovie,
     selectedOwnership,
     selectedDetails,
@@ -73,6 +74,7 @@ export default function HomeWorkspace(props) {
         <ReleasePanel
           followed={followed}
           checking={followedChecking}
+          onScan={onScanFollowed}
           onSelectMovie={onSelectMovie}
           onViewAll={() => setReleaseDrawerOpen(true)}
         />
@@ -500,7 +502,7 @@ function releaseStatusLabel(movie) {
   return 'Watching';
 }
 
-function ReleasePanel({ followed, checking, onSelectMovie, onViewAll }) {
+function ReleasePanel({ followed, checking, onScan, onSelectMovie, onViewAll }) {
   const preview = sortFollowedReleases(followed).slice(0, 3);
   return (
     <section className="release-panel">
@@ -510,7 +512,17 @@ function ReleasePanel({ followed, checking, onSelectMovie, onViewAll }) {
           <h3>Followed movies and upgrade signals</h3>
         </div>
         <div className="release-heading-actions">
-          {checking ? <Loader2 className="spin" size={17} /> : <Bell size={18} />}
+          <Bell size={18} />
+          <button
+            type="button"
+            className="release-sync-button"
+            onClick={onScan}
+            disabled={checking}
+            aria-label={checking ? 'Scanning followed releases' : 'Scan followed releases'}
+            title={checking ? 'Scanning followed releases' : 'Scan followed releases'}
+          >
+            <RefreshCw className={checking ? 'spin' : ''} size={17} />
+          </button>
           {followed.length > 3 && (
             <button type="button" className="ghost-link ghost-link-small" onClick={onViewAll}>
               View all
@@ -549,6 +561,8 @@ function FollowedReleasesDrawer({ followed, checking, selectedMovie, onClose, on
   const sorted = sortFollowedReleases(followed);
   const visible = sorted.filter((movie) => filter === 'all' || (movie.status || 'watching') === filter);
   const availableCount = sorted.filter((movie) => movie.status === 'available').length;
+  const watchingCount = sorted.filter((movie) => (movie.status || 'watching') === 'watching').length;
+  const filterCounts = { all: sorted.length, available: availableCount, watching: watchingCount };
 
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
@@ -559,7 +573,7 @@ function FollowedReleasesDrawer({ followed, checking, selectedMovie, onClose, on
             <h2>Followed Releases</h2>
           </div>
           <span className={cx('release-drawer-count', availableCount > 0 && 'release-drawer-count-hot')}>
-            {checking ? 'Checking...' : `${formatCount(availableCount)} available`}
+            {formatCount(sorted.length)} followed · {checking ? 'Checking...' : `${formatCount(availableCount)} available`}
           </span>
           <button type="button" className="inspector-close" onClick={onClose} aria-label="Close followed releases">
             <X size={18} />
@@ -574,7 +588,7 @@ function FollowedReleasesDrawer({ followed, checking, selectedMovie, onClose, on
               className={cx('release-filter-chip', filter === value && 'release-filter-chip-active')}
               onClick={() => setFilter(value)}
             >
-              {value === 'all' ? 'All' : value === 'available' ? 'Available' : 'Watching'}
+              {value === 'all' ? 'All' : value === 'available' ? 'Available' : 'Watching'} ({formatCount(filterCounts[value])})
             </button>
           ))}
         </div>
@@ -583,6 +597,7 @@ function FollowedReleasesDrawer({ followed, checking, selectedMovie, onClose, on
           {visible.length ? visible.map((movie, index) => (
             <div
               key={`${movie.tmdb_id || movie.title}-${index}`}
+              data-followed-title={movie.title}
               className={cx(
                 'followed-row',
                 `followed-row-${movie.status || 'watching'}`,
