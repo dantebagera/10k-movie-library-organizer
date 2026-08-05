@@ -62,6 +62,9 @@ class NativePlayerSourceTests(unittest.TestCase):
         cmake = (PLAYER_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         main = (PLAYER_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
         mpv_item = (PLAYER_ROOT / "src" / "MpvItem.cpp").read_text(encoding="utf-8")
+        window_chrome = (PLAYER_ROOT / "src" / "WindowsWindowChrome.cpp").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("qt_add_executable(cp-player WIN32", cmake)
         self.assertIn("Qt6::Quick", cmake)
@@ -72,13 +75,12 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn('QByteArrayLiteral("hwdec")', mpv_item)
         self.assertNotIn("QMediaPlayer", cmake + mpv_item)
         self.assertIn("target_link_libraries(cp-player PRIVATE dwmapi)", cmake)
-        for attribute in (
-            "DWMWA_USE_IMMERSIVE_DARK_MODE",
-            "DWMWA_CAPTION_COLOR",
-            "DWMWA_TEXT_COLOR",
-            "DWMWA_BORDER_COLOR",
-        ):
-            self.assertIn(attribute, main)
+        self.assertIn("WindowsWindowChrome windowChrome", main)
+        self.assertIn('QStringLiteral("windowChrome")', main)
+        self.assertIn("DWMWA_USE_IMMERSIVE_DARK_MODE", window_chrome)
+        self.assertIn("DWMWA_BORDER_COLOR", window_chrome)
+        self.assertNotIn("DWMWA_CAPTION_COLOR", main + window_chrome)
+        self.assertNotIn("DWMWA_TEXT_COLOR", main + window_chrome)
 
     def test_helper_accepts_media_only_from_authenticated_ipc(self):
         main = (PLAYER_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
@@ -101,9 +103,6 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn("fillMode: Image.PreserveAspectFit", qml)
         self.assertIn("root.requestActivate()", qml)
         self.assertIn("mpv.forceActiveFocus()", qml)
-        self.assertIn("nativeCaptionColor: PlayerTheme.archiveBlack", qml)
-        self.assertIn("nativeCaptionTextColor: PlayerTheme.projectorGoldBright", qml)
-        self.assertIn("nativeCaptionBorderColor: PlayerTheme.projectorGold", qml)
         self.assertIn("visible: root.visibility !== Window.FullScreen", qml)
         for shortcut in (
             'shortcuts.play_pause || "Space"',
@@ -160,10 +159,20 @@ class NativePlayerSourceTests(unittest.TestCase):
             "subtitles.svg",
             "volume-high.svg",
             "volume-muted.svg",
+            "window-close.svg",
+            "window-maximize.svg",
+            "window-minimize.svg",
+            "window-restore.svg",
         }
 
         self.assertIn("component CpIconButton: AbstractButton", qml)
-        self.assertIn('iconControl.selected ? "#16d4af37" : "transparent"', qml)
+        self.assertIn("PlayerTheme.playerGoldRestOpacity", qml)
+        self.assertIn("PlayerTheme.playerGoldActiveOpacity", qml)
+        self.assertIn("PlayerTheme.playerGoldDisabledOpacity", qml)
+        self.assertIn("PlayerTheme.playerGoldDecorativeOpacity", qml)
+        self.assertNotIn('"#20d4af37"', qml)
+        self.assertNotIn('"#16d4af37"', qml)
+        self.assertNotIn('"#30f7d57a"', qml)
         self.assertIn("border.width: 0", qml)
         self.assertIn("ToolTip.text: iconControl.label", qml)
         self.assertIn('PREFIX "/icons"', cmake)
@@ -200,6 +209,62 @@ class NativePlayerSourceTests(unittest.TestCase):
             self.assertIn("#F7D57A", svg)
             self.assertIn("#D4AF37", svg)
             self.assertIn("#8C6418", svg)
+
+    def test_frameless_window_chrome_preserves_native_windows_semantics(self):
+        qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
+        main = (PLAYER_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+        chrome = (PLAYER_ROOT / "src" / "WindowsWindowChrome.cpp").read_text(
+            encoding="utf-8"
+        )
+        header = (PLAYER_ROOT / "src" / "WindowsWindowChrome.h").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("flags: Qt.Window | Qt.FramelessWindowHint", qml)
+        self.assertIn("id: windowControls", qml)
+        self.assertIn("windowChrome.minimize()", qml)
+        self.assertIn("windowChrome.toggleMaximized()", qml)
+        self.assertIn("windowChrome.closeWindow()", qml)
+        self.assertIn("root.visibility !== Window.FullScreen", qml)
+        self.assertNotIn("nativeCaptionColor", qml)
+        self.assertNotIn("applyWindowsCaptionTheme", main)
+        self.assertIn("QAbstractNativeEventFilter", header)
+        for contract in (
+            "WS_CAPTION",
+            "WS_THICKFRAME",
+            "WM_NCCALCSIZE",
+            "WM_NCDESTROY",
+            "WM_GETMINMAXINFO",
+            "WM_NCHITTEST",
+            "HTCAPTION",
+            "HTTOPLEFT",
+            "HTBOTTOMRIGHT",
+            "GetDpiForWindow",
+            "MonitorFromWindow",
+        ):
+            self.assertIn(contract, chrome)
+        self.assertIn("m_nativeHandle", header)
+
+    def test_playback_speed_readout_is_an_interactive_cp_control(self):
+        qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
+        mpv_item = (PLAYER_ROOT / "src" / "MpvItem.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("id: speedButton", qml)
+        self.assertIn('ToolTip.text: "Playback speed"', qml)
+        self.assertIn("id: speedPanel", qml)
+        self.assertIn(
+            "closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside",
+            qml,
+        )
+        for preset in ("0.50", "0.75", "1.00", "1.25", "1.50", "2.00"):
+            self.assertIn(preset, qml)
+        self.assertIn("mpv.setSpeed(modelData)", qml)
+        self.assertIn("mpv.setSpeed(mpv.speed - 0.05)", qml)
+        self.assertIn("mpv.setSpeed(mpv.speed + 0.05)", qml)
+        self.assertIn("speedPanel.close()", qml)
+        self.assertIn("std::clamp(value, 0.25, 4.0)", mpv_item)
 
     def test_now_playing_overlay_uses_the_authoritative_poster_without_cropping(self):
         qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
@@ -300,6 +365,36 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertNotIn("m_lastThumbnailBucket", mpv_item)
         self.assertIn("--exercise-timeline", smoke)
         self.assertIn('"timeline_exercised": bool(args.exercise_timeline)', smoke)
+
+    def test_production_smoke_exercises_speed_and_frameless_window_actions(self):
+        smoke = (PLAYER_ROOT / "tools" / "smoke_player.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--exercise-speed-control", smoke)
+        self.assertIn("--exercise-window-chrome", smoke)
+        self.assertIn("read_windows_window_chrome", smoke)
+        self.assertIn('"has_caption": bool(style & 0x00C00000)', smoke)
+        self.assertIn('"top_drag": hit_test(width // 2, scaled(20))', smoke)
+        self.assertIn("logical_pixels(window, 121)", smoke)
+        self.assertIn("exercise_window_drag(window)", smoke)
+        self.assertIn("exercise_window_resize(window)", smoke)
+        self.assertIn('"preset_clicked": "2.00x"', smoke)
+        self.assertIn('"window_chrome_actions": window_chrome_actions', smoke)
+
+    def test_runtime_staging_refreshes_the_owned_license_directory(self):
+        build_script = (PLAYER_ROOT / "tools" / "build_player.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "Remove-Item -LiteralPath $licenseDestination -Recurse -Force",
+            build_script,
+        )
+        self.assertIn(
+            'Copy-Item -Path (Join-Path $licenseSource "*")',
+            build_script,
+        )
 
 
 if __name__ == "__main__":

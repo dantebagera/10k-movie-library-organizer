@@ -12,7 +12,8 @@ class ReactRouteTest(unittest.TestCase):
 
         for response in responses:
             self.assertEqual(response.status_code, 200)
-            self.assertIn(b'<div id="root"></div>', response.data)
+            self.assertIn(b'<div id="root">', response.data)
+            self.assertIn(b'class="app-bootstrap"', response.data)
 
     def test_qbittorrent_webui_has_a_separate_proxy_route(self):
         class FakeManager:

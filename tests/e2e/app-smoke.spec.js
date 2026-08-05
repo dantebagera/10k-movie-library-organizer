@@ -340,7 +340,7 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
     const style = getComputedStyle(element);
     return [style.paddingLeft, style.paddingRight];
   });
-  expect(expandedPadding).toEqual(['14.4px', '14.4px']);
+  expect(expandedPadding).toEqual(['16px', '33.6px']);
 
   await collapseButton.click();
   await expect(sidebar).toHaveCSS('width', '64px');
@@ -406,7 +406,7 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
   expect(collapsedWorkspaceWidth - expandedWorkspaceWidth).toBeLessThanOrEqual(157);
   expect(collapsedContentWidth - expandedContentWidth).toBeGreaterThanOrEqual(155);
   expect(collapsedContentWidth - expandedContentWidth).toBeLessThanOrEqual(157);
-  expect(collapsedPadding).toEqual(['14.4px', '14.4px']);
+  expect(collapsedPadding).toEqual(['16px', '33.6px']);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cp.sidebarCollapsed'))).toBe('true');
 
   await page.reload({ waitUntil: 'domcontentloaded' });

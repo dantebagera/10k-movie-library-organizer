@@ -75,8 +75,12 @@ if ($StageRoot) {
     if (-not (Test-Path -LiteralPath $licenseSource -PathType Container)) {
         throw "Native player license inventory is missing: $licenseSource"
     }
-    Copy-Item -LiteralPath $licenseSource -Destination $licenseDestination `
-        -Recurse -Force
+    if (Test-Path -LiteralPath $licenseDestination) {
+        Remove-Item -LiteralPath $licenseDestination -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $licenseDestination | Out-Null
+    Copy-Item -Path (Join-Path $licenseSource "*") `
+        -Destination $licenseDestination -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $sourceRoot "runtime\qt.conf") `
         -Destination (Join-Path $stageRootPath "qt.conf") -Force
     $assetDestination = Join-Path $stageRootPath "assets"

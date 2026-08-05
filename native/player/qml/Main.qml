@@ -13,6 +13,7 @@ ApplicationWindow {
     y: Math.max(0, (Screen.desktopAvailableHeight - height) / 2)
     visible: true
     color: PlayerTheme.archiveBlack
+    flags: Qt.Window | Qt.FramelessWindowHint
     title: playerBridge.title.length > 0
            ? playerBridge.title + " — Cinema Paradiso"
            : "Cinema Paradiso Player"
@@ -26,20 +27,18 @@ ApplicationWindow {
     property var playbackStatistics: ({})
     property string toastText: ""
     property bool seeking: timeline.scrubbing || timeline.previewActive
-    property color nativeCaptionColor: PlayerTheme.archiveBlack
-    property color nativeCaptionTextColor: PlayerTheme.projectorGoldBright
-    property color nativeCaptionBorderColor: PlayerTheme.projectorGold
 
     component CpButton: Button {
         id: control
-        leftPadding: 14
-        rightPadding: 14
-        topPadding: 9
-        bottomPadding: 9
+        property bool compact: false
+        leftPadding: compact ? 10 : 14
+        rightPadding: compact ? 10 : 14
+        topPadding: compact ? 7 : 9
+        bottomPadding: compact ? 7 : 9
         contentItem: Text {
             text: control.text
             color: control.highlighted ? PlayerTheme.projectorGoldBright : PlayerTheme.textSoft
-            font.pixelSize: 13
+            font.pixelSize: control.compact ? 11 : 13
             font.weight: control.highlighted ? Font.DemiBold : Font.Normal
             elide: Text.ElideRight
             horizontalAlignment: Text.AlignLeft
@@ -78,25 +77,23 @@ ApplicationWindow {
                 fillMode: Image.PreserveAspectFit
                 sourceSize.width: 56
                 sourceSize.height: 56
-                opacity: iconControl.enabled ? 1 : 0.35
+                opacity: !iconControl.enabled
+                         ? PlayerTheme.playerGoldDisabledOpacity
+                         : iconControl.hovered || iconControl.activeFocus || iconControl.selected
+                           ? PlayerTheme.playerGoldActiveOpacity
+                           : PlayerTheme.playerGoldRestOpacity
                 scale: iconControl.hovered || iconControl.activeFocus ? 1.06 : 1
 
                 Behavior on scale {
                     NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
                 }
+                Behavior on opacity { NumberAnimation { duration: 120 } }
             }
         }
 
         background: Rectangle {
-            radius: width / 2
-            color: iconControl.down
-                   ? "#30f7d57a"
-                   : iconControl.hovered || iconControl.activeFocus
-                     ? "#20d4af37"
-                     : iconControl.selected ? "#16d4af37" : "transparent"
+            color: "transparent"
             border.width: 0
-
-            Behavior on color { ColorAnimation { duration: 120 } }
         }
 
         ToolTip.visible: iconControl.hovered
@@ -109,14 +106,19 @@ ApplicationWindow {
         hideControls.restart()
     }
 
+    function colorWithOpacity(color, opacity) {
+        return Qt.rgba(color.r, color.g, color.b, opacity)
+    }
+
     function closeOverlays() {
         if (audioPanelOpen || subtitlePanelOpen || chapterPanelOpen || subtitleSearchOpen
-                || statisticsOpen) {
+                || statisticsOpen || speedPanel.opened) {
             audioPanelOpen = false
             subtitlePanelOpen = false
             chapterPanelOpen = false
             subtitleSearchOpen = false
             statisticsOpen = false
+            speedPanel.close()
             showControls()
             return true
         }
@@ -128,6 +130,7 @@ ApplicationWindow {
         audioPanelOpen = false
         subtitlePanelOpen = false
         chapterPanelOpen = false
+        speedPanel.close()
         playerBridge.requestSubtitleSearch()
         showControls()
     }
@@ -217,7 +220,7 @@ ApplicationWindow {
         onTriggered: {
             if (!mpv.paused && !root.seeking && !audioPanelOpen && !subtitlePanelOpen
                     && !chapterPanelOpen && !subtitleSearchOpen
-                    && !statisticsOpen
+                    && !statisticsOpen && !speedPanel.opened
                     && !playerBridge.resumeDecisionPending)
                 controlsVisible = false
         }
@@ -269,6 +272,7 @@ ApplicationWindow {
             subtitlePanelOpen = false
             chapterPanelOpen = false
             subtitleSearchOpen = false
+            speedPanel.close()
             root.showControls()
         }
     }
@@ -279,6 +283,7 @@ ApplicationWindow {
             audioPanelOpen = false
             chapterPanelOpen = false
             subtitleSearchOpen = false
+            speedPanel.close()
             root.showControls()
         }
     }
@@ -293,6 +298,7 @@ ApplicationWindow {
             audioPanelOpen = false
             subtitlePanelOpen = false
             subtitleSearchOpen = false
+            speedPanel.close()
             root.showControls()
         }
     }
@@ -310,6 +316,7 @@ ApplicationWindow {
             subtitlePanelOpen = false
             chapterPanelOpen = false
             subtitleSearchOpen = false
+            speedPanel.close()
             playbackStatistics = mpv.playbackStatistics()
             root.showControls()
         }
@@ -382,6 +389,7 @@ ApplicationWindow {
                      && !chapterPanelOpen
                      && !subtitleSearchOpen
                      && !statisticsOpen
+                     && !speedPanel.opened
             acceptedButtons: Qt.LeftButton
             onTapped: eventPoint => {
                 const point = eventPoint.position
@@ -393,16 +401,6 @@ ApplicationWindow {
                 }
             }
         }
-    }
-
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        height: 2
-        z: 1000
-        visible: root.visibility !== Window.FullScreen
-        color: PlayerTheme.projectorGold
     }
 
     Rectangle {
@@ -477,24 +475,37 @@ ApplicationWindow {
             }
         }
 
-        ToolButton {
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: 22
-            text: "✕"
-            font.pixelSize: 20
-            onClicked: playerBridge.requestClose()
-            contentItem: Text {
-                text: parent.text
-                color: PlayerTheme.textSoft
-                font: parent.font
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle {
-                radius: PlayerTheme.radiusMedium
-                color: parent.hovered ? "#663a3d45" : "#33000000"
-            }
+    }
+
+    Row {
+        id: windowControls
+        z: 1200
+        anchors.top: parent.top
+        anchors.right: parent.right
+        anchors.topMargin: 6
+        anchors.rightMargin: 8
+        height: windowChrome.dragHeight
+        spacing: 4
+        visible: root.visibility !== Window.FullScreen && opacity > 0
+        opacity: root.controlsVisible ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 160 } }
+
+        CpIconButton {
+            iconSource: "qrc:/icons/window-minimize.svg"
+            label: "Minimize"
+            onClicked: windowChrome.minimize()
+        }
+        CpIconButton {
+            iconSource: root.visibility === Window.Maximized
+                        ? "qrc:/icons/window-restore.svg"
+                        : "qrc:/icons/window-maximize.svg"
+            label: root.visibility === Window.Maximized ? "Restore" : "Maximize"
+            onClicked: windowChrome.toggleMaximized()
+        }
+        CpIconButton {
+            iconSource: "qrc:/icons/window-close.svg"
+            label: "Close"
+            onClicked: windowChrome.closeWindow()
         }
     }
 
@@ -607,6 +618,9 @@ ApplicationWindow {
                         height: parent.height
                         radius: 2
                         color: PlayerTheme.projectorGold
+                        opacity: timeline.previewActive
+                                 ? PlayerTheme.playerGoldActiveOpacity
+                                 : PlayerTheme.playerGoldProgressOpacity
                     }
                     Repeater {
                         model: mpv.chapters
@@ -631,6 +645,9 @@ ApplicationWindow {
                     height: width
                     radius: width / 2
                     color: PlayerTheme.projectorGoldBright
+                    opacity: timeline.previewActive
+                             ? PlayerTheme.playerGoldActiveOpacity
+                             : PlayerTheme.playerGoldProgressOpacity
                 }
             }
 
@@ -696,6 +713,9 @@ ApplicationWindow {
                             height: parent.height
                             radius: parent.radius
                             color: PlayerTheme.projectorGold
+                            opacity: volumeSlider.hovered || volumeSlider.pressed
+                                     ? PlayerTheme.playerGoldActiveOpacity
+                                     : PlayerTheme.playerGoldProgressOpacity
                         }
                     }
                     handle: Rectangle {
@@ -707,8 +727,13 @@ ApplicationWindow {
                         height: width
                         radius: width / 2
                         color: PlayerTheme.projectorGoldBright
+                        opacity: volumeSlider.hovered || volumeSlider.pressed
+                                 ? PlayerTheme.playerGoldActiveOpacity
+                                 : PlayerTheme.playerGoldProgressOpacity
                         border.width: 1
-                        border.color: "#668c6418"
+                        border.color: root.colorWithOpacity(
+                            PlayerTheme.projectorGold,
+                            PlayerTheme.playerGoldDecorativeOpacity)
 
                         Behavior on width { NumberAnimation { duration: 100 } }
                     }
@@ -716,24 +741,58 @@ ApplicationWindow {
                 Text {
                     text: root.formatTime(mpv.position) + " / " + root.formatTime(mpv.duration)
                     color: PlayerTheme.projectorGoldBright
+                    opacity: PlayerTheme.playerGoldRestOpacity
                     font.pixelSize: 13
                 }
                 Item { Layout.fillWidth: true }
-                RowLayout {
-                    spacing: 5
-                    Image {
-                        Layout.preferredWidth: 23
-                        Layout.preferredHeight: 23
-                        source: "qrc:/icons/speed.svg"
-                        fillMode: Image.PreserveAspectFit
-                        sourceSize.width: 46
-                        sourceSize.height: 46
+                AbstractButton {
+                    id: speedButton
+                    Layout.preferredWidth: 82
+                    Layout.preferredHeight: 42
+                    hoverEnabled: true
+                    focusPolicy: Qt.StrongFocus
+                    Accessible.name: "Playback speed " + mpv.speed.toFixed(2)
+                    onClicked: {
+                        if (speedPanel.opened) {
+                            speedPanel.close()
+                        } else {
+                            audioPanelOpen = false
+                            subtitlePanelOpen = false
+                            chapterPanelOpen = false
+                            subtitleSearchOpen = false
+                            statisticsOpen = false
+                            speedPanel.open()
+                        }
+                        root.showControls()
                     }
-                    Text {
-                        text: mpv.speed.toFixed(2) + "×"
-                        color: PlayerTheme.projectorGoldBright
-                        font.pixelSize: 12
+                    contentItem: RowLayout {
+                        spacing: 5
+                        Image {
+                            Layout.preferredWidth: 23
+                            Layout.preferredHeight: 23
+                            source: "qrc:/icons/speed.svg"
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.width: 46
+                            sourceSize.height: 46
+                            opacity: speedButton.hovered || speedButton.activeFocus
+                                     || speedPanel.opened
+                                     ? PlayerTheme.playerGoldActiveOpacity
+                                     : PlayerTheme.playerGoldRestOpacity
+                            Behavior on opacity { NumberAnimation { duration: 120 } }
+                        }
+                        Text {
+                            text: mpv.speed.toFixed(2) + "×"
+                            color: PlayerTheme.projectorGoldBright
+                            opacity: speedButton.hovered || speedButton.activeFocus
+                                     || speedPanel.opened
+                                     ? PlayerTheme.playerGoldActiveOpacity
+                                     : PlayerTheme.playerGoldRestOpacity
+                            font.pixelSize: 12
+                        }
                     }
+                    ToolTip.visible: speedButton.hovered
+                    ToolTip.delay: 450
+                    ToolTip.text: "Playback speed"
                 }
                 CpIconButton {
                     iconSource: "qrc:/icons/audio-tracks.svg"
@@ -744,6 +803,7 @@ ApplicationWindow {
                         subtitlePanelOpen = false
                         chapterPanelOpen = false
                         subtitleSearchOpen = false
+                        speedPanel.close()
                         root.showControls()
                     }
                 }
@@ -756,6 +816,7 @@ ApplicationWindow {
                         audioPanelOpen = false
                         chapterPanelOpen = false
                         subtitleSearchOpen = false
+                        speedPanel.close()
                         root.showControls()
                     }
                 }
@@ -811,29 +872,116 @@ ApplicationWindow {
         }
     }
 
+    Popup {
+        id: speedPanel
+        parent: Overlay.overlay
+        x: Math.max(28, root.width - width - 116)
+        y: Math.max(20, root.height - bottomBar.height - height + 44)
+        width: 220
+        height: 176
+        padding: 12
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        property var presetSpeeds: [0.50, 0.75, 1.00, 1.25, 1.50, 2.00]
+        onOpened: root.showControls()
+        onClosed: root.showControls()
+
+        background: Rectangle {
+            color: root.colorWithOpacity(PlayerTheme.panelBlack, 0.75)
+            radius: PlayerTheme.radiusLarge
+            border.color: PlayerTheme.borderStrong
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 7
+            Text {
+                text: "Playback speed"
+                color: PlayerTheme.textStrong
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 3
+                rowSpacing: 4
+                columnSpacing: 4
+                Repeater {
+                    model: speedPanel.presetSpeeds
+                    delegate: CpButton {
+                        required property real modelData
+                        compact: true
+                        Layout.fillWidth: true
+                        text: modelData.toFixed(2) + "×"
+                        highlighted: Math.abs(mpv.speed - modelData) < 0.001
+                        onClicked: {
+                            mpv.setSpeed(modelData)
+                            root.showControls()
+                        }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                CpButton {
+                    compact: true
+                    Layout.preferredWidth: 54
+                    text: "−"
+                    enabled: mpv.speed > 0.25
+                    Accessible.name: "Decrease playback speed"
+                    onClicked: {
+                        mpv.setSpeed(mpv.speed - 0.05)
+                        root.showControls()
+                    }
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: mpv.speed.toFixed(2) + "×"
+                    color: PlayerTheme.projectorGoldBright
+                    opacity: PlayerTheme.playerGoldActiveOpacity
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                CpButton {
+                    compact: true
+                    Layout.preferredWidth: 54
+                    text: "+"
+                    enabled: mpv.speed < 4.0
+                    Accessible.name: "Increase playback speed"
+                    onClicked: {
+                        mpv.setSpeed(mpv.speed + 0.05)
+                        root.showControls()
+                    }
+                }
+            }
+        }
+    }
+
     Rectangle {
         id: trackPanel
-        width: Math.min(430, root.width - 56)
-        height: Math.min(390, root.height - 210)
+        width: Math.min(315, root.width - 56)
+        height: Math.min(290, root.height - 210)
         anchors.right: parent.right
         anchors.bottom: bottomBar.top
         anchors.rightMargin: 28
         anchors.bottomMargin: -44
         visible: audioPanelOpen || subtitlePanelOpen || chapterPanelOpen
-        color: PlayerTheme.panelBlack
+        color: root.colorWithOpacity(PlayerTheme.panelBlack, 0.75)
         radius: PlayerTheme.radiusLarge
         border.color: PlayerTheme.borderStrong
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 18
-            spacing: 10
+            anchors.margins: 12
+            spacing: 7
 
             Text {
                 text: audioPanelOpen ? "Audio tracks"
                                      : subtitlePanelOpen ? "Subtitle tracks" : "Chapters"
                 color: PlayerTheme.textStrong
-                font.pixelSize: 18
+                font.pixelSize: 14
                 font.weight: Font.DemiBold
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: PlayerTheme.border }
@@ -852,6 +1000,7 @@ ApplicationWindow {
                             model: mpv.audioTracks
                             delegate: CpButton {
                                 required property var modelData
+                                compact: true
                                 width: parent.width
                                 text: root.trackLabel(modelData)
                                 highlighted: !!modelData.selected
@@ -880,12 +1029,14 @@ ApplicationWindow {
                         width: parent.width
                         spacing: 4
                         CpButton {
+                            compact: true
                             width: parent.width
                             text: "Search online subtitles"
                             highlighted: true
                             onClicked: root.showSubtitleSearch()
                         }
                         CpButton {
+                            compact: true
                             width: parent.width
                             visible: playerBridge.selectedSubtitleCanSave
                                      || playerBridge.subtitleSaveStatus === "saving"
@@ -913,6 +1064,7 @@ ApplicationWindow {
                             color: PlayerTheme.border
                         }
                         CpButton {
+                            compact: true
                             width: parent.width
                             text: "Off"
                             onClicked: {
@@ -924,6 +1076,7 @@ ApplicationWindow {
                             model: mpv.subtitleTracks
                             delegate: CpButton {
                                 required property var modelData
+                                compact: true
                                 width: parent.width
                                 text: root.trackLabel(modelData)
                                 highlighted: !!modelData.selected
@@ -955,6 +1108,7 @@ ApplicationWindow {
                             model: mpv.chapters
                             delegate: CpButton {
                                 required property var modelData
+                                compact: true
                                 width: parent.width
                                 text: (modelData.title || "Chapter") + "  ·  "
                                       + root.formatTime(modelData.time)
@@ -986,7 +1140,9 @@ ApplicationWindow {
         visible: playerBridge.resumeDecisionPending
         color: PlayerTheme.panelBlack
         radius: PlayerTheme.radiusExtraLarge
-        border.color: PlayerTheme.projectorGold
+        border.color: root.colorWithOpacity(
+            PlayerTheme.projectorGold,
+            PlayerTheme.playerGoldDecorativeOpacity)
 
         ColumnLayout {
             anchors.fill: parent
@@ -1031,7 +1187,9 @@ ApplicationWindow {
         visible: subtitleSearchOpen
         color: PlayerTheme.panelBlack
         radius: PlayerTheme.radiusExtraLarge
-        border.color: PlayerTheme.projectorGold
+        border.color: root.colorWithOpacity(
+            PlayerTheme.projectorGold,
+            PlayerTheme.playerGoldDecorativeOpacity)
 
         ColumnLayout {
             anchors.fill: parent
@@ -1117,6 +1275,7 @@ ApplicationWindow {
                             width: parent.width
                             text: modelData.match_reason
                             color: PlayerTheme.projectorGoldBright
+                            opacity: PlayerTheme.playerGoldRestOpacity
                             font.pixelSize: 12
                             elide: Text.ElideRight
                         }
@@ -1160,7 +1319,9 @@ ApplicationWindow {
         visible: statisticsOpen
         color: PlayerTheme.panelBlack
         radius: PlayerTheme.radiusLarge
-        border.color: PlayerTheme.projectorGold
+        border.color: root.colorWithOpacity(
+            PlayerTheme.projectorGold,
+            PlayerTheme.playerGoldDecorativeOpacity)
 
         ColumnLayout {
             anchors.fill: parent

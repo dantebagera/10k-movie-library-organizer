@@ -15,6 +15,13 @@
     "projectorGoldBright": "#f7d57a",
     "dangerRed": "#ef4444"
   },
+  "opacity": {
+    "playerGoldRest": 0.58,
+    "playerGoldProgress": 0.72,
+    "playerGoldActive": 1.0,
+    "playerGoldDisabled": 0.28,
+    "playerGoldDecorative": 0.4
+  },
   "radii": {
     "small": 4,
     "medium": 6,

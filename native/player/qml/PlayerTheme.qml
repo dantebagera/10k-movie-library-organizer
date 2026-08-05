@@ -16,6 +16,11 @@ QtObject {
     readonly property color projectorGold: "#d4af37"
     readonly property color projectorGoldBright: "#f7d57a"
     readonly property color dangerRed: "#ef4444"
+    readonly property real playerGoldRestOpacity: 0.58
+    readonly property real playerGoldProgressOpacity: 0.72
+    readonly property real playerGoldActiveOpacity: 1
+    readonly property real playerGoldDisabledOpacity: 0.28
+    readonly property real playerGoldDecorativeOpacity: 0.4
     readonly property int radiusSmall: 4
     readonly property int radiusMedium: 6
     readonly property int radiusLarge: 8

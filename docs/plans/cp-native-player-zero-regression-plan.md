@@ -701,7 +701,69 @@ The native player is complete only when:
 9. Targeted tests, the frontend build, portable-package checks, and real desktop playback evidence all pass.
 10. The implementation leaves one clear authoritative owner for every player responsibility.
 
-## 18. Primary Technical References
+## 18. Approved Desktop Player Chrome Amendment (2026-08-04)
+
+This amendment is limited to the CP native local-library player. IPTV playback and
+the streaming action on movie cards retain their existing players and are not
+changed.
+
+### 18.1 Interactive playback-speed control
+
+- The visible speed icon and value are one borderless CP control, not a passive
+  status label.
+- Activating it opens a CP-owned speed panel with `0.50x`, `0.75x`, `1.00x`,
+  `1.25x`, `1.50x`, and `2.00x` presets plus bounded `-` and `+` adjustments in
+  `0.05x` steps.
+- The current speed is visibly selected. Escape, outside activation, and opening
+  another player panel close the speed panel deterministically.
+- The existing `MpvItem::setSpeed()` implementation remains the sole playback-
+  speed owner. The `[` and `]` shortcuts use the same method.
+
+### 18.2 Calmer CP gold hierarchy
+
+- Gold intensity is semantic rather than reduced globally: resting player icons
+  use approximately 58% opacity, progress approximately 72%, hover/focus/active
+  states 100%, disabled states approximately 28%, and decorative borders
+  approximately 40%.
+- The permanent top gold rule is removed or reduced to a non-competing decorative
+  level.
+- Player-specific semantic tokens originate in `design/player-theme.json` and are
+  generated into QML and CSS. Individual controls must not maintain competing
+  color constants or duplicate icon assets.
+- Poster presentation has no gold outline. Warning and selected states retain
+  sufficient contrast.
+
+### 18.3 CP-owned frameless desktop window
+
+- Windowed playback removes the generic Windows caption and extends video to the
+  client edges. This is a frameless native window, not a headless player.
+- QML owns the visible CP minimize, maximize/restore, and close overlay controls.
+  They appear with the player controls, use the semantic gold hierarchy, and are
+  absent in fullscreen.
+- One native Windows window-chrome owner replaces the obsolete DWM caption-color
+  implementation and owns non-client hit testing, edge/corner resize behavior,
+  system move, maximize/restore semantics, and Windows snapping behavior.
+- The unused top overlay area is draggable and supports double-click
+  maximize/restore without stealing interaction from Now Playing or window
+  controls.
+- Existing window size, position, maximized state, always-on-top state,
+  multi-monitor placement, fullscreen behavior, keyboard focus, and DPI scaling
+  remain authoritative and compatible.
+
+### 18.4 Amendment verification gate
+
+- Add automated ownership and interaction coverage for speed selection, semantic
+  gold tokens, frameless flags, window actions, and fullscreen visibility.
+- Extend the production smoke harness to exercise speed clicks, minimize/restore,
+  maximize/restore, dragging, resizing, and fullscreen transitions against the
+  real packaged helper.
+- Collect real desktop screenshots and Windows style/state evidence at the
+  available display scales. Verify playback progress continues through window
+  operations and OS-default fallback remains available.
+- Assemble a new immutable, hash-verified runtime only after source tests, isolated
+  backend regressions, the frontend build, and desktop smoke evidence pass.
+
+## 19. Primary Technical References
 
 - [mpv libmpv embedding example](https://github.com/mpv-player/mpv-examples/blob/master/libmpv/README.md)
 - [mpv source and licensing](https://github.com/mpv-player/mpv)

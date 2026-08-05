@@ -14,6 +14,11 @@ class PlayerThemeTests(unittest.TestCase):
 
         self.assertEqual(theme["colors"]["projectorGold"], "#d4af37")
         self.assertEqual(theme["colors"]["archiveBlack"], "#0a0a0b")
+        self.assertEqual(theme["opacity"]["playerGoldRest"], 0.58)
+        self.assertEqual(theme["opacity"]["playerGoldProgress"], 0.72)
+        self.assertEqual(theme["opacity"]["playerGoldActive"], 1.0)
+        self.assertEqual(theme["opacity"]["playerGoldDisabled"], 0.28)
+        self.assertEqual(theme["opacity"]["playerGoldDecorative"], 0.4)
         self.assertEqual(theme["timing"]["controlsHideMs"], 2500)
 
     def test_global_css_imports_generated_theme_before_application_styles(self):

@@ -41,6 +41,8 @@ qt_add_executable(cp-player WIN32
     src/MpvItem.h
     src/PlayerBridge.cpp
     src/PlayerBridge.h
+    src/WindowsWindowChrome.cpp
+    src/WindowsWindowChrome.h
 )
 
 set_source_files_properties(qml/PlayerTheme.qml PROPERTIES
@@ -78,6 +80,10 @@ set(CP_PLAYER_CONTROL_ICONS
     resources/icons/subtitles.svg
     resources/icons/volume-high.svg
     resources/icons/volume-muted.svg
+    resources/icons/window-close.svg
+    resources/icons/window-maximize.svg
+    resources/icons/window-minimize.svg
+    resources/icons/window-restore.svg
 )
 foreach(CP_PLAYER_CONTROL_ICON IN LISTS CP_PLAYER_CONTROL_ICONS)
     get_filename_component(CP_PLAYER_CONTROL_ICON_NAME

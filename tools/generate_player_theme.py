@@ -33,6 +33,8 @@ def render_css(theme):
     ]
     for name, value in theme["colors"].items():
         lines.append(f"  --{css_name(name)}: {value};")
+    for name, value in theme.get("opacity", {}).items():
+        lines.append(f"  --{css_name(name)}-opacity: {float(value):g};")
     for name, value in theme["radii"].items():
         lines.append(f"  --radius-{css_name(name)}: {value}px;")
     for name, value in theme["shadows"].items():
@@ -51,6 +53,10 @@ def render_qml(theme):
     ]
     for name, value in theme["colors"].items():
         lines.append(f'    readonly property color {name}: "{value}"')
+    for name, value in theme.get("opacity", {}).items():
+        lines.append(
+            f"    readonly property real {name}Opacity: {float(value):g}"
+        )
     for name, value in theme["radii"].items():
         lines.append(f"    readonly property int radius{name[0].upper() + name[1:]}: {value}")
     lines.append(

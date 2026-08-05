@@ -22,7 +22,7 @@ def selector_rule(source, selector):
 
 class WorkspaceLayoutUiTest(unittest.TestCase):
     def test_production_workspaces_share_discover_content_width(self):
-        self.assertIn("--workspace-content-base-max-width: 1640px;", STYLES)
+        self.assertIn("--workspace-content-base-max-width: 1760px;", STYLES)
         self.assertIn(
             "--workspace-content-max-width: var(--workspace-content-base-max-width);",
             STYLES,
@@ -54,12 +54,12 @@ class WorkspaceLayoutUiTest(unittest.TestCase):
 
     def test_shared_workspace_keeps_discover_outer_padding(self):
         workspace = selector_rule(STYLES, ".workspace")
-        self.assertIn("padding: 24px;", workspace)
+        self.assertIn("padding: 24px 33.6px 24px 16px;", workspace)
         self.assertIn("scrollbar-gutter: stable;", workspace)
 
-    def test_desktop_sidebar_collapses_without_changing_workspace_padding(self):
-        self.assertIn("--sidebar-width: 280px;", STYLES)
-        self.assertIn("--sidebar-collapsed-width: 84px;", STYLES)
+    def test_desktop_sidebar_collapses_with_refined_workspace_gutters(self):
+        self.assertIn("--sidebar-width: 220px;", STYLES)
+        self.assertIn("--sidebar-collapsed-width: 64px;", STYLES)
         self.assertIn(
             "grid-template-columns: var(--sidebar-width) minmax(0, 1fr);",
             selector_rule(STYLES, ".app-shell"),
@@ -86,7 +86,10 @@ class WorkspaceLayoutUiTest(unittest.TestCase):
             "    flex: 0 0 0;",
             STYLES,
         )
-        self.assertIn("padding: 24px;", selector_rule(STYLES, ".workspace"))
+        self.assertIn(
+            "padding: 24px 33.6px 24px 16px;",
+            selector_rule(STYLES, ".workspace"),
+        )
 
 
 if __name__ == "__main__":

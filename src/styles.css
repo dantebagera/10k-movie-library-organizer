@@ -3067,8 +3067,27 @@ kbd {
   color: var(--text-strong);
 }
 
-.movie-list-rail-item span {
+.movie-list-rail-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 800;
+}
+
+.movie-list-rail-icon {
+  flex: 0 0 auto;
+}
+
+.movie-list-rail-item-system-watched .movie-list-rail-icon {
+  color: #4ade80;
+}
+
+.movie-list-rail-item-system-watchlist .movie-list-rail-icon {
+  color: var(--projector-gold);
+}
+
+.movie-list-rail-item-system-following .movie-list-rail-icon {
+  color: #60a5fa;
 }
 
 .movie-list-rail-item small {

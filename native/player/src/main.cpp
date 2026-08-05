@@ -1,56 +1,14 @@
 #include "MpvItem.h"
 #include "PlayerBridge.h"
+#include "WindowsWindowChrome.h"
 
 #include <QGuiApplication>
-#include <QColor>
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTimer>
-
-#ifdef Q_OS_WIN
-#include <dwmapi.h>
-#include <qt_windows.h>
-
-namespace {
-
-COLORREF windowsColor(const QColor &color)
-{
-    return RGB(color.red(), color.green(), color.blue());
-}
-
-void applyWindowsCaptionTheme(QQuickWindow *window)
-{
-    if (!window) {
-        return;
-    }
-    const HWND handle = reinterpret_cast<HWND>(window->winId());
-    if (!handle) {
-        return;
-    }
-
-    const BOOL darkCaption = TRUE;
-    DwmSetWindowAttribute(
-        handle,
-        DWMWA_USE_IMMERSIVE_DARK_MODE,
-        &darkCaption,
-        sizeof(darkCaption));
-
-    const COLORREF caption = windowsColor(
-        window->property("nativeCaptionColor").value<QColor>());
-    const COLORREF text = windowsColor(
-        window->property("nativeCaptionTextColor").value<QColor>());
-    const COLORREF border = windowsColor(
-        window->property("nativeCaptionBorderColor").value<QColor>());
-    DwmSetWindowAttribute(handle, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
-    DwmSetWindowAttribute(handle, DWMWA_TEXT_COLOR, &text, sizeof(text));
-    DwmSetWindowAttribute(handle, DWMWA_BORDER_COLOR, &border, sizeof(border));
-}
-
-}
-#endif
 
 int main(int argc, char *argv[])
 {
@@ -67,8 +25,10 @@ int main(int argc, char *argv[])
         return 2;
     }
 
+    WindowsWindowChrome windowChrome;
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("playerBridge"), &bridge);
+    engine.rootContext()->setContextProperty(QStringLiteral("windowChrome"), &windowChrome);
     engine.loadFromModule(QStringLiteral("CinemaParadiso.Player"), QStringLiteral("Main"));
     if (engine.rootObjects().isEmpty()) {
         return 3;
@@ -80,9 +40,7 @@ int main(int argc, char *argv[])
         return 4;
     }
 
-#ifdef Q_OS_WIN
-    applyWindowsCaptionTheme(qobject_cast<QQuickWindow *>(root));
-#endif
+    windowChrome.attach(qobject_cast<QQuickWindow *>(root));
 
     bridge.attachPlayer(player);
     QObject::connect(&bridge, &PlayerBridge::closeWindowRequested,

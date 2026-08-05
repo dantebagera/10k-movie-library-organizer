@@ -1,5 +1,5 @@
 import {
-  AlertTriangle, CirclePlus, Copy, Film, Loader2, Pencil, Search, Trash2, X
+  AlertTriangle, Bell, Bookmark, Check, CirclePlus, Copy, Film, Loader2, Pencil, Search, Trash2, X
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
@@ -19,6 +19,12 @@ import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { discoverMoviePayload, listsForDiscoverMovie } from '../../discoverUtils.js';
 import { buildMovieListViewModel, listsForItem, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
+
+const SYSTEM_LIST_ICONS = {
+  watched: Check,
+  watchlist: Bookmark,
+  following: Bell
+};
 
 export default function MovieListsWorkspace({
   notify,
@@ -497,17 +503,27 @@ export default function MovieListsWorkspace({
               <CirclePlus size={13} /> New list
             </button>
           </form>
-          {displayLists.length ? displayLists.map((list) => (
-            <button
-              type="button"
-              key={list.id}
-              className={cx('movie-list-rail-item', selectedList?.id === list.id && 'movie-list-rail-item-active')}
-              onClick={() => setSelectedListId(list.id)}
-            >
-              <span>{list.name}</span>
-              <small>{formatCount((list.movies || []).length)} movies</small>
-            </button>
-          )) : (
+          {displayLists.length ? displayLists.map((list) => {
+            const SystemListIcon = SYSTEM_LIST_ICONS[list.system_type];
+            return (
+              <button
+                type="button"
+                key={list.id}
+                className={cx(
+                  'movie-list-rail-item',
+                  list.system_type && `movie-list-rail-item-system-${list.system_type}`,
+                  selectedList?.id === list.id && 'movie-list-rail-item-active'
+                )}
+                onClick={() => setSelectedListId(list.id)}
+              >
+                <span className="movie-list-rail-title">
+                  {SystemListIcon && <SystemListIcon className="movie-list-rail-icon" size={16} aria-hidden="true" />}
+                  <span>{list.name}</span>
+                </span>
+                <small>{formatCount((list.movies || []).length)} movies</small>
+              </button>
+            );
+          }) : (
             <div className="empty-state"><strong>No lists yet.</strong><span>Create lists from Library or Discover.</span></div>
           )}
         </aside>

@@ -240,8 +240,26 @@ def capture_window(window, destination):
     image.save(destination)
 
 
-def read_windows_caption_theme(window):
+def read_windows_window_chrome(window):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
     dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+    get_window_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+    get_window_long.argtypes = [wintypes.HWND, ctypes.c_int]
+    get_window_long.restype = ctypes.c_ssize_t
+    user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+    user32.GetDpiForWindow.restype = wintypes.UINT
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    user32.GetWindowRect.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.RECT),
+    ]
+    user32.GetWindowRect.restype = wintypes.BOOL
     dwmapi.DwmGetWindowAttribute.argtypes = [
         wintypes.HWND,
         wintypes.DWORD,
@@ -259,21 +277,191 @@ def read_windows_caption_theme(window):
         )
         return value.value if result >= 0 else None
 
-    def color_hex(value):
-        if value is None:
-            return ""
-        return "#{:02x}{:02x}{:02x}".format(
-            value & 0xFF,
-            (value >> 8) & 0xFF,
-            (value >> 16) & 0xFF,
+    rectangle = wintypes.RECT()
+    if not user32.GetWindowRect(window, ctypes.byref(rectangle)):
+        raise RuntimeError("The native player window bounds were unavailable.")
+
+    def hit_test(client_x, client_y):
+        screen = wintypes.POINT(
+            rectangle.left + client_x,
+            rectangle.top + client_y,
         )
+        packed = (screen.x & 0xFFFF) | ((screen.y & 0xFFFF) << 16)
+        return int(user32.SendMessageW(window, 0x0084, 0, packed))
+
+    width = rectangle.right - rectangle.left
+    height = rectangle.bottom - rectangle.top
+    dpi = int(user32.GetDpiForWindow(window) or 96)
+    scaled = lambda logical: round(logical * dpi / 96)
+    style = int(get_window_long(window, -16))
 
     return {
+        "style_hex": f"0x{style & 0xFFFFFFFF:08x}",
+        "has_caption": bool(style & 0x00C00000),
+        "has_thick_frame": bool(style & 0x00040000),
+        "has_minimize_box": bool(style & 0x00020000),
+        "has_maximize_box": bool(style & 0x00010000),
+        "has_system_menu": bool(style & 0x00080000),
+        "dpi": dpi,
         "dark_mode": bool(read_dword(20)),
-        "border": color_hex(read_dword(34)),
-        "background": color_hex(read_dword(35)),
-        "text": color_hex(read_dword(36)),
+        "hit_tests": {
+            "top_drag": hit_test(width // 2, scaled(20)),
+            "top_left_resize": hit_test(2, 2),
+            "bottom_right_resize": hit_test(width - 2, height - 2),
+            "window_controls": hit_test(
+                width - scaled(29),
+                scaled(27),
+            ),
+            "video_client": hit_test(
+                width // 2,
+                min(height - 10, scaled(100)),
+            ),
+        },
     }
+
+
+def logical_pixels(window, value):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+    user32.GetDpiForWindow.restype = wintypes.UINT
+    dpi = int(user32.GetDpiForWindow(window) or 96)
+    return round(value * dpi / 96)
+
+
+def get_window_rectangle(window):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetWindowRect.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.RECT),
+    ]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    rectangle = wintypes.RECT()
+    if not user32.GetWindowRect(window, ctypes.byref(rectangle)):
+        raise RuntimeError("The native player window bounds were unavailable.")
+    return (
+        rectangle.left,
+        rectangle.top,
+        rectangle.right,
+        rectangle.bottom,
+    )
+
+
+def set_window_rectangle(window, rectangle):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    left, top, right, bottom = rectangle
+    if not user32.SetWindowPos(
+        window,
+        0,
+        left,
+        top,
+        right - left,
+        bottom - top,
+        0x0004 | 0x0010,
+    ):
+        raise RuntimeError("The native player window bounds could not be restored.")
+
+
+def wait_for_window_state(predicate, description, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"The native player did not {description}.")
+
+
+def click_window_client_point(window, client_x, client_y):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.ClientToScreen.argtypes = [
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.POINT),
+    ]
+    user32.ClientToScreen.restype = wintypes.BOOL
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    client = wintypes.POINT(round(client_x), round(client_y))
+    screen = wintypes.POINT(client.x, client.y)
+    if not user32.ClientToScreen(window, ctypes.byref(screen)):
+        raise RuntimeError("The native player client coordinates were unavailable.")
+    show_test_window(window)
+    user32.SetCursorPos(screen.x, screen.y)
+    time.sleep(0.05)
+    packed = (client.x & 0xFFFF) | ((client.y & 0xFFFF) << 16)
+    user32.SendMessageW(window, 0x0200, 0, packed)
+    user32.SendMessageW(window, 0x0201, 1, packed)
+    time.sleep(0.08)
+    user32.SendMessageW(window, 0x0202, 0, packed)
+    time.sleep(0.08)
+    return {
+        "client": (client.x, client.y),
+        "screen": (screen.x, screen.y),
+    }
+
+
+def exercise_window_drag(window):
+    before = get_window_rectangle(window)
+    left, top, right, _bottom = before
+    start_x = left + (right - left) // 2
+    start_y = top + logical_pixels(window, 22)
+    movement_x = logical_pixels(window, 7)
+    movement_y = logical_pixels(window, 4)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    show_test_window(window)
+    user32.SetCursorPos(start_x, start_y)
+    user32.mouse_event(0x0002, 0, 0, 0, 0)
+    for step in range(1, 9):
+        user32.SetCursorPos(
+            start_x + step * movement_x,
+            start_y + step * movement_y,
+        )
+        time.sleep(0.025)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)
+    wait_for_window_state(
+        lambda: get_window_rectangle(window)[:2] != before[:2],
+        "move through the CP drag region",
+    )
+    after = get_window_rectangle(window)
+    set_window_rectangle(window, before)
+    return {"before": before, "after": after}
+
+
+def exercise_window_resize(window):
+    before = get_window_rectangle(window)
+    _left, _top, right, bottom = before
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    show_test_window(window)
+    user32.SetCursorPos(right - 2, bottom - 2)
+    user32.mouse_event(0x0002, 0, 0, 0, 0)
+    movement_x = logical_pixels(window, 8)
+    movement_y = logical_pixels(window, 5)
+    for step in range(1, 9):
+        user32.SetCursorPos(
+            right - 2 + step * movement_x,
+            bottom - 2 + step * movement_y,
+        )
+        time.sleep(0.025)
+    user32.mouse_event(0x0004, 0, 0, 0, 0)
+    wait_for_window_state(
+        lambda: get_window_rectangle(window)[2:] != before[2:],
+        "resize through the CP bottom-right edge",
+    )
+    after = get_window_rectangle(window)
+    set_window_rectangle(window, before)
+    return {"before": before, "after": after}
 
 
 def receive_until(transport, process, events, predicate, timeout):
@@ -318,6 +506,8 @@ def main():
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
     parser.add_argument("--exercise-timeline", action="store_true")
+    parser.add_argument("--exercise-speed-control", action="store_true")
+    parser.add_argument("--exercise-window-chrome", action="store_true")
     parser.add_argument("--exercise-subtitle-provider-flow", action="store_true")
     parser.add_argument("--external-subtitle", type=Path)
     parser.add_argument("--exercise-resume", action="store_true")
@@ -377,7 +567,9 @@ def main():
 
     process = None
     events = []
-    caption_theme = {}
+    window_chrome = {}
+    window_chrome_actions = {}
+    speed_control = {}
     timeline_click_position_ms = 0
     timeline_drag_position_ms = 0
     timeline_preview_thumbnail = ""
@@ -503,12 +695,42 @@ def main():
                         f"Native helper error {event.get('code')}: {event.get('message')}"
                     )
 
-            if args.exercise_controls:
+            exercise_ui = (
+                args.exercise_controls
+                or args.exercise_timeline
+                or args.exercise_speed_control
+                or args.exercise_window_chrome
+            )
+            if exercise_ui:
                 window = find_visible_window(process.pid)
                 if not window:
                     raise RuntimeError("The production player window was not visible.")
                 show_test_window(window)
-                caption_theme = read_windows_caption_theme(window)
+                window_chrome = read_windows_window_chrome(window)
+                expected_hit_tests = {
+                    "top_drag": 2,
+                    "top_left_resize": 13,
+                    "bottom_right_resize": 17,
+                    "window_controls": 1,
+                    "video_client": 1,
+                }
+                if window_chrome["has_caption"]:
+                    raise RuntimeError("The CP player still has a Windows caption style.")
+                for required_style in (
+                    "has_thick_frame",
+                    "has_minimize_box",
+                    "has_maximize_box",
+                    "has_system_menu",
+                ):
+                    if not window_chrome[required_style]:
+                        raise RuntimeError(
+                            f"The frameless player omitted {required_style}."
+                        )
+                if window_chrome["hit_tests"] != expected_hit_tests:
+                    raise RuntimeError(
+                        "The frameless hit-test contract is incorrect: "
+                        + json.dumps(window_chrome["hit_tests"], sort_keys=True)
+                    )
                 if args.screenshot:
                     pre_controls_path = args.screenshot.with_name(
                         f"{args.screenshot.stem}-pre-controls{args.screenshot.suffix}"
@@ -541,6 +763,174 @@ def main():
                     and event.get("state") == "paused",
                     3,
                 )
+                if args.exercise_window_chrome:
+                    user32 = ctypes.WinDLL("user32", use_last_error=True)
+                    user32.IsIconic.argtypes = [wintypes.HWND]
+                    user32.IsIconic.restype = wintypes.BOOL
+                    user32.IsZoomed.argtypes = [wintypes.HWND]
+                    user32.IsZoomed.restype = wintypes.BOOL
+                    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
+                    normal_rectangle = get_window_rectangle(window)
+                    normal_width = normal_rectangle[2] - normal_rectangle[0]
+                    maximize_click = click_window_client_point(
+                        window,
+                        normal_width - logical_pixels(window, 75),
+                        logical_pixels(window, 27),
+                    )
+                    time.sleep(0.4)
+                    maximize_result_rectangle = get_window_rectangle(window)
+                    wait_for_window_state(
+                        lambda: bool(user32.IsZoomed(window))
+                        or get_window_rectangle(window) != normal_rectangle,
+                        "maximize through the CP overlay control at "
+                        f"{maximize_click}, rect={normal_rectangle}, "
+                        f"result={maximize_result_rectangle}, "
+                        f"is_zoomed={bool(user32.IsZoomed(window))}, "
+                        f"dpi={window_chrome['dpi']}",
+                    )
+                    maximized_rectangle = get_window_rectangle(window)
+                    if args.screenshot:
+                        maximized_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-maximized{args.screenshot.suffix}"
+                        )
+                        capture_window(window, maximized_path)
+                    maximized_width = (
+                        maximized_rectangle[2] - maximized_rectangle[0]
+                    )
+                    click_window_client_point(
+                        window,
+                        maximized_width - logical_pixels(window, 75),
+                        logical_pixels(window, 27),
+                    )
+                    wait_for_window_state(
+                        lambda: not bool(user32.IsZoomed(window)),
+                        "restore through the CP overlay control",
+                    )
+                    show_test_window(window)
+
+                    restored_rectangle = get_window_rectangle(window)
+                    restored_width = restored_rectangle[2] - restored_rectangle[0]
+                    click_window_client_point(
+                        window,
+                        restored_width - logical_pixels(window, 121),
+                        logical_pixels(window, 27),
+                    )
+                    wait_for_window_state(
+                        lambda: bool(user32.IsIconic(window)),
+                        "minimize through the CP overlay control",
+                    )
+                    user32.ShowWindow(window, 9)
+                    wait_for_window_state(
+                        lambda: not bool(user32.IsIconic(window)),
+                        "restore after CP minimize",
+                    )
+                    show_test_window(window)
+
+                    drag_evidence = exercise_window_drag(window)
+                    resize_evidence = exercise_window_resize(window)
+                    before_fullscreen = get_window_rectangle(window)
+                    send_window_key(window, 0x46)
+                    wait_for_window_state(
+                        lambda: get_window_rectangle(window) != before_fullscreen,
+                        "enter fullscreen",
+                    )
+                    fullscreen_rectangle = get_window_rectangle(window)
+                    if args.screenshot:
+                        fullscreen_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-fullscreen{args.screenshot.suffix}"
+                        )
+                        capture_window(window, fullscreen_path)
+                    send_window_key(window, 0x46)
+                    wait_for_window_state(
+                        lambda: get_window_rectangle(window) != fullscreen_rectangle,
+                        "exit fullscreen",
+                    )
+                    show_test_window(window)
+                    window_chrome_actions = {
+                        "minimize_restore": True,
+                        "maximize_restore": True,
+                        "normal_rectangle": normal_rectangle,
+                        "maximized_rectangle": maximized_rectangle,
+                        "drag": drag_evidence,
+                        "resize": resize_evidence,
+                        "fullscreen_rectangle": fullscreen_rectangle,
+                        "fullscreen_exit_rectangle": get_window_rectangle(window),
+                    }
+
+                if args.exercise_speed_control:
+                    speed_rectangle = get_window_rectangle(window)
+                    speed_width = speed_rectangle[2] - speed_rectangle[0]
+                    speed_height = speed_rectangle[3] - speed_rectangle[1]
+                    click_window_client_point(
+                        window,
+                        speed_width - logical_pixels(window, 225),
+                        speed_height - logical_pixels(window, 41),
+                    )
+                    time.sleep(0.35)
+                    if args.screenshot:
+                        speed_path = args.screenshot.with_name(
+                            f"{args.screenshot.stem}-speed-panel{args.screenshot.suffix}"
+                        )
+                        capture_window(window, speed_path)
+                    click_window_client_point(
+                        window,
+                        speed_width - logical_pixels(window, 176),
+                        speed_height - logical_pixels(window, 217),
+                    )
+                    time.sleep(0.25)
+                    send_window_key(window, 0x1B)
+                    send_window_key(window, 0x20)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "playback.state"
+                        and event.get("state") == "playing",
+                        3,
+                    )
+                    speed_start = receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "progress",
+                        2,
+                    )
+                    speed_started = time.monotonic()
+                    speed_start_position = int(speed_start.get("position_ms", 0))
+                    speed_end = receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "progress"
+                        and int(event.get("position_ms", 0))
+                            >= speed_start_position + 300,
+                        1.1,
+                    )
+                    speed_elapsed = time.monotonic() - speed_started
+                    speed_delta = (
+                        int(speed_end.get("position_ms", 0)) - speed_start_position
+                    )
+                    measured_rate = speed_delta / max(1.0, speed_elapsed * 1000.0)
+                    if measured_rate < 1.45:
+                        raise RuntimeError(
+                            "The clicked 2.00x speed preset did not accelerate playback."
+                        )
+                    send_window_key(window, 0x20)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "playback.state"
+                        and event.get("state") == "paused",
+                        3,
+                    )
+                    speed_control = {
+                        "preset_clicked": "2.00x",
+                        "position_delta_ms": speed_delta,
+                        "observation_seconds": round(speed_elapsed, 3),
+                        "measured_rate": round(measured_rate, 3),
+                    }
                 if args.exercise_timeline:
                     duration_ms = max(
                         (
@@ -639,7 +1029,7 @@ def main():
                     timeline_drag_position_ms = int(
                         dragged.get("position_ms", 0)
                     )
-                if args.screenshot:
+                if args.screenshot and args.exercise_controls:
                     time.sleep(0.3)
                     capture_window(window, args.screenshot)
                     send_window_key(window, 0x41)
@@ -669,20 +1059,31 @@ def main():
                         f"{args.screenshot.stem}-subtitle-tracks{args.screenshot.suffix}"
                     )
                     capture_window(window, subtitle_tracks_path)
-                    click_window_fraction(window, 0.81, 0.50)
-                    receive_until(
-                        transport,
-                        process,
-                        events,
-                        lambda event: event["type"] == "tracks.changed"
-                        and any(
-                            track.get("selected")
-                            and track.get("type") == "sub"
-                            and track.get("language") == "spa"
-                            for track in event.get("tracks", [])
-                        ),
-                        3,
-                    )
+                    spanish_selected = None
+                    for subtitle_y in (0.55, 0.57, 0.59):
+                        click_window_fraction(window, 0.81, subtitle_y)
+                        try:
+                            spanish_selected = receive_until(
+                                transport,
+                                process,
+                                events,
+                                lambda event: event["type"] == "tracks.changed"
+                                and any(
+                                    track.get("selected")
+                                    and track.get("type") == "sub"
+                                    and track.get("language") == "spa"
+                                    for track in event.get("tracks", [])
+                                ),
+                                1.25,
+                            )
+                            break
+                        except RuntimeError:
+                            send_window_key(window, 0x53)
+                            time.sleep(0.2)
+                    if spanish_selected is None:
+                        raise RuntimeError(
+                            "Real mouse input did not select the Spanish subtitle track."
+                        )
                 send_window_key(window, 0x20)
                 receive_until(
                     transport,
@@ -829,11 +1230,11 @@ def main():
         finally:
             if process and process.poll() is None:
                 try:
-                    process.wait(timeout=3)
+                    process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     process.terminate()
                     try:
-                        process.wait(timeout=2)
+                        process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
 
@@ -912,14 +1313,28 @@ def main():
         "max_position_ms": max_position_ms,
         "last_position_ms": int(progress[-1]["position_ms"]) if progress else 0,
         "process_exit_code": process.returncode if process else None,
-        "controls_exercised": bool(args.exercise_controls),
-        "screen_click_play_pause_exercised": bool(args.exercise_controls),
+        "controls_exercised": bool(
+            args.exercise_controls
+            or args.exercise_timeline
+            or args.exercise_speed_control
+            or args.exercise_window_chrome
+        ),
+        "screen_click_play_pause_exercised": bool(
+            args.exercise_controls
+            or args.exercise_timeline
+            or args.exercise_speed_control
+            or args.exercise_window_chrome
+        ),
         "timeline_exercised": bool(args.exercise_timeline),
         "timeline_click_position_ms": timeline_click_position_ms,
         "timeline_drag_position_ms": timeline_drag_position_ms,
         "timeline_preview_thumbnail": timeline_preview_thumbnail,
         "timeline_y_fraction": timeline_y_fraction,
-        "windows_caption_theme": caption_theme,
+        "speed_control_exercised": bool(args.exercise_speed_control),
+        "speed_control": speed_control,
+        "window_chrome_exercised": bool(args.exercise_window_chrome),
+        "windows_window_chrome": window_chrome,
+        "window_chrome_actions": window_chrome_actions,
         "resume_exercised": bool(args.exercise_resume),
         "track_restore_exercised": bool(
             args.restore_audio_fingerprint or args.restore_subtitle_fingerprint

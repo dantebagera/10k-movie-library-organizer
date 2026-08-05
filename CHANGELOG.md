@@ -1,5 +1,31 @@
 # Changelog
 
+## v2.8.3 - August 2026
+
+Cinema Paradiso v2.8.3 makes externally added movies appear as complete Library cards while the app is running, refines the desktop navigation, and advances the native player with first-party Windows window controls.
+
+### Added
+
+- Background Library observation, startup catch-up, stable-file checks, and canonical final-card publication for movies added outside Cinema Paradiso.
+- Catalog generation events so active Library surfaces can refresh from the authoritative SQL catalog without polling or replacing the grid with a loading screen.
+- A catalog writer lease that serializes ingestion and reconciliation work around the existing catalog authority.
+- First-party native-player title-bar controls and Windows window-chrome integration.
+- Distinct icons for Watched, Watchlist, and Following system lists.
+
+### Changed
+
+- Library ingestion now completes probe, identity, metadata, artwork, and catalog publication before exposing a new Movie View card.
+- The desktop sidebar uses a clearer collapsed and expanded navigation hierarchy while preserving the existing workspace routes.
+- The native-player bundle advances to `0.1.24-qt6.10.3-mpv20260610-lgpl` with broader smoke coverage for windowed and fullscreen interactions.
+- Startup defers non-critical release and streaming work until the initial Library result is ready.
+
+### Fixed
+
+- Background Library refreshes preserve the current grid, filters, sort, page, selection, and scroll position instead of flickering through foreground loading state.
+- Repeated file-system notifications and concurrent catalog writers converge on one final card instead of publishing duplicate or partial entries.
+- Native-player custom chrome retains correct minimize, maximize, restore, close, drag, resize, and fullscreen behavior on Windows.
+- Movie Lists communicate the role of built-in system lists without adding route-specific list logic.
+
 ## v2.8.2 - July 2026
 
 Cinema Paradiso v2.8.2 adds first-party native playback, a Continue Watching screening room, and a more cinematic Home while tightening shared card and large-grid behavior.

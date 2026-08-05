@@ -13,6 +13,11 @@
   --projector-gold: #d4af37;
   --projector-gold-bright: #f7d57a;
   --danger-red: #ef4444;
+  --player-gold-rest-opacity: 0.58;
+  --player-gold-progress-opacity: 0.72;
+  --player-gold-active-opacity: 1;
+  --player-gold-disabled-opacity: 0.28;
+  --player-gold-decorative-opacity: 0.4;
   --radius-small: 4px;
   --radius-medium: 6px;
   --radius-large: 8px;
