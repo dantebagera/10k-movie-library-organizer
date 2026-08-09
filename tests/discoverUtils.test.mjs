@@ -137,6 +137,7 @@ test('discoverMoviePayload supports online movies and owned paths', () => {
   );
 
   assert.deepEqual(payload, {
+    movie_key: '',
     tmdb_id: '155',
     imdb_id: '',
     plex_guid: '',
@@ -165,4 +166,29 @@ test('listsForDiscoverMovie matches online movies by tmdb id without a file path
   const matches = listsForDiscoverMovie({ tmdb_id: 155, title: 'The Dark Knight', year: '2008' }, lists);
 
   assert.deepEqual(matches.map((list) => list.name), ['Favorites']);
+});
+
+test('owned list membership uses the canonical CP movie key after legacy projection', () => {
+  const movie = { tmdb_id: '936075', title: 'Michael', year: '2026' };
+  const owned = {
+    path: 'E:/Movies/Michael.2026.mkv',
+    canonical_card: {
+      canonical_metadata: {
+        accepted: true,
+        movie_key: 'tmdb:936075',
+        tmdb_id: '936075',
+        imdb_id: 'tt11378946',
+        title: 'Michael',
+        year: '2026'
+      }
+    }
+  };
+  const lists = [{
+    id: 'watched',
+    system_type: 'watched',
+    movies: [{ movie_key: 'tmdb:936075', title: 'Michael', year: '2026' }]
+  }];
+
+  assert.equal(discoverMoviePayload(movie, owned).movie_key, 'tmdb:936075');
+  assert.deepEqual(listsForDiscoverMovie(movie, lists, owned).map((list) => list.id), ['watched']);
 });

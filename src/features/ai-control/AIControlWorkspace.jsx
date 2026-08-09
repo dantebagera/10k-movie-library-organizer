@@ -15,7 +15,7 @@ import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
-import { movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
+import { applySystemListState, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
 
 const aiControlExamples = [
   'Find Tom Cruise movies I own',
@@ -632,13 +632,19 @@ function AIControlCardResults({
     const payload = discoverMoviePayload(movie, owned);
     const currentLists = listsForDiscoverMovie(movie, userLists, owned);
     const active = currentLists.some((list) => list.system_type === systemType || list.id === systemType);
-    await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ movie: payload, active: !active })
-    });
-    await loadUserLists({ force: true });
-    announceCurationChanged();
+    const nextActive = !active;
+    setUserLists((current) => applySystemListState(current, systemType, payload, nextActive));
+    try {
+      await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie: payload, active: nextActive })
+      });
+    } catch (error) {
+      setUserLists((current) => applySystemListState(current, systemType, payload, active));
+      notify?.(error.message, 'error');
+      return;
+    }
     notify?.(`${movie.title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 

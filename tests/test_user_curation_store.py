@@ -184,6 +184,32 @@ class UserCurationStoreTest(unittest.TestCase):
 
             self.assertEqual([movie["title"] for movie in updated["movies"]], ["Alien", "Aliens"])
 
+    def test_exact_owned_path_upgrades_legacy_membership_to_canonical_movie_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = app.UserCurationStore(Path(tmp))
+            legacy = {
+                "title": "Film Postcards: Serbia",
+                "year": "2012",
+                "path": "E:/Movies/A Serbian Film.mkv",
+            }
+            canonical = {
+                "movie_key": "tmdb:73861",
+                "tmdb_id": "73861",
+                "imdb_id": "tt1273235",
+                "title": "A Serbian Film",
+                "year": "2010",
+                "path": "E:/Movies/A Serbian Film.mkv",
+            }
+
+            store.set_system_list_state("watched", legacy, True)
+            store.set_system_list_state("watched", canonical, True)
+            saved = next(item for item in store.list_all() if item["id"] == "watched")["movies"]
+
+            self.assertEqual(len(saved), 1)
+            self.assertEqual(saved[0]["movie_key"], "tmdb:73861")
+            self.assertEqual(saved[0]["imdb_id"], "tt1273235")
+            self.assertEqual(saved[0]["title"], "A Serbian Film")
+
     def test_create_list_with_movies_persists_once_and_returns_actual_contents(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = app.UserCurationStore(Path(tmp))

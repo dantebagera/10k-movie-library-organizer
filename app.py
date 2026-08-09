@@ -106,7 +106,7 @@ from services.media_file_facts import (
     probe_media_file,
     quality_display,
 )
-from services.youtube_playlist import YouTubePlaylistError, YouTubePlaylistFeed
+from services.youtube_playlist import YouTubePlaylistError, YouTubeService
 
 app = Flask(__name__)
 _process_started_at = time.perf_counter()
@@ -124,7 +124,20 @@ _startup_metrics = {
 }
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HOME_TRAILERS_PLAYLIST_ID = "PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-"
-_home_trailers_feed = YouTubePlaylistFeed(HOME_TRAILERS_PLAYLIST_ID)
+HOME_TRAILER_SOURCES = (
+    {
+        'id': 'rotten-tomatoes',
+        'name': 'Rotten Tomatoes Trailers',
+        'playlist_id': HOME_TRAILERS_PLAYLIST_ID,
+        'source_url': f'https://www.youtube.com/playlist?list={HOME_TRAILERS_PLAYLIST_ID}',
+    },
+    {
+        'id': 'movie-trailers-source',
+        'name': 'Movie Trailers Source',
+        'playlist_id': 'UUpJN7kiUkDrH11p0GQhLyFw',
+        'source_url': 'https://www.youtube.com/@MovieTrailersSourceHD/videos',
+    },
+)
 _SLOW_ROUTE_MS = int(os.environ.get('CP_SLOW_ROUTE_MS', '250') or '250')
 _TEST_MODE = str(os.environ.get('CP_TEST_MODE', '') or '').strip() == '1'
 _TEST_RUNNER_PATH = Path(sys.argv[0] if sys.argv else '').as_posix().lower()
@@ -329,6 +342,8 @@ _yts_rss_feeds = [
     if str(value).strip()
 ]
 _tmdb_key       = _cfg.get('tmdb_key', '')
+_youtube_api_key = str(_cfg.get('youtube_api_key', '') or '').strip()
+_youtube_service = YouTubeService(HOME_TRAILER_SOURCES, api_key=_youtube_api_key)
 _tmdb_include_adult = _coerce_bool(_cfg.get('tmdb_include_adult'), False)
 _library_show_adult = _coerce_bool(_cfg.get('library_show_adult'), True)
 _plex_url       = _cfg.get('plex_url', 'http://localhost:32400')
@@ -2359,6 +2374,7 @@ def _all_config():
         'plex_url': _plex_url,
         'plex_token': _plex_token,
         'tmdb_key': _tmdb_key,
+        'youtube_api_key': _youtube_api_key,
         'tmdb_include_adult': _tmdb_include_adult,
         'library_show_adult': _library_show_adult,
         'ollama_url': _ollama_url,
@@ -3369,14 +3385,27 @@ def _catalog_owned_entries(candidates, store, metadata_snapshot):
         canonical = item.get('canonical_metadata') or {}
         if not canonical.get('accepted'):
             continue
+        tmdb_id = str(canonical.get('tmdb_id') or item.get('tmdb_id') or candidate.get('tmdb_id') or '')
+        imdb_id = str(canonical.get('imdb_id') or item.get('imdb_id') or candidate.get('imdb_id') or '')
+        plex_guid = str(canonical.get('plex_guid') or item.get('plex_guid') or candidate.get('plex_guid') or '')
+        movie_key = str(
+            canonical.get('movie_key')
+            or (f'tmdb:{tmdb_id}' if tmdb_id else '')
+            or (f'plex:{plex_guid.lower()}' if plex_guid else '')
+            or (f'imdb:{imdb_id.lower()}' if imdb_id else '')
+        )
+        identity_keys = set(candidate.get('identity_keys') or [])
+        if movie_key:
+            identity_keys.add(movie_key)
         entries.append({
             'item': item,
-            'keys': set(candidate.get('identity_keys') or []),
+            'keys': identity_keys,
+            'movie_key': movie_key,
             'title': canonical.get('title') or item.get('plex_title') or '',
             'year': str(canonical.get('year') or item.get('plex_year') or ''),
-            'tmdb_id': str(item.get('tmdb_id') or ''),
-            'imdb_id': str(item.get('imdb_id') or ''),
-            'plex_guid': str(item.get('plex_guid') or ''),
+            'tmdb_id': tmdb_id,
+            'imdb_id': imdb_id,
+            'plex_guid': plex_guid,
         })
     return entries
 
@@ -3389,13 +3418,36 @@ def _catalog_owned_movie(movie, *, store=None, metadata_snapshot=None, entries=N
             return None
         store = store or _metadata_store()
         metadata_snapshot = metadata_snapshot or store.snapshot()
-        candidates = _current_catalog_store(store).ownership_candidates(_ownership_keys(movie))
+        catalog = _current_catalog_store(store)
+        path = str(movie.get('path', '') or '').strip()
+        candidates = [
+            *catalog.ownership_candidates(_ownership_keys(movie)),
+            *catalog.owned_path_candidates([_norm(path)] if path else []),
+        ]
+        candidates = list({
+            candidate.get('path_key') or _norm(candidate.get('path', '')): candidate
+            for candidate in candidates
+        }.values())
         entries = _catalog_owned_entries(candidates, store, metadata_snapshot)
     if not entries:
         return None
 
     def best_match(matches):
         return max(matches, key=lambda row: get_resolution_rank_str(row['item'].get('resolution'))) if matches else None
+
+    path = str(movie.get('path', '') or '').strip()
+    path_key = _norm(path) if path else ''
+    exact_path = best_match([
+        entry for entry in entries
+        if path_key and _norm(entry['item'].get('path', '')) == path_key
+    ])
+    if exact_path:
+        for field in ('tmdb_id', 'imdb_id', 'plex_guid'):
+            query_id = str(movie.get(field, '') or '').lower()
+            match_id = str(exact_path.get(field, '') or '').lower()
+            if query_id and match_id and query_id != match_id:
+                return None
+        return exact_path
 
     for key in _ownership_keys(movie):
         if key.startswith(('tmdb:', 'imdb:', 'plex:')):
@@ -3420,12 +3472,20 @@ def _owned_movie_match_payload(match):
     if not match:
         return None
     item = match['item']
+    canonical = item.get('canonical_metadata') or {}
     return {
         'found': True,
+        'movie_key': str(match.get('movie_key') or canonical.get('movie_key') or ''),
+        'tmdb_id': str(canonical.get('tmdb_id') or match.get('tmdb_id') or ''),
+        'imdb_id': str(canonical.get('imdb_id') or match.get('imdb_id') or ''),
+        'plex_guid': str(canonical.get('plex_guid') or match.get('plex_guid') or ''),
+        'title': str(canonical.get('title') or match.get('title') or ''),
+        'year': str(canonical.get('year') or match.get('year') or ''),
         'path': item['path'],
         'filename': item.get('filename', os.path.basename(item['path'])),
         'resolution': item.get('resolution', 'Unknown'),
         'size_human': item.get('size_human', ''),
+        'poster_url': str(canonical.get('poster_url') or ''),
     }
 
 
@@ -3440,9 +3500,18 @@ def _find_owned_movies(movies):
     store = _metadata_store()
     metadata_snapshot = store.snapshot()
     identity_keys = []
+    path_keys = []
     for movie in movies:
         identity_keys.extend(_ownership_keys(movie))
-    candidates = _current_catalog_store(store).ownership_candidates(identity_keys)
+        path = str((movie or {}).get('path') or '').strip()
+        if path:
+            path_keys.append(_norm(path))
+    catalog = _current_catalog_store(store)
+    candidates = [
+        *catalog.ownership_candidates(identity_keys),
+        *catalog.owned_path_candidates(path_keys),
+    ]
+    candidates = list({candidate.get('path_key') or _norm(candidate.get('path', '')): candidate for candidate in candidates}.values())
     entries = _catalog_owned_entries(candidates, store, metadata_snapshot)
     return [
         _owned_movie_match_payload(_catalog_owned_movie(
@@ -3453,6 +3522,76 @@ def _find_owned_movies(movies):
         ))
         for movie in movies
     ]
+
+
+def _catalog_owned_identity_entries(candidates):
+    """Adapt the catalog's relational identity projection to the shared matcher."""
+    entries = []
+    for candidate in candidates or []:
+        tmdb_id = str(candidate.get('tmdb_id') or '')
+        imdb_id = str(candidate.get('imdb_id') or '')
+        plex_guid = str(candidate.get('plex_guid') or '')
+        movie_key = str(
+            candidate.get('movie_key')
+            or (f'tmdb:{tmdb_id}' if tmdb_id else '')
+            or (f'plex:{plex_guid.lower()}' if plex_guid else '')
+            or (f'imdb:{imdb_id.lower()}' if imdb_id else '')
+        )
+        identity_keys = set(candidate.get('identity_keys') or [])
+        if movie_key:
+            identity_keys.add(movie_key)
+        item = {
+            'path': candidate.get('path', ''),
+            'filename': candidate.get('filename', ''),
+            'resolution': candidate.get('quality_class') or candidate.get('resolution') or 'Unknown',
+            'size': int(candidate.get('size') or 0),
+            'size_human': format_size(candidate.get('size') or 0),
+            'canonical_metadata': {
+                'accepted': True,
+                'movie_key': movie_key,
+                'title': str(candidate.get('title') or ''),
+                'year': str(candidate.get('year') or ''),
+                'tmdb_id': tmdb_id,
+                'imdb_id': imdb_id,
+                'plex_guid': plex_guid,
+            },
+        }
+        entries.append({
+            'item': item,
+            'keys': identity_keys,
+            'movie_key': movie_key,
+            'title': str(candidate.get('title') or ''),
+            'year': str(candidate.get('year') or ''),
+            'tmdb_id': tmdb_id,
+            'imdb_id': imdb_id,
+            'plex_guid': plex_guid,
+        })
+    return entries
+
+
+def _find_owned_curation_movies(movies):
+    """Resolve list identities from CP's canonical catalog without filesystem I/O."""
+    movies = list(movies or [])
+    if not movies:
+        return []
+    identity_keys = []
+    path_keys = []
+    for movie in movies:
+        identity_keys.extend(_ownership_keys(movie))
+        path = str((movie or {}).get('path') or '').strip()
+        if path:
+            path_keys.append(_norm(path))
+    candidates = _current_catalog_store().owned_identity_candidates(identity_keys, path_keys)
+    entries = _catalog_owned_identity_entries(candidates)
+    return [
+        _owned_movie_match_payload(_catalog_owned_movie(movie, entries=entries))
+        for movie in movies
+    ]
+
+
+def _find_owned_curation_movie(movie):
+    matches = _find_owned_curation_movies([movie])
+    return matches[0] if matches else None
 
 
 def NumberSafe(value):
@@ -5416,7 +5555,19 @@ def _library_check_v26():
     metadata_snapshot = store.snapshot()
     if any(True for _ in _iter_movie_roots()):
         requested_keys = [key for query in queries for key in _ownership_keys(query)]
-        candidates = _current_catalog_store(store).ownership_candidates(requested_keys)
+        requested_paths = [
+            _norm(query.get('path', ''))
+            for query in queries if str(query.get('path', '') or '').strip()
+        ]
+        catalog = _current_catalog_store(store)
+        candidates = [
+            *catalog.ownership_candidates(requested_keys),
+            *catalog.owned_path_candidates(requested_paths),
+        ]
+        candidates = list({
+            candidate.get('path_key') or _norm(candidate.get('path', '')): candidate
+            for candidate in candidates
+        }.values())
         entries = _catalog_owned_entries(candidates, store, metadata_snapshot)
     else:
         entries = []
@@ -5427,11 +5578,14 @@ def _library_check_v26():
         if match:
             item = match['item']
             canonical_card = _movie_list_library_item(item, upgrade_paths=upgrade_paths)
+            canonical = canonical_card.get('canonical_metadata') or {}
             results.append({
                 'title': q.get('title', ''),
                 'year': q.get('year', ''),
                 'tmdb_id': str(q.get('tmdb_id', '') or match.get('tmdb_id', '') or ''),
                 'imdb_id': str(q.get('imdb_id', '') or match.get('imdb_id', '') or ''),
+                'plex_guid': str(canonical.get('plex_guid') or match.get('plex_guid', '') or ''),
+                'movie_key': str(match.get('movie_key', '') or canonical.get('movie_key') or ''),
                 'found': True,
                 'path': item['path'],
                 'resolution': item.get('resolution', 'Unknown'),
@@ -5655,17 +5809,71 @@ def identity_verification_enrich():
 @app.route('/api/home/trailers')
 def home_trailers():
     try:
-        return jsonify(_home_trailers_feed.get())
+        cursor = str(request.args.get('cursor') or '').strip()
+        source_filter = str(request.args.get('source') or 'all').strip()
+        if len(cursor) > 2000:
+            return jsonify({'error': 'YouTube page cursor is too long', 'items': []}), 400
+        return jsonify(_youtube_service.get_home_trailers(cursor=cursor, source_filter=source_filter))
     except YouTubePlaylistError as error:
         return jsonify({
             'error': str(error),
-            'playlist_id': HOME_TRAILERS_PLAYLIST_ID,
-            'source_url': (
-                'https://www.youtube.com/playlist?list='
-                f'{HOME_TRAILERS_PLAYLIST_ID}'
-            ),
+            'sources': [{
+                'id': source['id'],
+                'name': source['name'],
+                'source_url': source['source_url'],
+            } for source in HOME_TRAILER_SOURCES],
             'items': [],
         }), 502
+
+
+@app.route('/api/youtube/config', methods=['GET'])
+def get_youtube_config():
+    return jsonify({
+        'configured': bool(_youtube_api_key),
+        'key_hint': f'ends in {_youtube_api_key[-4:]}' if len(_youtube_api_key) >= 4 else '',
+    })
+
+
+@app.route('/api/youtube/config', methods=['POST'])
+def set_youtube_config():
+    global _youtube_api_key
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'No data provided'}), 400
+    if data.get('clear') is True:
+        _youtube_api_key = ''
+    else:
+        candidate = str(data.get('key') or '').strip()
+        if candidate:
+            _youtube_api_key = candidate
+    _youtube_service.set_api_key(_youtube_api_key)
+    _save_config(_all_config())
+    return jsonify({
+        'success': True,
+        'configured': bool(_youtube_api_key),
+        'key_hint': f'ends in {_youtube_api_key[-4:]}' if len(_youtube_api_key) >= 4 else '',
+    })
+
+
+@app.route('/api/youtube/test', methods=['POST'])
+def youtube_test():
+    data = request.get_json(silent=True) or {}
+    try:
+        result = _youtube_service.test_api_key(str(data.get('key') or '').strip())
+        return jsonify(result)
+    except YouTubePlaylistError as error:
+        return jsonify({'error': str(error)}), 502
+
+
+@app.route('/api/youtube/trailer-search', methods=['POST'])
+def youtube_trailer_search():
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_youtube_service.search_trailers(data.get('title'), data.get('year')))
+    except YouTubePlaylistError as error:
+        message = str(error)
+        status = 400 if 'required' in message.casefold() or 'configure' in message.casefold() else 502
+        return jsonify({'error': message, 'candidates': []}), status
 
 
 @app.route('/api/stats')
@@ -11112,13 +11320,19 @@ def source_review_submit():
 
 
 def _curated_movie_is_owned(movie):
-    path = str((movie or {}).get('path') or '')
-    if path and os.path.isfile(path) and _path_library_root(path):
+    if _find_owned_curation_movie(movie or {}):
         return True
-    return bool(_find_owned_movie(movie or {}))
+    path = str((movie or {}).get('path') or '')
+    return bool(path and _path_library_root(path) and os.path.isfile(path))
 
 
-register_curation_routes(app, _curation_store, _curated_movie_is_owned)
+register_curation_routes(
+    app,
+    _curation_store,
+    _curated_movie_is_owned,
+    owned_resolver=_find_owned_curation_movie,
+    owned_bulk_resolver=_find_owned_curation_movies,
+)
 
 
 _copy_export_jobs = {}

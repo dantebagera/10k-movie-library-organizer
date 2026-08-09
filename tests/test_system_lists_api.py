@@ -61,3 +61,46 @@ class SystemListsApiTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_user_lists_projects_legacy_owned_membership_to_canonical_movie_key_without_rewrite(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as movies_tmp:
+            movie_path = Path(movies_tmp) / "Michael.2026.mkv"
+            movie_path.write_bytes(b"movie")
+            app._user_data_dir = tmp
+            app._movies_dirs = [movies_tmp]
+            app._movies_dir = movies_tmp
+            metadata_store = app.AppMetadataStore(Path(tmp))
+            metadata_store.apply_tmdb_match(str(movie_path), {
+                "tmdb_id": "936075",
+                "imdb_id": "tt11378946",
+                "title": "Michael",
+                "year": "2026",
+            })
+            metadata_store.update_file_record(str(movie_path), {
+                "filename": movie_path.name,
+                "parsed_title": "Michael",
+                "parsed_year": "2026",
+            })
+            store = app._curation_store()
+            legacy = {
+                "lists": [{
+                    "id": "watched",
+                    "name": "Watched",
+                    "system_type": "watched",
+                    "movies": [{
+                        "title": "Michael",
+                        "year": "2026",
+                        "path": str(movie_path),
+                    }],
+                }],
+            }
+            store.catalog.replace_document("user_lists.json", legacy)
+
+            response = app.app.test_client().get("/api/user/lists")
+            persisted = store.catalog.read_document("user_lists.json", {})
+
+        self.assertEqual(response.status_code, 200)
+        watched = next(item for item in response.get_json()["lists"] if item["id"] == "watched")
+        self.assertEqual(watched["movies"][0]["movie_key"], "tmdb:936075")
+        self.assertEqual(watched["movies"][0]["imdb_id"], "tt11378946")
+        self.assertNotIn("movie_key", persisted["lists"][0]["movies"][0])

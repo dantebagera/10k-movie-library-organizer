@@ -1271,6 +1271,95 @@ class CatalogStore:
         finally:
             connection.close()
 
+    def owned_path_candidates(self, path_keys):
+        """Return accepted owned candidates for exact normalized file paths."""
+        keys = list(dict.fromkeys(_text(key) for key in path_keys if _text(key)))
+        if not keys:
+            return []
+        connection = self.connect()
+        try:
+            rows = []
+            for offset in range(0, len(keys), 400):
+                chunk = keys[offset:offset + 400]
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(connection.execute(f"""
+                    SELECT DISTINCT mf.*, pf.raw_json AS plex_json,
+                           mm.raw_json AS manual_json, tm.raw_json AS tmdb_json
+                    FROM media_files mf
+                    LEFT JOIN plex_files pf ON pf.path_key = mf.path_key
+                    LEFT JOIN manual_matches mm ON mm.path_key = mf.path_key
+                    LEFT JOIN tmdb_movies tm ON tm.tmdb_id = mf.tmdb_id
+                    WHERE mf.path_key IN ({placeholders})
+                      AND (mf.identity_status = 'accepted' OR mf.metadata_accepted = 1)
+                    ORDER BY mf.added_time DESC
+                """, chunk).fetchall())
+            return self._decode_media_rows(connection, rows, include_identity_keys=True)
+        finally:
+            connection.close()
+
+    def owned_identity_candidates(self, identity_keys=(), path_keys=()):
+        """Return lightweight canonical identities for accepted owned movies.
+
+        Curation only needs the catalog identity graph. It must not decode full
+        provider documents or stat every media file while a user toggles a list.
+        """
+        keys = list(dict.fromkeys(_text(key) for key in identity_keys if _text(key)))
+        paths = list(dict.fromkeys(_text(key) for key in path_keys if _text(key)))
+        if not keys and not paths:
+            return []
+        connection = self.connect()
+        try:
+            rows = connection.execute("""
+                WITH requested_paths(value) AS (
+                    SELECT value FROM json_each(?)
+                ),
+                requested_keys(value) AS (
+                    SELECT value FROM json_each(?)
+                ),
+                matched_paths(path_key) AS (
+                    SELECT value FROM requested_paths
+                    UNION
+                    SELECT mik.path_key
+                    FROM media_identity_keys mik
+                    JOIN requested_keys rk ON rk.value = mik.identity_key
+                    UNION
+                    SELECT cmf.path_key
+                    FROM canonical_movie_files cmf
+                    JOIN requested_keys rk ON rk.value = cmf.movie_key
+                )
+                SELECT DISTINCT
+                       mf.path_key, mf.path, mf.filename, mf.size,
+                       mf.resolution, mf.quality_class, mf.added_time,
+                       cm.movie_key, cm.title, cm.year,
+                       cm.tmdb_id, cm.imdb_id, cm.plex_guid
+                FROM matched_paths mp
+                JOIN media_files mf ON mf.path_key = mp.path_key
+                JOIN canonical_movie_files cmf ON cmf.path_key = mf.path_key
+                JOIN canonical_movies cm ON cm.movie_key = cmf.movie_key
+                WHERE (mf.identity_status = 'accepted' OR mf.metadata_accepted = 1)
+                ORDER BY mf.added_time DESC, mf.path_key
+            """, (_json_text(paths), _json_text(keys))).fetchall()
+            path_keys_found = [row["path_key"] for row in rows]
+            identity_keys_by_path = {}
+            if path_keys_found:
+                for key_row in connection.execute("""
+                    SELECT path_key, identity_key
+                    FROM media_identity_keys
+                    WHERE path_key IN (SELECT value FROM json_each(?))
+                    ORDER BY path_key, identity_key
+                """, (_json_text(path_keys_found),)).fetchall():
+                    identity_keys_by_path.setdefault(key_row["path_key"], []).append(
+                        key_row["identity_key"]
+                    )
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["identity_keys"] = list(identity_keys_by_path.get(item["path_key"], ()))
+                result.append(item)
+            return result
+        finally:
+            connection.close()
+
     def owned_movie_candidate(self, *, path_key="", movie_key=""):
         """Return one owned file/movie graph for production detail projection.
 

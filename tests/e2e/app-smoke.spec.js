@@ -747,8 +747,11 @@ test('local Library playback uses the centralized player route without changing 
   await mockCardParityApis(page);
   let localPlaybackRequest = null;
   let streamingRequestCount = 0;
+  let releasePlaybackRequest;
+  const playbackRequestGate = new Promise((resolve) => { releasePlaybackRequest = resolve; });
   await page.route('**/api/player/play', async (route) => {
     localPlaybackRequest = route.request().postDataJSON();
+    await playbackRequestGate;
     await route.fulfill({ json: {
       ok: true,
       mode: 'built_in',
@@ -764,14 +767,28 @@ test('local Library playback uses the centralized player route without changing 
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   const movieCard = page.locator('.library-movie-card').filter({ hasText: parityMovie.title });
   await movieCard.click();
-  await movieCard.getByRole('button', { name: 'Play', exact: true }).click();
+  const expandedPlay = movieCard.locator('.movie-play-action');
+  await expect(expandedPlay).toHaveAccessibleName('Play');
+  await expandedPlay.click();
 
   await expect.poll(() => localPlaybackRequest).toEqual({
     path_key: parityLibraryItem.path,
     restart: false
   });
+  await expect(expandedPlay).toBeDisabled();
+  await expect(expandedPlay).toHaveAttribute('aria-busy', 'true');
+  await expect(expandedPlay).toHaveText('Opening player…');
+  const posterPlay = movieCard.getByRole('button', {
+    name: `Opening ${parityMovie.title} in Cinema Paradiso Player`
+  });
+  await expect(posterPlay).toBeDisabled();
+  await expect(posterPlay).toHaveAttribute('aria-busy', 'true');
+  await expect(posterPlay).toHaveClass(/movie-card-play-overlay-pending/);
   expect(streamingRequestCount).toBe(0);
+  releasePlaybackRequest();
   await expect(page.getByText('Playing in Cinema Paradiso Player', { exact: true })).toBeVisible();
+  await expect(expandedPlay).toBeEnabled();
+  await expect(expandedPlay).toHaveText('Play');
 });
 
 test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
@@ -2912,9 +2929,27 @@ test('adaptive Discover paging fills the measured desktop card rows', async ({ p
   expect(requestedPageSizes).toContain(39);
 });
 
-test('Home fills both right-column spaces with playlist videos and inspector-aware upcoming movies', async ({ page }) => {
+test('Home uses a five-card trailer row and aligns Continue, Discover, inspector, and upcoming', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await mockCardParityApis(page);
+  let followedTrailerMovies = [];
+  await page.route('**/api/user/followed-releases**', async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    if (url.pathname === '/api/user/followed-releases' && method === 'POST') {
+      const movie = route.request().postDataJSON()?.movie;
+      if (movie) followedTrailerMovies = [movie];
+    }
+    if (url.pathname === '/api/user/followed-releases' && method === 'DELETE') {
+      followedTrailerMovies = [];
+    }
+    await route.fulfill({ json: {
+      movies: followedTrailerMovies,
+      newly_available: [],
+      removed_owned: [],
+      curation_generation: 1
+    } });
+  });
   const poster = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="900"><rect width="600" height="900" fill="#151515"/><text x="300" y="450" text-anchor="middle" fill="#d4af37" font-size="72">SOON</text></svg>'
   );
@@ -2941,22 +2976,94 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
     imdb_id: `tt-home-${index}`,
     title: `Trending Feature ${index + 1}`
   }));
+  const trailerMovies = [
+    {
+      tmdb_id: '9001',
+      title: 'Hot Movie',
+      year: '2027',
+      release_date: '2027-05-01',
+      poster_url: poster,
+      plot: 'The first matched trailer movie.',
+      genres: ['Thriller']
+    },
+    {
+      tmdb_id: '9002',
+      title: 'Second Feature',
+      year: '2028',
+      release_date: '2028-06-01',
+      poster_url: poster,
+      plot: 'The second matched trailer movie.',
+      genres: ['Drama']
+    },
+    {
+      tmdb_id: '9003',
+      title: 'Your Name.',
+      year: '2016',
+      release_date: '2016-08-26',
+      poster_url: poster,
+      plot: 'The manually selected trailer movie.',
+      genres: ['Animation']
+    },
+    {
+      tmdb_id: '9004',
+      title: 'Your Name is Neighbor',
+      year: '2026',
+      release_date: '2026-11-01',
+      poster_url: poster,
+      plot: 'An intentionally different title.',
+      genres: ['Comedy']
+    }
+  ];
   const videos = [
     {
       video_id: 'video-one',
-      title: 'Hot Trailer One',
+      title: 'Hot Movie Trailer (2027)',
       url: 'https://www.youtube.com/watch?v=video-one',
       thumbnail_url: poster,
       published_at: '2026-07-28T10:00:00+00:00',
-      views: 12000
+      views: 12000,
+      source_id: 'rotten-tomatoes',
+      source_name: 'Rotten Tomatoes Trailers'
     },
     {
       video_id: 'video-two',
-      title: 'Hot Trailer Two',
+      title: 'Second Feature Teaser Trailer (2028)',
       url: 'https://www.youtube.com/watch?v=video-two',
       thumbnail_url: poster,
       published_at: '2026-07-27T10:00:00+00:00',
-      views: 8000
+      views: 8000,
+      source_id: 'movie-trailers-source',
+      source_name: 'Movie Trailers Source'
+    },
+    {
+      video_id: 'video-three',
+      title: 'Your Name 10th Anniversary Trailer (2026)',
+      url: 'https://www.youtube.com/watch?v=video-three',
+      thumbnail_url: poster,
+      published_at: '2026-07-26T10:00:00+00:00',
+      views: 7000,
+      source_id: 'rotten-tomatoes',
+      source_name: 'Rotten Tomatoes Trailers'
+    },
+    {
+      video_id: 'video-four',
+      title: 'Fourth Movie Trailer (2027)',
+      url: 'https://www.youtube.com/watch?v=video-four',
+      thumbnail_url: poster,
+      published_at: '2026-07-25T10:00:00+00:00',
+      views: 6000,
+      source_id: 'movie-trailers-source',
+      source_name: 'Movie Trailers Source'
+    },
+    {
+      video_id: 'video-five',
+      title: 'Fifth Movie Trailer (2027)',
+      url: 'https://www.youtube.com/watch?v=video-five',
+      thumbnail_url: poster,
+      published_at: '2026-07-24T10:00:00+00:00',
+      views: 5000,
+      source_id: 'rotten-tomatoes',
+      source_name: 'Rotten Tomatoes Trailers'
     }
   ];
 
@@ -2964,11 +3071,16 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
     json: { items: continueItems }
   }));
   await page.route('**/api/home/trailers', (route) => route.fulfill({ json: {
-    playlist_id: 'PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-',
-    title: 'HOT New Trailers & Exclusives',
-    source_url: 'https://www.youtube.com/playlist?list=PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-',
+    title: 'New Trailers',
+    sources: [
+      { id: 'rotten-tomatoes', name: 'Rotten Tomatoes Trailers', source_url: 'https://youtube.test/rt' },
+      { id: 'movie-trailers-source', name: 'Movie Trailers Source', source_url: 'https://youtube.test/mts' }
+    ],
     items: videos,
-    stale: false
+    next_cursor: '',
+    has_more: false,
+    stale: false,
+    fallback: false
   } }));
   await page.route('**/api/tmdb/discover**', async (route) => {
     const url = new URL(route.request().url());
@@ -2981,9 +3093,19 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
       total_results: results.length
     } });
   });
+  await page.route('**/api/tmdb/search**', async (route) => {
+    const url = new URL(route.request().url());
+    const query = url.searchParams.get('q');
+    const year = url.searchParams.get('year');
+    let results = [];
+    if (query === 'Hot Movie') results = [trailerMovies[0]];
+    if (query === 'Second Feature') results = [trailerMovies[1]];
+    if (query === 'Your Name' && !year) results = trailerMovies.slice(2);
+    await route.fulfill({ json: { results, page: 1, total_pages: 1, total_results: results.length } });
+  });
   await page.route('**/api/tmdb/details**', async (route) => {
     const url = new URL(route.request().url());
-    const movie = upcoming.find((item) => String(item.tmdb_id) === url.searchParams.get('tmdb_id')) || parityMovie;
+    const movie = [...upcoming, ...trailerMovies].find((item) => String(item.tmdb_id) === url.searchParams.get('tmdb_id')) || parityMovie;
     await route.fulfill({ json: {
       ...movie,
       summary: movie.plot,
@@ -2991,7 +3113,22 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
       directors: [],
       writers: [],
       keywords: [],
-      trailer_url: 'https://www.youtube.com/watch?v=upcoming-trailer'
+      trailer_url: movie.title === 'Upcoming Feature 1' ? '' : 'https://www.youtube.com/watch?v=upcoming-trailer'
+    } });
+  });
+  await page.route('**/api/youtube/trailer-search', async (route) => {
+    const movie = route.request().postDataJSON();
+    await route.fulfill({ json: {
+      status: 'matched',
+      movie,
+      video: {
+        video_id: 'youtube-fallback',
+        title: `${movie.title} Official Trailer`,
+        channel_title: 'Fixture Trailers',
+        thumbnail_url: poster,
+        url: 'https://www.youtube.com/watch?v=youtube-fallback'
+      },
+      candidates: []
     } });
   });
   await page.route('https://www.youtube.com/embed/**', (route) => route.fulfill({
@@ -3001,9 +3138,9 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Continue Watching' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'HOT New Trailers & Exclusives' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New Trailers' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Upcoming movies' })).toBeVisible();
-  await expect(page.locator('.movie-list > .home-smart-movie-card')).toHaveCount(8);
+  await expect(page.locator('.movie-list > .home-smart-movie-card')).toHaveCount(6);
   await page.locator('.inspector').evaluate(
     (element) => Promise.all(element.getAnimations().map((animation) => animation.finished))
   );
@@ -3023,8 +3160,10 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
   });
   expect(Math.abs(geometry.continuePanel.left - geometry.discover.left)).toBeLessThan(1);
   expect(Math.abs(geometry.continuePanel.width - geometry.discover.width)).toBeLessThan(1);
-  expect(Math.abs(geometry.trailers.left - geometry.inspector.left)).toBeLessThan(1);
-  expect(Math.abs(geometry.trailers.width - geometry.inspector.width)).toBeLessThan(1);
+  expect(Math.abs(geometry.trailers.left - geometry.discover.left)).toBeLessThan(1);
+  expect(Math.abs(geometry.trailers.right - geometry.inspector.right)).toBeLessThan(1);
+  expect(geometry.trailers.width).toBeGreaterThan(geometry.discover.width + 300);
+  expect(geometry.discover.top).toBeGreaterThanOrEqual(geometry.continuePanel.bottom + 17);
   expect(Math.abs(geometry.upcoming.left - geometry.inspector.left)).toBeLessThan(1);
   expect(geometry.upcoming.top).toBeGreaterThanOrEqual(geometry.inspector.bottom + 17);
 
@@ -3042,24 +3181,52 @@ test('Home fills both right-column spaces with playlist videos and inspector-awa
     };
   });
   expect(rowMetrics.trailers.cards % rowMetrics.trailers.columns).toBe(0);
+  expect(rowMetrics.trailers).toEqual({ cards: 5, columns: 5 });
   expect(rowMetrics.upcoming.cards % rowMetrics.upcoming.columns).toBe(0);
   expect(rowMetrics.upcoming).toEqual({ cards: 6, columns: 3 });
 
-  await page.getByRole('button', { name: 'Play Hot Trailer One' }).click();
-  const videoDialog = page.getByRole('dialog', { name: 'Hot New Trailers: Hot Trailer One' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect.poll(() => page.evaluate(() => ({
+    cards: document.querySelector('.home-trailer-grid').children.length,
+    columns: getComputedStyle(document.querySelector('.home-trailer-grid')).gridTemplateColumns.split(' ').filter(Boolean).length
+  }))).toEqual({ cards: 4, columns: 4 });
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await expect.poll(() => page.locator('.home-trailer-grid .home-video-card').count()).toBe(5);
+
+  await page.getByRole('button', { name: 'Play Hot Movie Trailer (2027)' }).click();
+  const videoDialog = page.getByRole('dialog', { name: 'Rotten Tomatoes Trailers: Hot Movie Trailer (2027)' });
   await expect(videoDialog).toBeVisible();
   await expect(videoDialog.locator('iframe')).toHaveAttribute('src', 'https://www.youtube.com/embed/video-one?autoplay=1&rel=0&enablejsapi=1');
-  await videoDialog.getByRole('button', { name: 'Play Hot Trailer Two in this player' }).click();
-  const continuedVideoDialog = page.getByRole('dialog', { name: 'Hot New Trailers: Hot Trailer Two' });
+  await expect(videoDialog.getByText('Matched TMDB movie', { exact: true })).toBeVisible();
+  await expect(videoDialog.getByText('Hot Movie', { exact: true })).toBeVisible();
+  await videoDialog.getByRole('button', { name: 'Follow', exact: true }).click();
+  await expect(videoDialog.getByRole('button', { name: 'Following', exact: true })).toBeVisible();
+  await videoDialog.getByRole('button', { name: 'Play Second Feature Teaser Trailer (2028) in this player' }).click();
+  const continuedVideoDialog = page.getByRole('dialog', { name: 'Movie Trailers Source: Second Feature Teaser Trailer (2028)' });
   await expect(continuedVideoDialog).toBeVisible();
   await expect(continuedVideoDialog.locator('iframe')).toHaveAttribute('src', 'https://www.youtube.com/embed/video-two?autoplay=1&rel=0&enablejsapi=1');
-  await continuedVideoDialog.getByRole('button', { name: 'Stop video' }).click();
-  await expect(continuedVideoDialog).toHaveCount(0);
+  await expect(continuedVideoDialog.getByText('Second Feature', { exact: true })).toBeVisible();
+  await continuedVideoDialog.getByRole('button', { name: 'Play Your Name 10th Anniversary Trailer (2026) in this player' }).click();
+  const manualVideoDialog = page.getByRole('dialog', { name: 'Rotten Tomatoes Trailers: Your Name 10th Anniversary Trailer (2026)' });
+  await expect(manualVideoDialog.getByRole('button', { name: 'Manual match' })).toBeVisible();
+  await manualVideoDialog.getByRole('button', { name: 'Manual match' }).click();
+  await manualVideoDialog.getByRole('button', { name: 'Match trailer to Your Name. 2016' }).click();
+  await expect(manualVideoDialog.getByText('Manually matched movie', { exact: true })).toBeVisible();
+  await manualVideoDialog.getByRole('button', { name: 'View details' }).click();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.locator('.discover-card-expanded')).toContainText('Your Name.');
+  await expect(page.locator('.workspace-path-bar')).toContainText('Rotten Tomatoes Trailers: Your Name.');
+
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
 
   await page.getByRole('button', { name: /Inspect Upcoming Feature 1/ }).click();
   await expect(page.locator('.inspector')).toContainText('Upcoming Feature 1');
   await expect(page.locator('.inspector')).toContainText('Upcoming Cast');
   await expect(page.locator('.inspector').getByRole('button', { name: 'Follow release' })).toBeVisible();
+  await page.locator('.inspector').getByRole('button', { name: 'Play trailer' }).click();
+  const fallbackDialog = page.getByRole('dialog', { name: 'Trailer for Upcoming Feature 1 2027' });
+  await expect(fallbackDialog.locator('iframe')).toHaveAttribute('src', 'https://www.youtube.com/embed/youtube-fallback?autoplay=1&rel=0&enablejsapi=1');
+  await fallbackDialog.getByRole('button', { name: 'Stop trailer' }).click();
 
   await page.getByRole('button', { name: 'View all' }).click();
   await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();

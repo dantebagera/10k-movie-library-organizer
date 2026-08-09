@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applySystemListState,
   applyPosterOverrideToLibraryItems,
   buildLibraryPeopleIndex,
   buildLibraryViewModel,
@@ -387,6 +388,7 @@ test('movie payload and identity keys preserve canonical and path precedence', (
     poster_url: 'poster.jpg',
     canonical_metadata: {
       accepted: true,
+      movie_key: 'tmdb:949',
       title: 'Heat',
       year: 1995,
       tmdb_id: 949,
@@ -396,6 +398,7 @@ test('movie payload and identity keys preserve canonical and path precedence', (
   };
 
   assert.deepEqual(moviePayload(item), {
+    movie_key: 'tmdb:949',
     tmdb_id: '949',
     imdb_id: 'tt0113277',
     plex_guid: '',
@@ -404,9 +407,42 @@ test('movie payload and identity keys preserve canonical and path precedence', (
     path: 'E:/Movies/Heat.mkv',
     poster_url: 'canonical.jpg'
   });
+  assert.equal(movieIdentityKey({ movie_key: 'plex:movie/heat', tmdb_id: 949 }), 'plex:movie/heat');
   assert.equal(movieIdentityKey({ tmdb_id: 949, title: 'Heat', year: '1995' }), 'tmdb:949');
   assert.equal(movieIdentityKey({ path: 'E:/Movies/Heat.mkv', title: 'Heat' }), 'path:e:/movies/heat.mkv');
   assert.equal(movieIdentityKey({ title: 'Alien³ Special Edition', year: '1992' }), 'title:alien 3|1992');
+});
+
+test('system list state updates immediately through the canonical movie key', () => {
+  const michael = {
+    movie_key: 'tmdb:936075',
+    tmdb_id: '936075',
+    title: 'Michael',
+    year: '2026',
+    path: 'E:/Movies/Michael.2026.mkv'
+  };
+  const lists = [
+    { id: 'watched', system_type: 'watched', movies: [] },
+    { id: 'watchlist', system_type: 'watchlist', movies: [] },
+    { id: 'favorites', system_type: '', movies: [] }
+  ];
+
+  const watched = applySystemListState(lists, 'watched', michael, true);
+  assert.equal(watched[0].movies.length, 1);
+  assert.equal(watched[1].movies.length, 0);
+  assert.equal(watched[2], lists[2]);
+
+  const removed = applySystemListState(watched, 'watched', {
+    ...michael,
+    title: 'Different provider title'
+  }, false);
+  assert.equal(removed[0].movies.length, 0);
+
+  const conflicting = applySystemListState(lists, 'watchlist', {
+    ...michael,
+    movie_key: 'tmdb:1'
+  }, true);
+  assert.equal(conflicting[1].movies[0].movie_key, 'tmdb:1');
 });
 
 test('collection and list filters preserve TMDB id and title-year matching', () => {

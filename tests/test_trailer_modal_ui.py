@@ -26,6 +26,16 @@ class TrailerModalUiTest(unittest.TestCase):
         self.assertIn("loadYouTubeIframeApi()", self.app_source)
         self.assertIn("setShowEndRecommendations(true)", self.app_source)
         self.assertIn("setActiveVideo(video)", self.app_source)
+        self.assertIn("homeTrailerSession: true", self.app_source)
+        self.assertIn("activeVideo?.source_name || 'New Trailers'", self.app_source)
+        self.assertNotIn("More from Rotten Tomatoes", self.app_source)
+
+    def test_missing_tmdb_trailer_searches_youtube_only_inside_shared_modal(self):
+        self.assertIn("searchYouTubeMovieTrailers(requestedMovie", self.app_source)
+        self.assertIn("Finding an embeddable trailer", self.app_source)
+        self.assertIn("Choose the correct trailer", self.app_source)
+        self.assertIn("setFallbackVideo(video)", self.app_source)
+        self.assertIn("Search YouTube manually", self.app_source)
 
     def test_trailer_modal_embeds_youtube_player_with_fullscreen_controls(self):
         self.assertIn("function TrailerModal(", self.app_source)

@@ -36,6 +36,7 @@ export default function HomeWorkspace(props) {
     onSelectMovie,
     onOpenHomeTrailer,
     onRetryHomeTrailers,
+    onLoadMoreHomeTrailers,
     onPlay,
     onStream,
     streamingAvailable,
@@ -80,7 +81,20 @@ export default function HomeWorkspace(props) {
         />
       </div>
 
-      <div className={cx('home-media-grid', !continueWatching.length && 'home-media-grid-trailers-only')}>
+      <div className="home-media-grid">
+        <HomeTrailersPanel
+          feed={homeTrailers}
+          loading={loading.trailers}
+          loadingMore={loading.trailersMore}
+          error={homeTrailersError}
+          onOpenVideo={onOpenHomeTrailer}
+          onRetry={onRetryHomeTrailers}
+          onLoadMore={onLoadMoreHomeTrailers}
+        />
+      </div>
+
+      <div className="home-main-grid">
+        <div className="home-main-stack">
         {continueWatching.length > 0 && (
           <ContinueWatchingRail
             items={continueWatching}
@@ -89,16 +103,6 @@ export default function HomeWorkspace(props) {
             onRemove={onRemoveWatching}
           />
         )}
-        <HomeTrailersPanel
-          feed={homeTrailers}
-          loading={loading.trailers}
-          error={homeTrailersError}
-          onOpenVideo={onOpenHomeTrailer}
-          onRetry={onRetryHomeTrailers}
-        />
-      </div>
-
-      <div className="home-main-grid">
         <section className="movie-rail">
           <div className="section-heading">
             <div>
@@ -117,7 +121,7 @@ export default function HomeWorkspace(props) {
             </div>
           ) : (
             <div className="movie-list">
-              {movies.slice(0, 8).map((movie) => {
+              {movies.slice(0, 6).map((movie) => {
                 const owned = ownedMovieFor(movie, ownership);
                 return (
                   <SmartMovieCard
@@ -146,6 +150,7 @@ export default function HomeWorkspace(props) {
             </div>
           )}
         </section>
+        </div>
 
         <div className="home-side-stack">
           <MovieInspector
@@ -206,10 +211,16 @@ function publishedLabel(value) {
   return `${months} month${months === 1 ? '' : 's'} ago`;
 }
 
-function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
+function HomeTrailersPanel({ feed, loading, loadingMore, error, onOpenVideo, onRetry, onLoadMore }) {
   const [page, setPage] = useState(0);
-  const { columns, gridRef } = useCardGridMetrics({ target: 2, max: 2, bias: 'lower' });
-  const items = feed?.items || [];
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const { columns, gridRef } = useCardGridMetrics({ target: 5, max: 5, bias: 'lower' });
+  const items = useMemo(
+    () => (feed?.items || []).filter((video) => sourceFilter === 'all' || video.source_id === sourceFilter),
+    [feed?.items, sourceFilter]
+  );
+  const sources = feed?.sources || [];
+  const selectedSource = sources.find((source) => source.id === sourceFilter);
   const pageSize = Math.max(1, columns);
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);
@@ -222,23 +233,33 @@ function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
     setPage((current) => Math.min(current, totalPages - 1));
   }, [totalPages]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [sourceFilter]);
+
+  const showNextPage = async () => {
+    if (safePage < totalPages - 1) {
+      setPage((current) => current + 1);
+      return;
+    }
+    if (!feed?.has_more || loadingMore) return;
+    await onLoadMore?.();
+    setPage((current) => current + 1);
+  };
+
   return (
     <section className="home-trailers-panel" aria-labelledby="home-trailers-heading">
       <div className="section-heading home-trailers-heading">
         <div>
-          <p className="screen-kicker">Rotten Tomatoes Trailers</p>
-          <h3 id="home-trailers-heading">{feed?.title || 'HOT New Trailers & Exclusives'}</h3>
+          <p className="screen-kicker">Trailer channels</p>
+          <h3 id="home-trailers-heading">{feed?.title || 'New Trailers'}</h3>
         </div>
         <div className="home-trailer-heading-actions">
-          <a
-            className="ghost-link ghost-link-small"
-            href={feed?.source_url}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Open Hot New Trailers playlist on YouTube"
-          >
-            <ExternalLink size={14} /> Playlist
-          </a>
+          {selectedSource?.source_url ? (
+            <a className="ghost-link ghost-link-small" href={selectedSource.source_url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} /> Channel
+            </a>
+          ) : null}
           <div className="continue-watching-controls">
             <button
               type="button"
@@ -250,14 +271,23 @@ function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
             </button>
             <button
               type="button"
-              onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
+              onClick={showNextPage}
               aria-label="Next trailer videos"
-              disabled={safePage >= totalPages - 1}
+              disabled={(safePage >= totalPages - 1 && !feed?.has_more) || loadingMore}
             >
-              <ChevronRight size={18} />
+              {loadingMore ? <Loader2 className="spin" size={17} /> : <ChevronRight size={18} />}
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="home-trailer-source-filters" aria-label="Trailer channel filter">
+        <button type="button" className={cx(sourceFilter === 'all' && 'active')} onClick={() => setSourceFilter('all')}>All</button>
+        {sources.map((source) => (
+          <button type="button" key={source.id} className={cx(sourceFilter === source.id && 'active')} onClick={() => setSourceFilter(source.id)}>
+            {source.name}
+          </button>
+        ))}
       </div>
 
       {loading ? (
@@ -289,6 +319,7 @@ function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
               </span>
               <strong dir="auto" title={video.title}>{video.title}</strong>
               <small>
+                <span className="home-video-source">{video.source_name || 'YouTube'}</span>
                 {video.views ? `${formatCount(video.views)} views` : 'New video'}
                 {publishedLabel(video.published_at) ? ` · ${publishedLabel(video.published_at)}` : ''}
               </small>
@@ -301,7 +332,11 @@ function HomeTrailersPanel({ feed, loading, error, onOpenVideo, onRetry }) {
           <strong>No playlist videos are available.</strong>
         </div>
       )}
-      {feed?.stale && <small className="home-feed-stale">Showing the last successfully refreshed playlist.</small>}
+      {(feed?.stale || feed?.fallback) && (
+        <small className="home-feed-stale">
+          {feed?.stale ? 'Showing the last successfully refreshed trailers.' : 'Using the public 15-video channel feeds until the YouTube API key is available.'}
+        </small>
+      )}
     </section>
   );
 }

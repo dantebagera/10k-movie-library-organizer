@@ -1,4 +1,4 @@
-import { CalendarDays, ChevronDown, Film, MoreHorizontal, Play, RotateCcw, Star, X } from 'lucide-react';
+import { CalendarDays, ChevronDown, Film, Loader2, MoreHorizontal, Play, RotateCcw, Star, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 function cx(...classes) {
@@ -16,7 +16,8 @@ export function UnifiedMoviePoster({
   className = '',
   children,
   showPlayOverlay,
-  onPlay
+  onPlay,
+  playPending = false
 }) {
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -33,15 +34,19 @@ export function UnifiedMoviePoster({
       {showPlayOverlay && onPlay ? (
         <button
           type="button"
-          className="movie-card-play-overlay"
-          aria-label={`Play ${title}`}
-          title="Play"
+          className={cx('movie-card-play-overlay', playPending && 'movie-card-play-overlay-pending')}
+          aria-label={playPending ? `Opening ${title} in Cinema Paradiso Player` : `Play ${title}`}
+          aria-busy={playPending || undefined}
+          title={playPending ? 'Opening player…' : 'Play'}
+          disabled={playPending}
           onClick={(event) => {
             event.stopPropagation();
             onPlay();
           }}
         >
-          <Play size={34} fill="currentColor" />
+          {playPending
+            ? <Loader2 size={30} className="spin" />
+            : <Play size={34} fill="currentColor" />}
         </button>
       ) : null}
     </div>
@@ -69,6 +74,7 @@ export function UnifiedMovieCard({
   metadataActions,
   showPlayOverlay = false,
   onPlay,
+  playPending = false,
   onToggle,
   children,
   expandedBody,
@@ -109,6 +115,7 @@ export function UnifiedMovieCard({
         className={posterClassName}
         showPlayOverlay={showPlayOverlay}
         onPlay={onPlay}
+        playPending={playPending}
         large={expanded}
       >
         {cornerControls}

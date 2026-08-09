@@ -381,10 +381,11 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         ]
         self.assertNotIn("append ? [...state, ...nextResults]", context_loader)
         self.assertNotIn("Load more", discover_source)
-        self.assertIn('ariaLabel="TMDB People search pagination"', discover_source)
-        self.assertIn('ariaLabel="TMDB keyword search pagination"', discover_source)
-        self.assertIn('ariaLabel="TMDB relationship pagination"', discover_source)
-        self.assertIn('ariaLabel="AI Pick relationship pagination"', discover_source)
+        self.assertIn("ariaLabel: 'TMDB People search pagination'", discover_source)
+        self.assertIn("ariaLabel: 'TMDB keyword search pagination'", discover_source)
+        self.assertIn("ariaLabel: 'TMDB relationship pagination'", discover_source)
+        self.assertIn("ariaLabel: 'AI Pick relationship pagination'", discover_source)
+        self.assertIn("function PaginatedDiscoverResults({ children, pagination })", discover_source)
         self.assertIn("ariaLabel = 'Library pagination'", pagination_source)
         self.assertIn('aria-label={ariaLabel}', pagination_source)
 

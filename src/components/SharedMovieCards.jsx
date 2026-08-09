@@ -2,7 +2,7 @@ import {
   AlertTriangle, Bell, Bookmark, BookOpen, Check, Clapperboard, ExternalLink, Film, Loader2,
   FileText, MonitorPlay, Pencil, Play, RefreshCcw, Search, Sparkles, Trash2, Wand2, X
 } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchJson } from '../api/client.js';
 import { mergeCanonicalMovieDetails } from '../api/movieDetails.js';
@@ -17,6 +17,40 @@ import {
   formatReleaseDateLabel, formatVoteCount, isUnreleasedMovie
 } from '../utils/moviePresentation.js';
 import { canonicalOwnedMovie } from '../discoverUtils.js';
+
+function usePendingPlay(onPlay, path) {
+  const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
+
+  const play = useCallback(async () => {
+    if (!onPlay || !path || pendingRef.current) return null;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      return await onPlay(path);
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }, [onPlay, path]);
+
+  return { pending, play };
+}
+
+function MoviePlayButton({ pending, onPlay }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-primary btn-green movie-play-action"
+      onClick={onPlay}
+      disabled={pending}
+      aria-busy={pending || undefined}
+    >
+      {pending ? <Loader2 size={15} className="spin" /> : <Play size={15} />}
+      {pending ? 'Opening player…' : 'Play'}
+    </button>
+  );
+}
 
 export function PosterEditButton({ title, onEdit }) {
   if (!onEdit) return null;
@@ -144,6 +178,8 @@ export function DiscoverMovieCard({
     : (collection?.id ? collection : displayMovie.collection || {});
   const lowQuality = Boolean(owned?.maintenance_upgrade_candidate);
   const unreleased = !owned && isUnreleasedMovie(displayMovie);
+  const ownedPath = owned?.path || '';
+  const playAction = usePendingPlay(onPlay, ownedPath);
   return (
     <UnifiedMovieCard
       className={cx('discover-movie-card', expanded && 'discover-card-expanded')}
@@ -177,7 +213,8 @@ export function DiscoverMovieCard({
         <MovieLanguageToggle {...languageView.toggleProps} />
       ) : null}
       showPlayOverlay={Boolean(owned)}
-      onPlay={owned?.path ? () => onPlay(owned.path) : undefined}
+      onPlay={ownedPath ? playAction.play : undefined}
+      playPending={playAction.pending}
       cornerControls={(
         <>
           <PosterStateControls
@@ -230,9 +267,7 @@ export function DiscoverMovieCard({
           <div className="card-actions">
             {owned ? (
               <>
-                <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(owned.path)}>
-                  <Play size={15} /> Play
-                </button>
+                <MoviePlayButton pending={playAction.pending} onPlay={playAction.play} />
                 <OwnedFileDetailsButton owned={ownedItem} onOpenFileDetails={onOpenFileDetails} />
                 {lowQuality && (
                   <button type="button" className="btn btn-secondary" onClick={() => onFindTorrent(displayMovie, true)}>
@@ -729,6 +764,7 @@ export function LibraryMovieCard({
   const displayCollection = languageView.isArabic && displayDetails?.collection?.id
     ? { ...(collection || {}), ...displayDetails.collection }
     : (collection?.id ? collection : canonical.collection || {});
+  const playAction = usePendingPlay(onPlay, item.path);
 
   return (
     <UnifiedMovieCard
@@ -763,7 +799,8 @@ export function LibraryMovieCard({
         <MovieLanguageToggle {...languageView.toggleProps} />
       ) : null}
       showPlayOverlay={Boolean(item.path)}
-      onPlay={() => onPlay(item.path)}
+      onPlay={playAction.play}
+      playPending={playAction.pending}
       cornerControls={(
         <>
           <PosterStateControls
@@ -817,9 +854,7 @@ export function LibraryMovieCard({
           </p>
           <MovieKeywordRow keywords={displayDetails?.keywords || displayMovie.keywords} />
           <div className="library-card-actions">
-            <button type="button" className="btn btn-primary btn-green" onClick={() => onPlay(item.path)}>
-              <Play size={15} /> Play
-            </button>
+            <MoviePlayButton pending={playAction.pending} onPlay={playAction.play} />
             <button type="button" className="btn btn-secondary" onClick={onTrailer}>
               <Film size={15} /> Trailer
             </button>

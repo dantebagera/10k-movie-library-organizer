@@ -399,9 +399,13 @@ class AiControlApiTest(unittest.TestCase):
     def test_batch_owned_movie_lookup_reuses_one_snapshot_and_catalog_query(self):
         snapshot = Mock(return_value={"files": {}})
         ownership_candidates = Mock(return_value=[{"path": "E:\\Movies\\Owned.mkv"}])
+        owned_path_candidates = Mock(return_value=[])
         store = SimpleNamespace(
             snapshot=snapshot,
-            catalog=SimpleNamespace(store=SimpleNamespace(ownership_candidates=ownership_candidates)),
+            catalog=SimpleNamespace(store=SimpleNamespace(
+                ownership_candidates=ownership_candidates,
+                owned_path_candidates=owned_path_candidates,
+            )),
         )
         movies = [
             {"tmdb_id": "1", "title": "Owned", "year": "2001"},
@@ -428,6 +432,7 @@ class AiControlApiTest(unittest.TestCase):
 
         snapshot.assert_called_once_with()
         ownership_candidates.assert_called_once()
+        owned_path_candidates.assert_called_once_with([])
         self.assertEqual(owned_movie.call_count, 2)
         self.assertEqual(result[0]["path"], "E:\\Movies\\Owned.mkv")
         self.assertIsNone(result[1])

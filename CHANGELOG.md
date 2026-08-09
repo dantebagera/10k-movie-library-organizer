@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.8.4 - August 2026
+
+Cinema Paradiso v2.8.4 expands Home trailers, makes list and card actions update immediately, and keeps bulk selections and page navigation consistent across the desktop workspaces.
+
+### Added
+
+- Balanced Home trailer channels for Rotten Tomatoes Trailers and Movie Trailers Source, with source filters and cursor-based loading.
+- Optional YouTube Data API configuration, validation, and clearing in Settings for longer trailer feeds and fallback trailer search.
+- In-player matching actions for Home trailers, including session-only manual TMDB matching, follow controls, and direct Discover navigation.
+- Regression coverage for cross-page selection and synchronized top-and-bottom pagination across Library, Discover, Movie Lists, and Maintenance.
+- Planning notes for a possible Trakt related-movies integration without adding a second recommendation authority.
+
+### Changed
+
+- Curation routes attach authoritative SQL ownership identity before mutating user and system lists.
+- Watched and Watchlist controls update optimistically across Home, Library, Discover, Movie Lists, and AI Control, with rollback when persistence fails.
+- Discover movie, people, keyword, relationship, and AI Pick grids expose the same page controls above and below results.
+- Movie Lists expose synchronized page controls above and below long lists.
+- Shared movie-card and Home layouts use the updated desktop spacing, action, and complete-row behavior.
+
+### Fixed
+
+- Selections now accumulate across result pages and bulk actions receive the complete selected set instead of only the visible page.
+- Maintenance no longer clears selected duplicate or identity paths when another page loads.
+- Home trailer feeds ignore unavailable videos, preserve exhausted-source cursors, and avoid duplicate reposts while balancing channels.
+- Trailer fallback and manual movie matches remain session-only and do not create hidden persistent mappings.
+- System-list mutations preserve canonical owned paths and identities instead of degrading owned movies into remote-only entries.
+
 ## v2.8.3 - August 2026
 
 Cinema Paradiso v2.8.3 makes externally added movies appear as complete Library cards while the app is running, refines the desktop navigation, and advances the native player with first-party Windows window controls.

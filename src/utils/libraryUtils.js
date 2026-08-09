@@ -230,6 +230,7 @@ export function moviePayload(item) {
   const identity = getMovieIdentity(item);
   const canonical = item?.canonical_metadata || {};
   return {
+    movie_key: String(canonical.movie_key || item?.movie_key || ''),
     tmdb_id: String(canonical.tmdb_id || item?.tmdb_id || ''),
     imdb_id: String(canonical.imdb_id || item?.imdb_id || ''),
     plex_guid: String(canonical.plex_guid || item?.plex_guid || ''),
@@ -241,6 +242,7 @@ export function moviePayload(item) {
 }
 
 export function movieIdentityKey(movie) {
+  if (movie?.movie_key) return String(movie.movie_key);
   if (movie?.tmdb_id) return `tmdb:${movie.tmdb_id}`;
   if (movie?.path) return `path:${String(movie.path).toLowerCase()}`;
   return `title:${normalizeCollectionTitle(movie?.title)}|${String(movie?.year || '')}`;
@@ -248,6 +250,7 @@ export function movieIdentityKey(movie) {
 
 export function movieIdentityKeys(movie) {
   const keys = [];
+  if (movie?.movie_key) keys.push(String(movie.movie_key));
   if (movie?.tmdb_id) keys.push(`tmdb:${movie.tmdb_id}`);
   if (movie?.imdb_id) keys.push(`imdb:${String(movie.imdb_id).toLowerCase()}`);
   if (movie?.plex_guid) keys.push(`plex:${String(movie.plex_guid).toLowerCase()}`);
@@ -259,6 +262,10 @@ export function movieIdentityKeys(movie) {
 }
 
 export function moviesShareIdentity(left, right) {
+  const leftMovieKey = String(left?.movie_key || '');
+  const rightMovieKey = String(right?.movie_key || '');
+  if (leftMovieKey && rightMovieKey && leftMovieKey !== rightMovieKey) return false;
+
   const leftTmdb = String(left?.tmdb_id || '');
   const rightTmdb = String(right?.tmdb_id || '');
   if (leftTmdb && rightTmdb && leftTmdb !== rightTmdb) return false;
@@ -273,6 +280,19 @@ export function moviesShareIdentity(left, right) {
 
   const rightKeys = new Set(movieIdentityKeys(right));
   return movieIdentityKeys(left).some((key) => rightKeys.has(key));
+}
+
+export function applySystemListState(lists, systemType, movie, active) {
+  return (lists || []).map((list) => {
+    if (list?.system_type !== systemType && list?.id !== systemType) return list;
+    const existing = list.movies || [];
+    const matched = existing.some((candidate) => moviesShareIdentity(candidate, movie));
+    if (active && matched) return list;
+    const movies = active
+      ? [...existing, movie]
+      : existing.filter((candidate) => !moviesShareIdentity(candidate, movie));
+    return { ...list, movies };
+  });
 }
 
 export function applyPosterOverrideToLibraryItems(items, selectedItem, posterUrl, override) {

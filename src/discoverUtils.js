@@ -13,6 +13,7 @@ function normalizeMovieTitle(title) {
 }
 
 export function discoverIdentityKey(movie) {
+  if (movie?.movie_key) return String(movie.movie_key);
   if (movie?.tmdb_id) return `tmdb:${String(movie.tmdb_id)}`;
   if (movie?.imdb_id) return `imdb:${String(movie.imdb_id).toLowerCase()}`;
   if (movie?.path) return `path:${String(movie.path).toLowerCase()}`;
@@ -20,12 +21,15 @@ export function discoverIdentityKey(movie) {
 }
 
 export function discoverMoviePayload(movie, owned) {
+  const ownedItem = owned?.canonical_card || owned?.library_item || {};
+  const canonical = ownedItem.canonical_metadata || {};
   return {
-    tmdb_id: String(movie?.tmdb_id || ''),
-    imdb_id: String(movie?.imdb_id || ''),
-    plex_guid: String(movie?.plex_guid || owned?.plex_guid || ''),
-    title: movie?.title || '',
-    year: String(movie?.year || ''),
+    movie_key: String(canonical.movie_key || owned?.movie_key || movie?.movie_key || ''),
+    tmdb_id: String(canonical.tmdb_id || owned?.tmdb_id || movie?.tmdb_id || ''),
+    imdb_id: String(canonical.imdb_id || owned?.imdb_id || movie?.imdb_id || ''),
+    plex_guid: String(canonical.plex_guid || owned?.plex_guid || movie?.plex_guid || ''),
+    title: canonical.title || movie?.title || owned?.title || '',
+    year: String(canonical.year || movie?.year || owned?.year || ''),
     release_date: movie?.release_date || '',
     poster_url: movie?.poster_url || '',
     path: owned?.path || movie?.path || ''
@@ -53,6 +57,7 @@ export function buildOwnershipMap(results = []) {
 
 export function ownershipKeys(movie = {}) {
   const keys = [];
+  if (movie.movie_key) keys.push(String(movie.movie_key));
   if (movie.tmdb_id) keys.push(`tmdb:${String(movie.tmdb_id)}`);
   if (movie.imdb_id) keys.push(`imdb:${String(movie.imdb_id).toLowerCase()}`);
   if (movie.plex_guid) keys.push(`plex:${String(movie.plex_guid).toLowerCase()}`);
@@ -82,6 +87,7 @@ export function canonicalOwnedMovie(movie = {}, owned = null) {
   if (!canonical.accepted) return movie;
   return {
     ...movie,
+    movie_key: canonical.movie_key || owned?.movie_key || movie.movie_key,
     title: canonical.title || movie.title,
     year: canonical.year || movie.year,
     tmdb_id: canonical.tmdb_id || movie.tmdb_id,

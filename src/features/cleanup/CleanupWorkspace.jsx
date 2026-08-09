@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -89,6 +89,8 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   const [identityHealthJob, setIdentityHealthJob] = useState('');
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [smartMatchProviders, setSmartMatchProviders] = useState({ tmdb: true, plex: true });
+  const maintenanceSelectionScope = `${activeTab}|${filters.query.trim()}`;
+  const previousMaintenanceSelectionScopeRef = useRef(maintenanceSelectionScope);
 
   useEffect(() => {
     setActiveTab(maintenanceTab(initialTab));
@@ -112,7 +114,6 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
         identity: state.identity || current.identity,
       }));
       if (state.identity_review) setIdentityAudit(state.identity_review);
-      setSelected((current) => ({ ...current, [section]: new Set() }));
     } catch (loadError) {
       setError(loadError.message);
     } finally {
@@ -126,6 +127,12 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     }, filters.query ? 180 : 0);
     return () => window.clearTimeout(timer);
   }, [activeTab, filters.query, loadMaintenanceSection, pages]);
+
+  useEffect(() => {
+    if (previousMaintenanceSelectionScopeRef.current === maintenanceSelectionScope) return;
+    previousMaintenanceSelectionScopeRef.current = maintenanceSelectionScope;
+    setSelected({ storage: new Set(), identity: new Set() });
+  }, [maintenanceSelectionScope]);
 
   useEffect(() => {
     const refreshForLibraryChange = () => {
@@ -177,7 +184,6 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
     onHealthChanged();
   }, [identityAudit?.id, identityAudit?.status, identityHealthJob, onHealthChanged]);
 
-  const duplicatePaths = useMemo(() => audit.storage.groups.flatMap((group) => (group.files || []).map((file) => file.path)), [audit.storage.groups]);
   const identityItems = useMemo(() => audit.identity.items || [], [audit.identity.items]);
   const visibleUnmatched = useMemo(() => identityItems.filter((item) => !item.metadata_accepted), [identityItems]);
 
@@ -637,7 +643,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
           {activeTab === 'storage' && (
             <>
               <MaintenancePagination pagination={audit.storage.pagination} onPageChange={(page) => setPages((state) => ({ ...state, storage: page }))} />
-              <DuplicatesCleanupTab groups={audit.storage.groups} selected={selected.storage} duplicatePaths={duplicatePaths} onToggle={toggleDuplicateSelected} onSelectPaths={setSelectedPaths} onDelete={requestDelete} onPlay={onPlay} />
+              <DuplicatesCleanupTab groups={audit.storage.groups} selected={selected.storage} onToggle={toggleDuplicateSelected} onSelectPaths={setSelectedPaths} onDelete={requestDelete} onPlay={onPlay} />
             </>
           )}
           {activeTab === 'identity' && (
@@ -757,7 +763,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   );
 }
 
-function DuplicatesCleanupTab({ groups, selected, duplicatePaths, onToggle, onSelectPaths, onDelete, onPlay }) {
+function DuplicatesCleanupTab({ groups, selected, onToggle, onSelectPaths, onDelete, onPlay }) {
   const visibleRecommended = groups.flatMap((group) => (group.files || []).filter((file) => file.recommendation === 'recommended').map((file) => file.path));
   const selectedPaths = [...selected];
   return (
@@ -768,7 +774,7 @@ function DuplicatesCleanupTab({ groups, selected, duplicatePaths, onToggle, onSe
         selectableCount={visibleRecommended.length}
         selectLabel="Select recommended"
         onSelectAll={() => onSelectPaths('storage', visibleRecommended, true)}
-        onClear={() => onSelectPaths('storage', duplicatePaths, false)}
+        onClear={() => onSelectPaths('storage', selectedPaths, false)}
         onDeleteSelected={() => onDelete('storage', selectedPaths, `Move ${selected.size} selected file${selected.size === 1 ? '' : 's'} to Recycle Bin?`)}
       />
       {groups.length ? groups.map((group) => {
@@ -817,7 +823,7 @@ function UnmatchedCleanupTab({ items, selected, rowStatus, onToggle, onPlay, onD
         selectedCount={selected.size}
         selectableCount={items.length}
         onSelectAll={() => items.forEach((item) => onToggle('identity', item.path, true))}
-        onClear={() => items.forEach((item) => onToggle('identity', item.path, false))}
+        onClear={() => [...selected].forEach((path) => onToggle('identity', path, false))}
       />
       {smartControls}
       {lastSmartMatchControl && <div className="cleanup-secondary-action">{lastSmartMatchControl}</div>}

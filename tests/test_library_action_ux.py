@@ -160,8 +160,18 @@ class LibraryActionUxTest(unittest.TestCase):
 
         self.assertIn("ariaLabel = 'Library pagination'", pagination_source)
         self.assertIn('aria-label={ariaLabel}', pagination_source)
-        self.assertIn('ariaLabel="TMDB movie pagination"', self.discover_source)
+        self.assertIn("ariaLabel: 'TMDB movie pagination'", self.discover_source)
         self.assertEqual(self.discover_source.count("import Pagination from '../../components/Pagination.jsx';"), 1)
+
+    def test_discover_places_the_same_pagination_above_and_below_results(self):
+        self.assertIn("function PaginatedDiscoverResults({ children, pagination })", self.discover_source)
+        self.assertIn("pagination.ariaLabel.replace(/ pagination$/i, ' page controls above results')", self.discover_source)
+        self.assertIn("<Pagination {...pagination} ariaLabel={topAriaLabel} />", self.discover_source)
+        self.assertIn("<Pagination {...pagination} />", self.discover_source)
+        self.assertIn("pagination={exploreMoviePagination}", self.discover_source)
+        self.assertIn("pagination={pickMoviePagination}", self.discover_source)
+        self.assertIn("ariaLabel: 'TMDB People search pagination'", self.discover_source)
+        self.assertIn("ariaLabel: 'TMDB keyword search pagination'", self.discover_source)
 
     def test_library_keyword_search_uses_the_authoritative_page_contract(self):
         self.assertIn("const LIBRARY_KEYWORD_PAGE_SIZE = 50;", self.source)
@@ -299,11 +309,23 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("activeTab === 'browse' ? filteredBrowseRows", discover_source)
         self.assertIn("Select all browse indexer results", browse_source)
         self.assertIn("setListEditorTarget({ bulkItems: selectedDiscoverMovies })", browse_source)
-        self.assertIn("selected={selectedDiscoverKeys.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}", browse_source)
+        self.assertIn("selected={selectedDiscoverByKey.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}", browse_source)
         self.assertIn("onSelect={(checked) => toggleDiscoverSelection(movie, owned, checked)}", browse_source)
         self.assertIn("selected,", indexer_card_source)
         self.assertIn("onSelect", indexer_card_source)
         self.assertIn('className="discover-selection-checkbox"', indexer_card_source)
+
+    def test_discover_selection_keeps_payloads_across_server_pages(self):
+        discover_source = self.source[
+            self.source.index("function DiscoverWorkspace"):
+            self.source.index("function PeopleSearchResults")
+        ]
+        self.assertIn("useState(() => new Map())", discover_source)
+        self.assertIn("() => [...selectedDiscoverByKey.values()]", discover_source)
+        self.assertIn("const next = new Map(current)", discover_source)
+        self.assertIn("next.set(movieIdentityKey(payload), payload)", discover_source)
+        self.assertIn("function deselectAllDiscoverResults()", discover_source)
+        self.assertIn("setSelectedDiscoverByKey(new Map())", discover_source)
 
     def test_library_list_filter_warns_when_list_movies_are_missing(self):
         self.assertIn("listLibraryCoverage", self.source)
@@ -411,6 +433,13 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertNotIn("/api/metadata/identity-verification/enrich", cleanup_source)
         self.assertNotIn("identity.verification", cleanup_source)
         self.assertIn("cp-library-changed", cleanup_source)
+        loader_source = cleanup_source[
+            cleanup_source.index("const loadMaintenanceSection"):
+            cleanup_source.index("useEffect(() =>", cleanup_source.index("const loadMaintenanceSection"))
+        ]
+        self.assertNotIn("setSelected", loader_source)
+        self.assertIn("previousMaintenanceSelectionScopeRef", cleanup_source)
+        self.assertIn("onClear={() => onSelectPaths('storage', selectedPaths, false)}", self.source)
         self.assertNotIn("/api/duplicates", cleanup_source)
         self.assertNotIn("/api/smart-scan", cleanup_source)
         self.assertNotIn("/api/low-quality", cleanup_source)
@@ -507,6 +536,16 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertNotIn("Find upgrades", movie_lists_source)
         self.assertIn("openSelectedSourceReview", movie_lists_source)
         self.assertIn("SourceReviewDialog", movie_lists_source)
+
+    def test_movie_lists_places_shared_pagination_above_and_below_cards(self):
+        movie_lists_source = self.movie_lists_workspace_source
+        self.assertIn("const movieListPaginationProps = {", movie_lists_source)
+        self.assertIn("ariaLabel: 'Movie list pagination'", movie_lists_source)
+        self.assertIn("<Pagination {...movieListPaginationProps} />", movie_lists_source)
+        self.assertIn(
+            '<Pagination {...movieListPaginationProps} ariaLabel="Movie list page controls below results" />',
+            movie_lists_source,
+        )
         self.assertIn("/api/sources/review/preview", self.source_review_api_source)
         self.assertIn("/api/sources/review/submit", self.source_review_api_source)
         self.assertIn("source-review-dialog", self.source_review_dialog_source)

@@ -25,6 +25,7 @@ import {
   Trash2,
   Wand2,
   X,
+  Youtube,
 } from 'lucide-react'
 import { fetchJson } from '../../api/client.js'
 import { iptvApi } from '../../api/iptv.js'
@@ -60,6 +61,7 @@ const emptySettingsState = {
     update_available: false
   },
   tmdb: { key: '', includeAdult: false },
+  youtube: { key: '', configured: false, keyHint: '' },
   streaming: {
     enabled: true,
     label: 'Stream',
@@ -236,6 +238,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         fetchJson('/api/prowlarr/config'),
         fetchJson('/api/qbittorrent/config'),
         fetchJson('/api/tmdb/config'),
+        fetchJson('/api/youtube/config'),
         fetchJson('/api/streaming/config'),
         iptvApi.providers(),
         fetchJson('/api/ollama/config'),
@@ -245,7 +248,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         fetchJson('/api/player/status')
       ]);
       if (cancelled) return;
-      const [library, appData, plex, prowlarr, qbittorrent, tmdb, streaming, iptv, ollama, ollamaModels, aiControl, player, playerStatus] = requests;
+      const [library, appData, plex, prowlarr, qbittorrent, tmdb, youtube, streaming, iptv, ollama, ollamaModels, aiControl, player, playerStatus] = requests;
       const loadedIPTVProviders = iptv.status === 'fulfilled' ? (iptv.value.providers || []) : [];
       const loadedIPTVProviderId = loadedIPTVProviders.some((provider) => provider.provider_id === iptv.value?.last_selected_provider_id)
         ? iptv.value.last_selected_provider_id
@@ -272,6 +275,11 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         } : emptySettingsState.prowlarr,
         qbittorrent: qbittorrent.status === 'fulfilled' ? qbittorrent.value : emptySettingsState.qbittorrent,
         tmdb: tmdb.status === 'fulfilled' ? { key: tmdb.value.key || '', includeAdult: Boolean(tmdb.value.include_adult) } : { key: '', includeAdult: false },
+        youtube: youtube.status === 'fulfilled' ? {
+          key: '',
+          configured: Boolean(youtube.value.configured),
+          keyHint: youtube.value.key_hint || ''
+        } : emptySettingsState.youtube,
         streaming: streaming.status === 'fulfilled' ? {
           enabled: streaming.value.enabled !== false,
           label: streaming.value.label || 'Stream',
@@ -545,6 +553,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       plex: '/api/plex/config',
       prowlarr: '/api/prowlarr/config',
       tmdb: '/api/tmdb/config',
+      youtube: '/api/youtube/config',
       streaming: '/api/streaming/config',
       ollama: '/api/ollama/config'
     };
@@ -558,6 +567,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         download_indexer_mode: forms.prowlarr.download_indexer_mode || 'release'
       },
       tmdb: { key: forms.tmdb.key, include_adult: Boolean(forms.tmdb.includeAdult) },
+      youtube: { key: forms.youtube.key },
       streaming: {
         enabled: Boolean(forms.streaming.enabled),
         label: forms.streaming.label,
@@ -602,6 +612,12 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
             trusted_indexers_configured: Boolean(aiControlConfig.trusted_indexers_configured),
             indexers: aiControlConfig.indexers || state.aiControl.indexers || []
           } : state.aiControl
+        }));
+      }
+      if (service === 'youtube') {
+        setForms((state) => ({
+          ...state,
+          youtube: { key: '', configured: Boolean(saved.configured), keyHint: saved.key_hint || '' }
         }));
       }
       if (service === 'ollama') {
@@ -931,17 +947,24 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       plex: '/api/plex/test',
       prowlarr: '/api/prowlarr/test',
       tmdb: `/api/tmdb/test?key=${encodeURIComponent(forms.tmdb.key || '')}`,
+      youtube: '/api/youtube/test',
       ollama: `/api/ollama/test?url=${encodeURIComponent(forms.ollama.url || '')}&model=${encodeURIComponent(forms.ollama.model || '')}`
     };
     setActionState(`${service}-test`, true);
     try {
-      const data = await fetchJson(urls[service]);
+      const data = await fetchJson(urls[service], service === 'youtube' ? {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: forms.youtube.key || '' })
+      } : undefined);
       if (service === 'plex') {
         setCardStatus('plex', 'success', 'Plex connected.', `${formatCount(data.movie_libraries)} movie libraries found.`);
       } else if (service === 'prowlarr') {
         setCardStatus('prowlarr', 'success', 'Prowlarr connected.', `${formatCount(data.indexers)} indexers available.`);
       } else if (service === 'tmdb') {
         setCardStatus('tmdb', 'success', 'TMDB key is valid.', 'Discovery metadata is available.');
+      } else if (service === 'youtube') {
+        setCardStatus('youtube', 'success', 'YouTube key is valid.', 'Trailer channels and missing-trailer search are available.');
       } else {
         setCardStatus('ollama', 'success', 'Ollama model answered correctly.', `${data.model} returned valid JSON in ${formatCount(data.elapsed_ms)} ms.`);
       }
@@ -949,6 +972,24 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       setCardStatus(service, 'error', `${serviceLabel(service)} test failed.`, error.message);
     } finally {
       setActionState(`${service}-test`, false);
+    }
+  }
+
+  async function clearYouTubeKey() {
+    setActionState('youtube-clear', true);
+    try {
+      const data = await fetchJson('/api/youtube/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: true })
+      });
+      setForms((state) => ({ ...state, youtube: { key: '', configured: false, keyHint: data.key_hint || '' } }));
+      setCardStatus('youtube', 'success', 'YouTube key removed.', 'Public 15-video channel feeds remain available.');
+      notify('YouTube API key removed');
+    } catch (error) {
+      setCardStatus('youtube', 'error', 'YouTube key not removed.', error.message);
+    } finally {
+      setActionState('youtube-clear', false);
     }
   }
 
@@ -999,6 +1040,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
     { key: 'prowlarr', label: 'Prowlarr', ready: Boolean(forms.prowlarr.url && forms.prowlarr.key), tone: 'gold' },
     { key: 'qbittorrent', label: 'qBittorrent', ready: forms.qbittorrent.mode === 'system' || Boolean(forms.qbittorrent.installed), tone: 'gold' },
     { key: 'tmdb', label: 'TMDB', ready: Boolean(forms.tmdb.key), tone: 'green' },
+    { key: 'youtube', label: 'YouTube', ready: Boolean(forms.youtube.configured || forms.youtube.key), tone: 'red' },
     { key: 'streaming', label: 'Streaming', ready: Boolean(forms.streaming.enabled && forms.streaming.url_template), tone: 'green' },
     { key: 'iptv', label: 'IPTV', ready: iptvProviders.length > 0, tone: 'gold' },
     { key: 'ollama', label: 'Ollama', ready: Boolean(forms.ollama.url && forms.ollama.model), tone: 'violet' },
@@ -1657,6 +1699,40 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         />
 
         <IntegrationCard
+          id="settings-youtube"
+          icon={Youtube}
+          title="YouTube Data API"
+          accent="red"
+          status={statuses.youtube}
+          fields={(
+            <>
+              <SecretField
+                label="YouTube API key"
+                value={forms.youtube.key || ''}
+                revealed={revealed.youtube}
+                onReveal={() => setRevealed((state) => ({ ...state, youtube: !state.youtube }))}
+                onChange={(value) => updateField('youtube', 'key', value)}
+                placeholder={forms.youtube.configured ? `Saved key ${forms.youtube.keyHint}` : 'Paste a restricted YouTube Data API v3 key'}
+              />
+              <p className="settings-runtime-detail">
+                {forms.youtube.configured
+                  ? `A local key is configured${forms.youtube.keyHint ? ` (${forms.youtube.keyHint})` : ''}. The full value is never returned to this page.`
+                  : 'Without a key, Home uses the public 15-video feeds and missing-trailer search stays unavailable.'}
+              </p>
+            </>
+          )}
+          actions={(
+            <>
+              <ActionButton loading={saving['youtube-save']} icon={Save} label="Save YouTube" onClick={() => saveIntegration('youtube')} primary />
+              <ActionButton loading={saving['youtube-test']} icon={PlugZap} label="Test key" onClick={() => testIntegration('youtube')} />
+              {forms.youtube.configured ? (
+                <ActionButton loading={saving['youtube-clear']} icon={Trash2} label="Clear key" onClick={clearYouTubeKey} />
+              ) : null}
+            </>
+          )}
+        />
+
+        <IntegrationCard
           id="settings-streaming"
           icon={MonitorPlay}
           title="Streaming Link"
@@ -1990,6 +2066,7 @@ function serviceLabel(service) {
     plex: 'Plex',
     prowlarr: 'Prowlarr',
     tmdb: 'TMDB',
+    youtube: 'YouTube',
     streaming: 'Streaming',
     ollama: 'Ollama'
   }[service] || service;
@@ -2048,6 +2125,7 @@ function integrationText(title) {
     Prowlarr: 'Source search for upgrades and torrent lookup.',
     qBittorrent: 'Portable downloads powered by the original qBittorrent WebUI.',
     TMDB: 'Posters, plots, cast, discovery lists, and trailers.',
+    'YouTube Data API': 'Long multi-channel trailer feeds and on-demand fallback search for missing movie trailers.',
     'Streaming Link': 'Configurable embedded movie stream URL template.',
     'IPTV Provider': 'Separate Xtream catalog and integrated local playback.',
     Ollama: 'AI recommendations and interpretation through your selected Ollama model.'

@@ -1,0 +1,176 @@
+- Document purpose
+  - Preserve the Trakt discussion without treating any scenario as approved implementation.
+  - Give Dante a small number of concrete paths that can be compared in future conversations.
+  - Prevent repeated investigation, context loss, and accidental mixing of product discussion with coding.
+  - Keep the selected scenario undecided until Dante reaches a conclusion.
+
+- Confirmed product requirements
+  - The expanded movie card must never wait for AI, Trakt, or a chain of TMDB requests before opening.
+  - The shared production owner is `MovieExpandedDetails` in `src/components/SharedMovieCards.jsx`.
+  - The feature must work consistently in Library, Discover, Movie Lists, AI Control, and indexer-expanded cards.
+  - The visible label should be `More Like This` or `Related Movies`, not `People Also Liked`, because Trakt documents related and similar movies rather than that exact social claim.
+  - Six desktop tiles should be visible initially, with horizontal access to as many as twelve.
+  - Each tile should show a poster, title, year, Trakt score, and CP `Owned` state when applicable.
+  - Selecting a related movie should open that movie through the same expanded-card experience while preserving a Back path to the originating movie.
+  - Trakt failure must not block plot, actors, actions, playback, or the rest of the expanded card.
+  - Rotten Tomatoes, IMDb, and other external rating tiles are a separable decision and must not delay the related-movie rail.
+
+- Confirmed technical facts
+  - Trakt offers `GET /movies/{id}/related?extended=full` for related and similar movies.
+  - The related response can supply title, year, external identifiers, a Trakt score, and image references.
+  - Personalized Trakt recommendations are a different OAuth-dependent feature.
+  - CP currently has no Trakt implementation.
+  - CP already stores Plex and TMDB provider snapshots in SQL.
+  - `provider_movie_snapshots` currently permits only `tmdb` and `plex`.
+  - Its synchronization logic treats every non-TMDB provider as Plex, so Trakt cannot simply be added to that table constraint.
+  - The current live catalog has thousands of Plex snapshots but only a small number of movies selected to Plex as the display provider.
+  - CP currently collapses Plex ratings into one `plex_rating` value and does not retain enough source information to label it confidently as Rotten Tomatoes, IMDb, or TMDB.
+  - Twelve separate TMDB detail searches for twelve Trakt results would be slower than the actors section and are not acceptable.
+
+- Scenario 1 - Minimal Trakt rail with a disposable cache
+  - Goal
+    - Add `More Like This` without changing the canonical catalog schema.
+  - Plan
+    - Add a Trakt Client ID setting and a backend Trakt request owner.
+    - Request up to twelve related movies with `extended=full`.
+    - Cache normalized responses in a disposable service-owned cache outside canonical movie SQL.
+    - Use existing CP/TMDB artwork when already available.
+    - Cache Trakt fallback posters through CP's existing artwork service with temporary retention.
+    - Prefetch visible cards with bounded concurrency and prioritize hover or keyboard focus.
+    - Return stale cache immediately and refresh it silently.
+    - Render the shared rail after Director and Top Cast.
+  - Benefits
+    - Smallest database risk.
+    - Easy to remove completely.
+    - Fastest route to testing the product idea.
+    - Does not make Trakt a catalog authority.
+  - Costs and limits
+    - A completely cold movie cannot be guaranteed instant before its first prefetch finishes.
+    - Persistence and querying are weaker than a normalized SQL design.
+    - It is less suitable if Trakt later grows into ratings, history, watchlists, or personalized recommendations.
+  - Best fit
+    - Choose this if the goal is to test only the related-movie rail before committing to a permanent Trakt subsystem.
+
+- Scenario 2 - Dedicated SQL enrichment for Trakt relationships
+  - Goal
+    - Make related movies durable, queryable, restart-safe, and normally instant without making Trakt canonical.
+  - Plan
+    - Add isolated generic enrichment tables rather than modifying `provider_movie_snapshots`.
+    - Store external media identity, provider IDs, title, year, score, asset reference, freshness, and status.
+    - Store ranked source-to-target relationships with `fetched_at` and `expires_at`.
+    - Do not create canonical catalog movies for unowned recommendations.
+    - Join external TMDB and IMDb identifiers against CP ownership when reading the rail.
+    - Keep posters in the existing artwork system rather than storing image blobs in SQL.
+    - Use a bounded prefetch queue to warm visible cards.
+    - Read cached or stale rows immediately when the card expands and refresh them in the background.
+    - Add the same shared `More Like This` rail described in the confirmed product requirements.
+  - Benefits
+    - Instant warm behavior survives CP restarts.
+    - Relationships can be queried, sorted, audited, expired, and joined against ownership reliably.
+    - Provides a clean foundation for external ratings later.
+    - Avoids whole-file cache corruption and ambiguous cache ownership.
+  - Costs and limits
+    - Requires a catalog schema migration, isolated rehearsal, backup, rollback proof, and regression coverage.
+    - Requires expiration, refresh, cleanup, and rate-limit behavior to become maintained product code.
+    - Still does not make the first-ever network fetch physically instantaneous; prefetch hides that cold case.
+  - Best fit
+    - Choose this if Trakt related movies are expected to remain a permanent CP feature.
+
+- Scenario 3 - Full first-class Trakt account integration
+  - Goal
+    - Use Trakt as CP's long-term activity and recommendation service, not merely as a related-title endpoint.
+  - Plan
+    - Begin with Scenario 2's isolated SQL enrichment model.
+    - Add OAuth only in a separately approved phase.
+    - Store Trakt account identity and encrypted token material through a dedicated credential owner.
+    - Add separate synchronized data ownership for watch history, personal ratings, watchlist, lists, and personalized recommendations.
+    - Define conflict rules between CP watched state, Plex state, and Trakt state before any bidirectional synchronization.
+    - Keep TMDB as canonical movie metadata and Plex as the physical-library provider.
+    - Treat Trakt as activity, recommendation, and external-rating enrichment.
+    - Add privacy controls, disconnect behavior, token refresh, sync checkpoints, and recovery tests.
+  - Benefits
+    - Delivers personalized recommendations rather than only generic related movies.
+    - Makes CP activity portable across devices and services.
+    - Reuses the same Trakt identity and relationship foundation for several future features.
+  - Costs and limits
+    - Largest scope and highest long-term maintenance burden.
+    - Introduces account privacy, token security, synchronization conflicts, and provider availability risks.
+    - Should not be combined with the first related-rail implementation.
+  - Best fit
+    - Choose this only if Dante decides that Trakt should become a major CP account integration.
+
+- Scenario 4 - Plex and TMDB first, with no Trakt commitment yet
+  - Goal
+    - Determine how much of the desired experience CP can provide using its current providers before adding Trakt.
+  - Plan
+    - Inspect raw Plex movie metadata read-only for `rating`, `audienceRating`, `ratingImage`, and `audienceRatingImage`.
+    - Determine whether the current Plex library is configured for Rotten Tomatoes, IMDb, or TMDB ratings.
+    - Design source-aware Plex rating persistence instead of the current single ambiguous `plex_rating` value.
+    - Evaluate TMDB recommendations or similar results as the relationship source.
+    - Measure completeness, latency, poster availability, and non-owned movie coverage against Trakt samples.
+    - Keep the same proposed shared expanded-card rail only if the evidence is competitive.
+  - Benefits
+    - Avoids adding another provider until there is measured evidence that it is needed.
+    - Can recover rating information CP may already receive from Plex but currently discards.
+    - Uses existing provider credentials and infrastructure.
+  - Costs and limits
+    - Plex ratings primarily help owned movies and may expose only the library-selected rating source.
+    - It does not offer the same clear path to Trakt personalization.
+    - TMDB and Trakt may produce meaningfully different related-movie rankings.
+  - Best fit
+    - Choose this if Dante wants evidence from current providers before committing to Trakt.
+
+- Shared UI plan for Scenarios 1, 2, and 3
+  - Place `More Like This` after Director and Top Cast in the full-width expanded-card footer.
+  - Keep the existing poster, plot, actions, collection, lists, and people layout unchanged.
+  - Show six compact portrait movie tiles on desktop.
+  - Allow horizontal navigation through up to twelve cached results.
+  - Show title and year under each poster.
+  - Show one compact Trakt score rather than requesting full IMDb and Rotten Tomatoes ratings for every related tile.
+  - Overlay the existing CP `Owned` badge when identifiers match the library.
+  - Reserve the rail's final height so cold placeholders cannot move the surrounding layout.
+  - Keep the rail absent when Trakt is not configured.
+  - Keep a narrow section-local retry state when Trakt is configured but unavailable.
+
+- Shared performance plan for Scenarios 1, 2, and 3
+  - Never begin the Trakt request only after expansion and then make the expanded card wait.
+  - Prefetch cards that are actually visible rather than every result on a forty-card page at once.
+  - Promote pointer hover and keyboard focus to high-priority prefetch work.
+  - Deduplicate concurrent requests for the same movie.
+  - Limit background concurrency and honor Trakt rate-limit responses.
+  - Serve fresh local data immediately.
+  - Serve stale local data immediately and refresh silently.
+  - Keep expansion functional when the cache is missing, expired, corrupt, or offline.
+  - Measure warm, cold, stale, and provider-failure behavior independently.
+
+- Required safety gates before any implementation
+  - Confirm the selected scenario explicitly.
+  - Reinspect the current dirty worktree and preserve all unrelated local work.
+  - Verify the current database schema version and live database path.
+  - For any SQL scenario, rehearse migration, rollback, backup, and parity in an isolated database first.
+  - Verify that no unowned Trakt suggestion becomes a canonical or owned CP movie.
+  - Verify the shared component in Library, Discover, Movie Lists, AI Control, and indexer cards.
+  - Verify desktop geometry and loading behavior in the rendered application.
+  - Do not perform mobile work unless Dante requests it separately.
+  - Do not commit, push, release, or mutate live catalog data without separate permission.
+
+- Decision points still open
+  - Whether Trakt should be a small related-movie feature or a permanent provider subsystem.
+  - Whether Scenario 1 should be used as a reversible product experiment before Scenario 2.
+  - Whether external IMDb and Rotten Tomatoes ratings belong in the same release or a later phase.
+  - Whether Trakt OAuth and personalized recommendations are a real future goal.
+  - Whether Plex rating-source recovery should be investigated before choosing Trakt.
+  - Whether the related rail should use six of twelve results or another fixed desktop count after a visual mockup.
+
+- Lam3y's recommendation
+  - Do not choose the full OAuth integration now.
+  - Run one short read-only evidence phase that compares actual Trakt payload completeness and latency against the raw Plex and TMDB data already available to CP.
+  - If the rail is still the only desired feature, choose Scenario 1 as a reversible experiment.
+  - If Dante already considers Trakt a permanent CP dependency, skip the temporary cache and choose Scenario 2.
+  - Keep external rating tiles as a later decision so they cannot complicate or delay the related-movie rail.
+
+- Current status
+  - Discussion only.
+  - No scenario selected.
+  - No implementation authorized.
+  - No Trakt configuration, code, schema, or UI has been added by this discussion.

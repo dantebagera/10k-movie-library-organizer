@@ -116,6 +116,27 @@
   box-shadow: 0 0 0 3px #d4af3733, 0 0 26px #d4af3744;
 }
 
+.movie-card-play-overlay:active:not(:disabled) {
+  transform: translate(-50%, -50%) scale(0.9);
+  transition-duration: 70ms;
+}
+
+.movie-card-play-overlay-pending,
+.unified-movie-poster:hover .movie-card-play-overlay-pending,
+.unified-movie-poster:focus-within .movie-card-play-overlay-pending {
+  border-color: var(--projector-gold);
+  background: var(--projector-gold);
+  color: #111214;
+  cursor: wait;
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  box-shadow: 0 0 0 3px #d4af3733, 0 0 30px #d4af3755;
+}
+
+.movie-card-play-overlay-pending .spin {
+  color: currentColor;
+}
+
 .unified-movie-body {
   display: flex;
   min-width: 0;

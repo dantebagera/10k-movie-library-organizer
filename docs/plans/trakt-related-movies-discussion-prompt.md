@@ -1,0 +1,20 @@
+- Continue the Cinema Paradiso Trakt architecture discussion only.
+- Do not implement, edit code, change configuration, migrate SQL, start a sync, or modify live data.
+- Read `C:\Users\dante\Desktop\cinema paradiso\docs\plans\trakt-related-movies-discussion-scenarios.md` before discussing the feature.
+- Treat that file as the durable record of the previous conversation, not as an approved implementation contract.
+- Preserve its distinction between four scenarios:
+  - Minimal Trakt rail with a disposable cache.
+  - Dedicated SQL enrichment for Trakt relationships.
+  - Full first-class Trakt account integration.
+  - Plex and TMDB first with no Trakt commitment yet.
+- Continue from the unresolved decision points rather than repeating the entire original brainstorm.
+- Use read-only inspection of the current repository, live catalog, Plex metadata, or current official API documentation only when it materially answers the question being discussed.
+- Clearly separate confirmed facts, assumptions, recommendations, and decisions Dante has actually made.
+- Challenge any proposal that would delay expanded-card opening, issue twelve separate TMDB lookups, pollute canonical movie identity, or duplicate a shared card owner.
+- Keep `MovieExpandedDetails` as the shared UI ownership boundary unless current code evidence proves that ownership has changed.
+- Keep TMDB as canonical movie metadata, Plex as the physical-library provider, and Trakt as optional enrichment unless Dante explicitly decides otherwise.
+- Do not treat the saved scenarios as permission to choose one on Dante's behalf.
+- Do not ask Dante to approve implementation in this discussion task unless Dante first says the discussion is complete and asks to prepare implementation.
+- If the discussion produces a real decision, summarize the proposed plan change in chat first.
+- Modify the saved scenario plan only if Dante explicitly asks to update or replace it.
+- Start the new conversation with a concise statement of which unresolved decision is being examined, then continue the discussion at that level.

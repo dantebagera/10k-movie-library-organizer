@@ -10,8 +10,10 @@ from services.movie_identity import normalize_movie_title
 def normalize_curated_movie(movie):
     movie = movie or {}
     return {
+        'movie_key': str(movie.get('movie_key', '') or ''),
         'tmdb_id': str(movie.get('tmdb_id', '') or ''),
         'imdb_id': str(movie.get('imdb_id', '') or ''),
+        'plex_guid': str(movie.get('plex_guid', '') or ''),
         'title': str(movie.get('title', '') or ''),
         'year': str(movie.get('year', '') or ''),
         'path': str(movie.get('path', '') or ''),
@@ -23,6 +25,14 @@ def normalize_curated_movie(movie):
 def curated_movies_share_identity(left, right):
     left = normalize_curated_movie(left)
     right = normalize_curated_movie(right)
+    left_path = left.get('path', '')
+    right_path = right.get('path', '')
+    if left_path and right_path and os.path.normcase(os.path.normpath(left_path)) == os.path.normcase(os.path.normpath(right_path)):
+        return True
+    left_movie_key = left.get('movie_key', '')
+    right_movie_key = right.get('movie_key', '')
+    if left_movie_key and right_movie_key:
+        return left_movie_key == right_movie_key
     left_tmdb = left.get('tmdb_id')
     right_tmdb = right.get('tmdb_id')
     if left_tmdb and right_tmdb and left_tmdb != right_tmdb:
@@ -31,9 +41,15 @@ def curated_movies_share_identity(left, right):
     right_imdb = right.get('imdb_id', '').lower()
     if left_imdb and right_imdb and left_imdb != right_imdb:
         return False
+    left_plex = left.get('plex_guid', '').lower()
+    right_plex = right.get('plex_guid', '').lower()
+    if left_plex and right_plex and left_plex != right_plex:
+        return False
     if left_tmdb and right_tmdb and left_tmdb == right_tmdb:
         return True
     if left_imdb and right_imdb and left_imdb == right_imdb:
+        return True
+    if left_plex and right_plex and left_plex == right_plex:
         return True
     left_title = normalize_movie_title(left.get('title', ''))
     right_title = normalize_movie_title(right.get('title', ''))
@@ -45,6 +61,9 @@ def curated_movies_share_identity(left, right):
 
 
 def _movie_identity_key(movie):
+    movie_key = str(movie.get('movie_key', '') or '').strip()
+    if movie_key:
+        return movie_key
     tmdb_id = str(movie.get('tmdb_id', '') or '').strip()
     if tmdb_id:
         return f"tmdb:{tmdb_id}"
@@ -240,9 +259,16 @@ class UserCurationStore:
         existing = target.setdefault('movies', [])
         for movie in movies or []:
             normalized = normalize_curated_movie(movie or {})
-            if not any(normalized.get(key) for key in ('tmdb_id', 'imdb_id', 'title', 'path')):
+            if not any(normalized.get(key) for key in ('movie_key', 'tmdb_id', 'imdb_id', 'plex_guid', 'title', 'path')):
                 continue
-            if any(curated_movies_share_identity(current, normalized) for current in existing):
+            matched = next((
+                current for current in existing
+                if curated_movies_share_identity(current, normalized)
+            ), None)
+            if matched is not None:
+                for key, value in normalized.items():
+                    if value:
+                        matched[key] = value
                 continue
             if target.get('system_type') == 'watched':
                 normalized['watched_at'] = time.time()

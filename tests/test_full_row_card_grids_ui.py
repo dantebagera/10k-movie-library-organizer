@@ -17,13 +17,13 @@ class FullRowCardGridUiTests(unittest.TestCase):
         cls.discover = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
         cls.grid = (ROOT / "src" / "components" / "DiscoverResultGrid.jsx").read_text(encoding="utf-8")
 
-    def test_home_preview_uses_eight_cards(self):
-        self.assertIn("movies.slice(0, 8)", self.home)
-        self.assertNotIn("movies.slice(0, 6)", self.home)
+    def test_home_preview_uses_six_cards_for_three_rows(self):
+        self.assertIn("movies.slice(0, 6)", self.home)
+        self.assertNotIn("movies.slice(0, 8)", self.home)
         self.assertNotIn("movies.slice(0, 5)", self.home)
 
     def test_home_new_previews_measure_and_render_only_complete_rows(self):
-        self.assertIn("useCardGridMetrics({ target: 2, max: 2, bias: 'lower' })", self.home)
+        self.assertIn("useCardGridMetrics({ target: 5, max: 5, bias: 'lower' })", self.home)
         self.assertIn("useCardGridMetrics({ target: 6, min: 6, max: 6 })", self.home)
         self.assertIn("/api/tmdb/discover?list=upcoming&page=1&page_size=100", self.app)
         self.assertIn("items.slice(safePage * pageSize, safePage * pageSize + pageSize)", self.home)
@@ -68,8 +68,10 @@ class FullRowCardGridUiTests(unittest.TestCase):
     def test_finite_discover_contexts_are_client_paginated(self):
         self.assertIn("visibleDiscoverResults.map((movie, index)", self.discover)
         self.assertIn("visiblePickResults.map((movie)", self.discover)
-        self.assertIn('ariaLabel="Local Discover result pagination"', self.discover)
-        self.assertIn('ariaLabel="Local AI Pick pagination"', self.discover)
+        self.assertIn("ariaLabel: 'Local Discover result pagination'", self.discover)
+        self.assertIn("ariaLabel: 'Local AI Pick pagination'", self.discover)
+        self.assertIn("pagination={exploreMoviePagination}", self.discover)
+        self.assertIn("pagination={pickMoviePagination}", self.discover)
 
 
 if __name__ == "__main__":

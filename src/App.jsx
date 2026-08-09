@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Bell,
   Bookmark,
   Bot,
   Compass,
@@ -25,7 +26,12 @@ import { announceLibraryReconciled, CATALOG_GENERATION_CHANGED_EVENT, fetchOwner
 import { CATALOG_READY_EVENT, startCatalogEvents } from './api/catalogEvents.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from './api/movieDetails.js';
 import {
-  announceCurationChanged,
+  fetchHomeTrailers,
+  resolveHomeTrailerMovie,
+  searchHomeTrailerMovieCandidates,
+  searchYouTubeMovieTrailers
+} from './api/homeTrailers.js';
+import {
   fetchCurationJson,
   fetchUserListsCached
 } from './api/curation.js';
@@ -53,7 +59,7 @@ import {
   listsForDiscoverMovie,
   ownedMovieFor
 } from './discoverUtils.js';
-import { resolutionRank } from './utils/libraryUtils.js';
+import { applySystemListState, resolutionRank } from './utils/libraryUtils.js';
 import { buildUpcomingHomeMovies, uniqueHomeMovies } from './utils/homeMovies.js';
 
 const HelpWorkspace = lazy(() => import('./features/help/HelpWorkspace.jsx'));
@@ -135,7 +141,6 @@ const navItems = [
 
 const APP_VERSION = `v${import.meta.env.VITE_APP_VERSION || '0.0.0'}`;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'cp.sidebarCollapsed';
-const HOME_TRAILERS_PLAYLIST_URL = 'https://www.youtube.com/playlist?list=PLScC8g4bqD47c-qHlsfhGH3j6Bg7jzFy-';
 let youtubeIframeApiPromise = null;
 
 function loadYouTubeIframeApi() {
@@ -288,10 +293,13 @@ function ArchiveApp() {
   const [upcomingMovies, setUpcomingMovies] = useState([]);
   const [upcomingError, setUpcomingError] = useState('');
   const [homeTrailers, setHomeTrailers] = useState({
-    title: 'HOT New Trailers & Exclusives',
-    source_url: HOME_TRAILERS_PLAYLIST_URL,
+    title: 'New Trailers',
+    sources: [],
     items: [],
-    stale: false
+    next_cursor: '',
+    has_more: false,
+    stale: false,
+    fallback: false
   });
   const [homeTrailersError, setHomeTrailersError] = useState('');
   const [ownership, setOwnership] = useState({});
@@ -303,7 +311,8 @@ function ArchiveApp() {
     stats: true,
     movies: true,
     upcoming: true,
-    trailers: true
+    trailers: true,
+    trailersMore: false
   });
   const [toast, setToast] = useState(null);
   const [torrentModal, setTorrentModal] = useState(null);
@@ -322,6 +331,7 @@ function ArchiveApp() {
   const [discoverSearchRequest, setDiscoverSearchRequest] = useState(0);
   const [discoverRelationshipRequest, setDiscoverRelationshipRequest] = useState(null);
   const [discoverListRequest, setDiscoverListRequest] = useState(null);
+  const [discoverMovieRequest, setDiscoverMovieRequest] = useState(null);
   const [cleanupInitialTab, setCleanupInitialTab] = useState('storage');
   const [libraryFilterRequest, setLibraryFilterRequest] = useState(null);
   const [libraryFileRequest, setLibraryFileRequest] = useState(null);
@@ -437,13 +447,19 @@ function ArchiveApp() {
     const active = listsForDiscoverMovie(movie, homeLists, owned).some((list) => (
       list.system_type === systemType || list.id === systemType
     ));
-    await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ movie: payload, active: !active })
-    });
-    await loadHomeLists({ force: true });
-    announceCurationChanged();
+    const nextActive = !active;
+    setHomeLists((current) => applySystemListState(current, systemType, payload, nextActive));
+    try {
+      await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie: payload, active: nextActive })
+      });
+    } catch (error) {
+      setHomeLists((current) => applySystemListState(current, systemType, payload, active));
+      notify(error.message, 'error');
+      return;
+    }
     notify(`${movie.title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 
@@ -548,19 +564,30 @@ function ArchiveApp() {
     };
   }, [activeSection, notify]);
 
-  const loadHomeTrailers = useCallback(async () => {
+  const loadHomeTrailers = useCallback(async ({ cursor = '', append = false } = {}) => {
     const requestId = homeTrailersRequestRef.current + 1;
     homeTrailersRequestRef.current = requestId;
-    setLoading((state) => ({ ...state, trailers: true }));
+    setLoading((state) => ({ ...state, trailers: !append, trailersMore: append }));
     setHomeTrailersError('');
     try {
-      const data = await fetchJson('/api/home/trailers');
+      const data = await fetchHomeTrailers({ cursor });
       if (homeTrailersRequestRef.current !== requestId) return;
-      setHomeTrailers({
-        title: data.title || 'HOT New Trailers & Exclusives',
-        source_url: data.source_url || HOME_TRAILERS_PLAYLIST_URL,
-        items: data.items || [],
-        stale: Boolean(data.stale)
+      setHomeTrailers((current) => {
+        const incoming = data.items || [];
+        const items = append
+          ? [...current.items, ...incoming].filter((item, index, all) => (
+              all.findIndex((candidate) => String(candidate.video_id) === String(item.video_id)) === index
+            ))
+          : incoming;
+        return {
+          title: data.title || 'New Trailers',
+          sources: data.sources || current.sources || [],
+          items,
+          next_cursor: data.next_cursor || '',
+          has_more: Boolean(data.has_more),
+          stale: Boolean(data.stale),
+          fallback: Boolean(data.fallback)
+        };
       });
     } catch (error) {
       if (homeTrailersRequestRef.current === requestId) {
@@ -568,7 +595,7 @@ function ArchiveApp() {
       }
     } finally {
       if (homeTrailersRequestRef.current === requestId) {
-        setLoading((state) => ({ ...state, trailers: false }));
+        setLoading((state) => ({ ...state, trailers: false, trailersMore: false }));
       }
     }
   }, []);
@@ -821,6 +848,18 @@ function ArchiveApp() {
     selectSection('discover');
   }
 
+  function openMovieInDiscover(movie, source = 'Rotten Tomatoes') {
+    if (!movie?.tmdb_id) return;
+    setDiscoverActiveTab('explore');
+    setDiscoverMovieRequest((current) => ({
+      requestId: Number(current?.requestId || 0) + 1,
+      source,
+      movie
+    }));
+    sectionScrollPositionsRef.current.discover = 0;
+    selectSection('discover');
+  }
+
   async function toggleFollow(movie) {
     const key = movieKey(movie);
     const existing = followed.find((item) => movieKey(item) === key);
@@ -906,7 +945,9 @@ function ArchiveApp() {
     searchUrl = '',
     kicker = 'Trailer',
     activeVideo = null,
-    playlistItems = []
+    playlistItems = [],
+    homeTrailerSession = false,
+    movie = null
   }) {
     setTrailerModal({
       title,
@@ -916,7 +957,9 @@ function ArchiveApp() {
       embedUrl: toYouTubeEmbedUrl(sourceUrl),
       searchUrl: searchUrl || sourceUrl || youtubeTrailerSearchUrl(title, year),
       activeVideo,
-      playlistItems
+      playlistItems,
+      homeTrailerSession,
+      movie
     });
   }
 
@@ -927,7 +970,8 @@ function ArchiveApp() {
       title,
       year,
       sourceUrl: trailerUrl,
-      searchUrl: youtubeTrailerSearchUrl(title, year)
+      searchUrl: youtubeTrailerSearchUrl(title, year),
+      movie: { ...movie, title, year }
     });
   }
 
@@ -935,9 +979,10 @@ function ArchiveApp() {
     openYouTubeVideo({
       title: video?.title || 'YouTube video',
       sourceUrl: video?.url || '',
-      kicker: 'Hot New Trailers',
+      kicker: video?.source_name || 'New Trailers',
       activeVideo: video,
-      playlistItems: homeTrailers?.items || []
+      playlistItems: homeTrailers?.items || [],
+      homeTrailerSession: true
     });
   }
 
@@ -1066,7 +1111,8 @@ function ArchiveApp() {
                 onOpenCleanup={openCleanupTab}
                 onSelectMovie={setSelectedMovie}
                 onOpenHomeTrailer={openHomeTrailerVideo}
-                onRetryHomeTrailers={loadHomeTrailers}
+                onRetryHomeTrailers={() => loadHomeTrailers()}
+                onLoadMoreHomeTrailers={() => loadHomeTrailers({ cursor: homeTrailers.next_cursor, append: true })}
                 onPlay={playLocal}
                 onStream={streamMovie}
                 streamingAvailable={streamingAvailable}
@@ -1150,6 +1196,7 @@ function ArchiveApp() {
                 searchRequest={discoverSearchRequest}
                 relationshipRequest={discoverRelationshipRequest}
                 listRequest={discoverListRequest}
+                movieRequest={discoverMovieRequest}
                 activeTab={discoverActiveTab}
                 setActiveTab={setDiscoverActiveTab}
                 onOpenFileDetails={openOwnedFileDetails}
@@ -1241,6 +1288,12 @@ function ArchiveApp() {
       {trailerModal && (
         <TrailerModal
           state={trailerModal}
+          followed={followed}
+          onFollow={toggleFollow}
+          onViewDetails={(movie, source) => {
+            setTrailerModal(null);
+            openMovieInDiscover(movie, source || 'Home Trailers');
+          }}
           onClose={() => setTrailerModal(null)}
         />
       )}
@@ -1367,7 +1420,7 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
 
 
 
-function TrailerModal({ state, onClose }) {
+function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }) {
   const {
     title,
     year,
@@ -1375,16 +1428,41 @@ function TrailerModal({ state, onClose }) {
     searchUrl,
     kicker = 'Trailer',
     activeVideo: initialVideo,
-    playlistItems = []
+    playlistItems = [],
+    homeTrailerSession = false,
+    movie: requestedMovie = null
   } = state;
   const [activeVideo, setActiveVideo] = useState(initialVideo);
+  const [fallbackVideo, setFallbackVideo] = useState(null);
+  const [trailerSearch, setTrailerSearch] = useState({ status: 'idle', candidates: [], error: '' });
   const [showEndRecommendations, setShowEndRecommendations] = useState(false);
+  const [movieResolution, setMovieResolution] = useState({ status: 'idle', hint: null, candidates: [], movie: null });
+  const [manualMatchOpen, setManualMatchOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState('');
+  const [manualYear, setManualYear] = useState('');
+  const [manualCandidates, setManualCandidates] = useState([]);
+  const [manualLoading, setManualLoading] = useState(false);
+  const [manualError, setManualError] = useState('');
   const iframeRef = useRef(null);
   const playerRef = useRef(null);
+  const resolutionCacheRef = useRef(new Map());
+  const manualSearchAbortRef = useRef(null);
+  const trailerSearchAbortRef = useRef(null);
   const activeTitle = activeVideo?.title || title;
-  const activeEmbedUrl = activeVideo?.url ? toYouTubeEmbedUrl(activeVideo.url) : embedUrl;
+  const activeEmbedUrl = activeVideo?.url
+    ? toYouTubeEmbedUrl(activeVideo.url)
+    : fallbackVideo?.url
+      ? toYouTubeEmbedUrl(fallbackVideo.url)
+      : embedUrl;
   const titleLabel = [activeTitle, year].filter(Boolean).join(' ');
   const isMovieTrailer = kicker === 'Trailer';
+  const isHomeTrailerSession = Boolean(homeTrailerSession && activeVideo?.video_id);
+  const activeKicker = isHomeTrailerSession ? (activeVideo?.source_name || 'New Trailers') : kicker;
+  const matchedMovie = movieResolution.movie;
+  const matchedMovieFollowed = Boolean(matchedMovie && followed.some((movie) => (
+    (matchedMovie.tmdb_id && String(movie?.tmdb_id || '') === String(matchedMovie.tmdb_id))
+    || movieKey(movie) === movieKey(matchedMovie)
+  )));
   const recommendations = useMemo(() => {
     if (!playlistItems.length) return [];
     const currentId = String(activeVideo?.video_id || '');
@@ -1400,6 +1478,84 @@ function TrailerModal({ state, onClose }) {
   useEffect(() => {
     setActiveVideo(initialVideo);
   }, [initialVideo]);
+
+  useEffect(() => {
+    setFallbackVideo(null);
+    setTrailerSearch({ status: 'idle', candidates: [], error: '' });
+    trailerSearchAbortRef.current?.abort();
+    if (!isMovieTrailer || embedUrl || !requestedMovie?.title) return undefined;
+    const controller = new AbortController();
+    trailerSearchAbortRef.current = controller;
+    setTrailerSearch({ status: 'loading', candidates: [], error: '' });
+    searchYouTubeMovieTrailers(requestedMovie, { signal: controller.signal })
+      .then((result) => {
+        if (result.status === 'matched' && result.video) {
+          setFallbackVideo(result.video);
+          setTrailerSearch({ status: 'matched', candidates: result.candidates || [], error: '' });
+        } else {
+          setTrailerSearch({ status: result.status || 'choose', candidates: result.candidates || [], error: '' });
+        }
+      })
+      .catch((error) => {
+        if (error?.name !== 'AbortError') {
+          setTrailerSearch({ status: 'error', candidates: [], error: error.message });
+        }
+      });
+    return () => controller.abort();
+  }, [embedUrl, isMovieTrailer, requestedMovie?.title, requestedMovie?.year]);
+
+  useEffect(() => {
+    if (!isHomeTrailerSession) {
+      setMovieResolution({ status: 'idle', hint: null, candidates: [], movie: null });
+      return undefined;
+    }
+
+    manualSearchAbortRef.current?.abort();
+    setManualMatchOpen(false);
+    setManualLoading(false);
+    setManualError('');
+    const videoId = String(activeVideo.video_id);
+    const cached = resolutionCacheRef.current.get(videoId);
+    if (cached) {
+      setMovieResolution(cached);
+      setManualTitle(cached.hint?.title || '');
+      setManualYear(cached.hint?.year || '');
+      setManualCandidates(cached.candidates || []);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setMovieResolution({ status: 'loading', hint: null, candidates: [], movie: null });
+    resolveHomeTrailerMovie(activeVideo.title, { signal: controller.signal })
+      .then((resolution) => {
+        resolutionCacheRef.current.set(videoId, resolution);
+        setMovieResolution(resolution);
+        setManualTitle(resolution.hint?.title || '');
+        setManualYear(resolution.hint?.year || '');
+        setManualCandidates(resolution.candidates || []);
+      })
+      .catch((error) => {
+        if (error?.name === 'AbortError') return;
+        const resolution = {
+          status: 'error',
+          hint: { title: activeVideo.title || '', year: '' },
+          candidates: [],
+          movie: null,
+          error: error.message
+        };
+        resolutionCacheRef.current.set(videoId, resolution);
+        setMovieResolution(resolution);
+        setManualTitle(activeVideo.title || '');
+        setManualYear('');
+        setManualCandidates([]);
+      });
+    return () => controller.abort();
+  }, [activeVideo?.video_id, activeVideo?.title, isHomeTrailerSession]);
+
+  useEffect(() => () => {
+    manualSearchAbortRef.current?.abort();
+    trailerSearchAbortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     setShowEndRecommendations(false);
@@ -1444,18 +1600,63 @@ function TrailerModal({ state, onClose }) {
     setActiveVideo(video);
   };
 
+  const openManualMatch = () => {
+    setManualTitle(movieResolution.hint?.title || activeTitle);
+    setManualYear(movieResolution.hint?.year || '');
+    setManualCandidates(movieResolution.candidates || []);
+    setManualError('');
+    setManualMatchOpen(true);
+  };
+
+  const runManualSearch = async (event) => {
+    event.preventDefault();
+    const query = manualTitle.trim();
+    if (!query) return;
+    manualSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    manualSearchAbortRef.current = controller;
+    setManualLoading(true);
+    setManualError('');
+    try {
+      const candidates = await searchHomeTrailerMovieCandidates(query, manualYear.trim(), { signal: controller.signal });
+      setManualCandidates(candidates);
+      if (!candidates.length) setManualError('TMDB returned no movies for that search.');
+    } catch (error) {
+      if (error?.name !== 'AbortError') setManualError(error.message);
+    } finally {
+      if (manualSearchAbortRef.current === controller) {
+        manualSearchAbortRef.current = null;
+        setManualLoading(false);
+      }
+    }
+  };
+
+  const chooseManualMovie = (movie) => {
+    const resolution = {
+      status: 'matched',
+      hint: movieResolution.hint || { title: manualTitle, year: manualYear },
+      candidates: manualCandidates,
+      movie,
+      reason: 'manual'
+    };
+    resolutionCacheRef.current.set(String(activeVideo.video_id), resolution);
+    setMovieResolution(resolution);
+    setManualMatchOpen(false);
+    setManualError('');
+  };
+
   return (
     <div className="modal-backdrop trailer-backdrop" role="presentation" onClick={onClose}>
       <section
-        className="trailer-dialog"
+        className={cx('trailer-dialog', isHomeTrailerSession && 'trailer-dialog-home')}
         role="dialog"
         aria-modal="true"
-        aria-label={isMovieTrailer ? `Trailer for ${titleLabel}` : `${kicker}: ${titleLabel}`}
+        aria-label={isMovieTrailer ? `Trailer for ${titleLabel}` : `${activeKicker}: ${titleLabel}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-header trailer-dialog-header">
           <div>
-            <p className="screen-kicker">{kicker}</p>
+            <p className="screen-kicker">{activeKicker}</p>
             <h2>{titleLabel}</h2>
           </div>
           <button type="button" className="inspector-close" onClick={onClose} aria-label={isMovieTrailer ? 'Stop trailer' : 'Stop video'}>
@@ -1476,16 +1677,84 @@ function TrailerModal({ state, onClose }) {
             {showEndRecommendations && recommendations.length ? (
               <TrailerRecommendationGrid
                 className="trailer-end-recommendations"
-                title="Continue with Rotten Tomatoes"
+                title="Continue with more trailers"
                 videos={recommendations}
                 onSelect={selectRecommendation}
               />
             ) : null}
           </div>
+          {isHomeTrailerSession && (
+            <section className="trailer-movie-match" aria-label="Matched movie actions">
+              {movieResolution.status === 'loading' ? (
+                <div className="trailer-movie-match-status">
+                  <Loader2 className="spin" size={18} />
+                  <div><strong>Matching this trailer to TMDB…</strong><small>Playback continues while Cinema Paradiso checks the movie.</small></div>
+                </div>
+              ) : matchedMovie ? (
+                <>
+                  <div className="trailer-movie-identity">
+                    {matchedMovie.poster_url ? <img src={matchedMovie.poster_url} alt="" /> : <span><Film size={20} /></span>}
+                    <div>
+                      <small>{movieResolution.reason === 'manual' ? 'Manually matched movie' : 'Matched TMDB movie'}</small>
+                      <strong>{matchedMovie.title}</strong>
+                      <span>{matchedMovie.year || matchedMovie.release_date || 'Release date unavailable'}</span>
+                    </div>
+                  </div>
+                  <div className="trailer-movie-actions">
+                    <button type="button" className="btn btn-primary" onClick={() => onFollow?.(matchedMovie)}>
+                      <Bell size={15} /> {matchedMovieFollowed ? 'Following' : 'Follow'}
+                    </button>
+                    <button type="button" className="btn btn-secondary" onClick={() => onViewDetails?.(matchedMovie, activeVideo?.source_name || 'Home Trailers')}>
+                      <Compass size={15} /> View details
+                    </button>
+                    <button type="button" className="ghost-link ghost-link-small" onClick={openManualMatch}>Change match</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="trailer-movie-match-status">
+                    <AlertTriangle size={18} />
+                    <div>
+                      <strong>No confident TMDB match</strong>
+                      <small>{movieResolution.error || 'Choose the movie manually before following it or opening its card.'}</small>
+                    </div>
+                  </div>
+                  <button type="button" className="btn btn-secondary" onClick={openManualMatch}>Manual match</button>
+                </>
+              )}
+            </section>
+          )}
+          {isHomeTrailerSession && manualMatchOpen && (
+            <section className="trailer-manual-match" aria-label="Manually match this trailer">
+              <div className="trailer-manual-match-heading">
+                <div><p className="screen-kicker">TMDB movie match</p><strong>Choose the movie represented by this trailer</strong></div>
+                <button type="button" className="inspector-close" onClick={() => setManualMatchOpen(false)} aria-label="Close manual match"><X size={16} /></button>
+              </div>
+              <form onSubmit={runManualSearch} className="trailer-manual-search">
+                <input value={manualTitle} onChange={(event) => setManualTitle(event.target.value)} aria-label="Movie title" placeholder="Movie title" />
+                <input value={manualYear} onChange={(event) => setManualYear(event.target.value)} aria-label="Release year" placeholder="Year" inputMode="numeric" />
+                <button type="submit" className="btn btn-secondary" disabled={manualLoading || !manualTitle.trim()}>
+                  {manualLoading ? <Loader2 className="spin" size={15} /> : <Search size={15} />} Search TMDB
+                </button>
+              </form>
+              {manualError && <small className="trailer-manual-error">{manualError}</small>}
+              {manualCandidates.length > 0 && (
+                <div className="trailer-manual-candidates">
+                  {manualCandidates.slice(0, 6).map((movie) => (
+                    <button type="button" key={movie.tmdb_id} onClick={() => chooseManualMovie(movie)} aria-label={`Match trailer to ${movie.title} ${movie.year || ''}`.trim()}>
+                      {movie.poster_url ? <img src={movie.poster_url} alt="" /> : <span><Film size={20} /></span>}
+                      <strong>{movie.title}</strong>
+                      <small>{movie.year || 'Year unavailable'}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
           {recommendations.length ? (
             <TrailerRecommendationGrid
               className="trailer-session-recommendations"
-              title="More from Rotten Tomatoes"
+              title="More trailers"
               videos={recommendations}
               onSelect={selectRecommendation}
             />
@@ -1493,12 +1762,39 @@ function TrailerModal({ state, onClose }) {
           </>
         ) : (
           <div className="trailer-missing">
-            <Film size={32} />
-            <h3>No embeddable video found</h3>
-            <p>This YouTube video cannot be embedded here, but you can open it externally.</p>
-            <a className="btn btn-secondary" href={searchUrl} target="_blank" rel="noreferrer">
-              <ExternalLink size={15} /> Open YouTube
-            </a>
+            {trailerSearch.status === 'loading' ? (
+              <>
+                <Loader2 className="spin" size={32} />
+                <h3>Finding an embeddable trailer</h3>
+                <p>TMDB had no trailer, so Cinema Paradiso is checking YouTube now.</p>
+              </>
+            ) : trailerSearch.status === 'choose' && trailerSearch.candidates.length ? (
+              <>
+                <Film size={32} />
+                <h3>Choose the correct trailer</h3>
+                <p>YouTube returned several possible matches. Nothing will be remembered permanently.</p>
+                <div className="trailer-fallback-candidates">
+                  {trailerSearch.candidates.map((video) => (
+                    <button type="button" key={video.video_id} onClick={() => setFallbackVideo(video)}>
+                      <img src={video.thumbnail_url} alt="" />
+                      <span><strong>{video.title}</strong><small>{video.channel_title || 'YouTube'}</small></span>
+                    </button>
+                  ))}
+                </div>
+                <a className="ghost-link ghost-link-small" href={searchUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={15} /> Search YouTube manually
+                </a>
+              </>
+            ) : (
+              <>
+                <Film size={32} />
+                <h3>No embeddable video found</h3>
+                <p>{trailerSearch.error || 'Cinema Paradiso could not identify a safe automatic match.'}</p>
+                <a className="btn btn-secondary" href={searchUrl} target="_blank" rel="noreferrer">
+                  <ExternalLink size={15} /> Open YouTube
+                </a>
+              </>
+            )}
           </div>
         )}
       </section>

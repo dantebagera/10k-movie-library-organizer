@@ -18,7 +18,7 @@ import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import { discoverMoviePayload, listsForDiscoverMovie } from '../../discoverUtils.js';
-import { buildMovieListViewModel, listsForItem, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
+import { applySystemListState, buildMovieListViewModel, listsForItem, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
 
 const SYSTEM_LIST_ICONS = {
   watched: Check,
@@ -115,6 +115,15 @@ export default function MovieListsWorkspace({
   const movieListsPage = Math.min(currentPage, movieListsTotalPages);
   const movieListsPageStart = (movieListsPage - 1) * movieListsPageSize;
   const visibleMovieListRows = model.rows.slice(movieListsPageStart, movieListsPageStart + movieListsPageSize);
+  const movieListPaginationProps = {
+    total: model.rows.length,
+    page: movieListsPage,
+    totalPages: movieListsTotalPages,
+    pageStart: movieListsPageStart,
+    pageEnd: Math.min(movieListsPageStart + movieListsPageSize, model.rows.length),
+    ariaLabel: 'Movie list pagination',
+    onPageChange: setCurrentPage
+  };
   const selectedRows = model.rows.filter((row) => selectedKeys.has(row.identityKey));
   const allRowsSelected = model.rows.length > 0 && model.rows.every((row) => selectedKeys.has(row.identityKey));
   const selectedListIsSystem = Boolean(selectedList?.system_type);
@@ -427,15 +436,22 @@ export default function MovieListsWorkspace({
   async function toggleMovieListSystemList(systemType, row) {
     const owned = row.ownedItem ? moviePayload(row.ownedItem) : null;
     const movie = movieListRowMovie(row);
+    const payload = discoverMoviePayload(movie, owned);
     const currentLists = row.ownedItem ? listsForItem(row.ownedItem, lists) : listsForDiscoverMovie(movie, lists, owned);
     const active = currentLists.some((list) => list.system_type === systemType || list.id === systemType);
-    await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ movie: discoverMoviePayload(movie, owned), active: !active })
-    });
-    await loadMovieLists({ forceLists: true });
-    announceCurationChanged();
+    const nextActive = !active;
+    setLists((current) => applySystemListState(current, systemType, payload, nextActive));
+    try {
+      await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie: payload, active: nextActive })
+      });
+    } catch (error) {
+      setLists((current) => applySystemListState(current, systemType, payload, active));
+      notify?.(error.message, 'error');
+      return;
+    }
     notify?.(`${row.title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 
@@ -589,15 +605,7 @@ export default function MovieListsWorkspace({
           ) : selectedList ? (
             model.rows.length ? (
               <>
-                <Pagination
-                  total={model.rows.length}
-                  page={movieListsPage}
-                  totalPages={movieListsTotalPages}
-                  pageStart={movieListsPageStart}
-                  pageEnd={Math.min(movieListsPageStart + movieListsPageSize, model.rows.length)}
-                  ariaLabel="Movie list pagination"
-                  onPageChange={setCurrentPage}
-                />
+                <Pagination {...movieListPaginationProps} />
                 <div ref={movieListsGridRef} className="library-results library-movie-results movie-lists-card-grid">
                 {visibleMovieListRows.map((row) => {
                   const movie = movieListRowMovie(row);
@@ -683,6 +691,7 @@ export default function MovieListsWorkspace({
                   );
                 })}
                 </div>
+                <Pagination {...movieListPaginationProps} ariaLabel="Movie list page controls below results" />
               </>
             ) : (
               <div className="empty-state"><strong>No movies match this view.</strong><span>Change the search or filter chip.</span></div>

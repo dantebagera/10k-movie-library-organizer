@@ -31,7 +31,7 @@ import {
   buildOwnershipMap, discoverMoviePayload, filterEnrichedIndexerResults,
   listsForDiscoverMovie, ownedMovieFor, sortTorrentVariants
 } from '../../discoverUtils.js';
-import { getCompactQualityLabel, isLowQuality, movieIdentityKey, moviePayload, resolutionRank } from '../../utils/libraryUtils.js';
+import { applySystemListState, getCompactQualityLabel, isLowQuality, movieIdentityKey, moviePayload, resolutionRank } from '../../utils/libraryUtils.js';
 import { formatVoteCount } from '../../utils/moviePresentation.js';
 
 const discoverLists = [
@@ -44,6 +44,18 @@ const discoverLists = [
   { value: 'top_rated', label: 'Top Rated' },
   { value: 'best_all_time', label: 'Best All Time' }
 ];
+
+function PaginatedDiscoverResults({ children, pagination }) {
+  if (!pagination) return children;
+  const topAriaLabel = pagination.ariaLabel.replace(/ pagination$/i, ' page controls above results');
+  return (
+    <>
+      <Pagination {...pagination} ariaLabel={topAriaLabel} />
+      {children}
+      <Pagination {...pagination} />
+    </>
+  );
+}
 
 const discoverGenres = [
   { value: '', label: 'All genres' },
@@ -82,6 +94,7 @@ export default function DiscoverWorkspace({
   searchRequest,
   relationshipRequest,
   listRequest,
+  movieRequest,
   activeTab,
   setActiveTab,
   onOpenFileDetails
@@ -150,15 +163,18 @@ export default function DiscoverWorkspace({
   const [pickContext, setPickContext] = useState(null);
   const [pickHistory, setPickHistory] = useState([]);
   const [posterEditor, setPosterEditor] = useState(null);
-  const [selectedDiscoverKeys, setSelectedDiscoverKeys] = useState(() => new Set());
+  const [selectedDiscoverByKey, setSelectedDiscoverByKey] = useState(() => new Map());
   const [sourceReview, setSourceReview] = useState(null);
-  const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext] = useState(() => Boolean(relationshipRequest?.requestId));
+  const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext] = useState(() => Boolean(
+    relationshipRequest?.requestId || movieRequest?.requestId
+  ));
   const discoverRequestSeq = useRef(0);
   const pickRequestSeq = useRef(0);
   const discoverAbortRef = useRef(null);
   const pickAbortRef = useRef(null);
   const handledRelationshipRequestRef = useRef(0);
   const handledListRequestRef = useRef(0);
+  const handledMovieRequestRef = useRef(0);
   const {
     gridRef: discoverMovieGridRef,
     pageSize: discoverMoviePageSize
@@ -823,6 +839,56 @@ export default function DiscoverWorkspace({
     selectDiscoverList(listRequest.list || 'trending_week');
   }, [listRequest]);
 
+  useEffect(() => {
+    if (!movieRequest?.requestId || handledMovieRequestRef.current === movieRequest.requestId) return;
+    handledMovieRequestRef.current = movieRequest.requestId;
+    const movie = movieRequest.movie;
+    if (!movie?.tmdb_id) {
+      setIsNavigatingDiscoverContext(false);
+      return;
+    }
+
+    discoverAbortRef.current?.abort();
+    discoverRequestSeq.current += 1;
+    setDiscoverLoading(false);
+    setDiscoverError('');
+    setIsNavigatingDiscoverContext(true);
+    setActiveTab('explore');
+    const snapshot = currentDiscoverSnapshot();
+    if (snapshot.context || snapshot.results?.length) {
+      setDiscoverHistory((history) => [...history, snapshot]);
+    } else {
+      setDiscoverHistory([]);
+    }
+    setDiscoverSearchKind('movies');
+    setDiscoverPeopleResults([]);
+    setDiscoverKeywordResults([]);
+    setTmdbQuery('');
+    setDiscoverList('catalog');
+    setDiscoverGenre('');
+    setDiscoverMinVotes('0');
+    setDiscoverYearFrom('');
+    setDiscoverYearTo('');
+    setDiscoverMinRating('0');
+    setDiscoverSort('auto');
+    setDiscoverOwnershipFilter('all');
+    setDiscoverResults([movie]);
+    setDiscoverContextSourceResults([movie]);
+    setDiscoverPage(1);
+    setDiscoverTotalPages(1);
+    setDiscoverTotalResults(1);
+    setDiscoverMode('context');
+    setDiscoverContext({
+      type: 'movie',
+      label: `${movieRequest.source || 'Movie'}: ${movie.title || 'TMDB movie'}`,
+      emptyText: 'That TMDB movie is no longer available.',
+      criteriaKey: '|0|||0|auto'
+    });
+    setExpandedMovieKey(movieKey(movie));
+    checkOwnership([movie]);
+    loadDiscoverDetails(movie).finally(() => setIsNavigatingDiscoverContext(false));
+  }, [movieRequest]);
+
   async function browsePerson(target, movie, role, person) {
     const context = buildPersonMoviesContext(movie, role, person);
     if (!context) return;
@@ -1013,7 +1079,7 @@ export default function DiscoverWorkspace({
     await loadUserLists({ force: true });
     announceCurationChanged();
     notify(`${formatCount(payloads.length)} movie${payloads.length === 1 ? '' : 's'} added to list`);
-    setSelectedDiscoverKeys(new Set());
+    setSelectedDiscoverByKey(new Map());
   }
 
   async function removeDiscoverMovieFromList(listId, movie) {
@@ -1031,13 +1097,19 @@ export default function DiscoverWorkspace({
     const payload = discoverMoviePayload(movie, owned);
     const currentLists = listsForDiscoverMovie(movie, userLists, owned);
     const active = currentLists.some((list) => list.system_type === systemType || list.id === systemType);
-    await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ movie: payload, active: !active })
-    });
-    await loadUserLists({ force: true });
-    announceCurationChanged();
+    const nextActive = !active;
+    setUserLists((current) => applySystemListState(current, systemType, payload, nextActive));
+    try {
+      await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie: payload, active: nextActive })
+      });
+    } catch (error) {
+      setUserLists((current) => applySystemListState(current, systemType, payload, active));
+      notify(error.message, 'error');
+      return;
+    }
     notify(`${movie.title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 
@@ -1073,7 +1145,7 @@ export default function DiscoverWorkspace({
     setBrowseHiddenCount(0);
     setBrowseRows([]);
     setSelectedVariants({});
-    setSelectedDiscoverKeys(new Set());
+    setSelectedDiscoverByKey(new Map());
     try {
       const params = new URLSearchParams();
       if (search) {
@@ -1260,6 +1332,64 @@ export default function DiscoverWorkspace({
   const visiblePickResults = localPickContext
     ? pickResults.slice(pickLocalPageStart, pickLocalPageStart + pickMoviePageSize)
     : pickResults;
+  const exploreMoviePagination = localDiscoverContext && filteredDiscoverResults.length > 0
+    ? {
+        ariaLabel: 'Local Discover result pagination',
+        page: safeDiscoverLocalPage,
+        totalPages: discoverLocalTotalPages,
+        total: filteredDiscoverResults.length,
+        pageStart: discoverLocalPageStart,
+        pageEnd: Math.min(discoverLocalPageStart + discoverMoviePageSize, filteredDiscoverResults.length),
+        onPageChange: setDiscoverLocalPage
+      }
+    : discoverResults.length > 0 && !discoverContext
+      ? {
+          ariaLabel: 'TMDB movie pagination',
+          page: discoverPage,
+          totalPages: discoverTotalPages,
+          total: discoverTotalResults || discoverResults.length,
+          pageStart: (discoverPage - 1) * discoverMoviePageSize,
+          pageEnd: (discoverPage - 1) * discoverMoviePageSize + discoverResults.length,
+          summary: isRefinedTitleSearch()
+            ? `${formatCount(filteredDiscoverResults.length)} matching result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB search page`
+            : '',
+          onPageChange: (nextPage) => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '', page: nextPage })
+        }
+      : discoverContext?.baseUrl
+        ? {
+            ariaLabel: 'TMDB relationship pagination',
+            page: discoverPage,
+            totalPages: discoverTotalPages,
+            total: discoverTotalResults || discoverResults.length,
+            pageStart: (discoverPage - 1) * discoverMoviePageSize,
+            pageEnd: (discoverPage - 1) * discoverMoviePageSize + discoverResults.length,
+            summary: discoverOwnershipFilter !== 'all'
+              ? `${formatCount(filteredDiscoverResults.length)} ${discoverOwnershipFilter} result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB page`
+              : '',
+            onPageChange: (nextPage) => loadContextPage('explore', discoverContext, { page: nextPage })
+          }
+        : null;
+  const pickMoviePagination = localPickContext && pickResults.length > 0
+    ? {
+        ariaLabel: 'Local AI Pick pagination',
+        page: safePickLocalPage,
+        totalPages: pickLocalTotalPages,
+        total: pickResults.length,
+        pageStart: pickLocalPageStart,
+        pageEnd: Math.min(pickLocalPageStart + pickMoviePageSize, pickResults.length),
+        onPageChange: setPickLocalPage
+      }
+    : pickContext?.baseUrl
+      ? {
+          ariaLabel: 'AI Pick relationship pagination',
+          page: pickContext.page || 1,
+          totalPages: pickContext.totalPages || 1,
+          total: pickContext.totalResults || pickResults.length,
+          pageStart: ((pickContext.page || 1) - 1) * (pickContext.pageSize || 20),
+          pageEnd: ((pickContext.page || 1) - 1) * (pickContext.pageSize || 20) + pickResults.length,
+          onPageChange: (nextPage) => loadContextPage('pick', pickContext, { page: nextPage })
+        }
+      : null;
 
   useEffect(() => {
     setDiscoverLocalPage(1);
@@ -1274,32 +1404,106 @@ export default function DiscoverWorkspace({
     : activeTab === 'explore'
       ? filteredDiscoverResults
       : activeTab === 'browse' ? filteredBrowseRows : [];
-  const selectedDiscoverMovies = useMemo(() => (
-    activeDiscoverSelectionMovies
-      .map((movie) => discoverMoviePayload(movie, ownedMovieFor(movie, ownership)))
-      .filter((movie) => selectedDiscoverKeys.has(movieIdentityKey(movie)))
-  ), [activeDiscoverSelectionMovies, ownership, selectedDiscoverKeys]);
+  const discoverSelectionScope = useMemo(() => {
+    if (activeTab === 'browse') {
+      return [
+        'browse', browseMode, browseQuery.trim(), browseResolution, browseIndexer, browseSort
+      ].join('|');
+    }
+    if (activeTab === 'pick') {
+      const contextKey = pickContext
+        ? [pickContext.type || '', pickContext.baseUrl || '', pickContext.label || '', pickContext.criteriaKey || ''].join('|')
+        : pickResults.map((movie) => movieKey(movie)).join(',');
+      return `pick|${contextKey}`;
+    }
+    return [
+      'explore',
+      discoverSearchKind,
+      discoverMode,
+      tmdbQuery.trim(),
+      discoverList,
+      discoverOwnershipFilter,
+      discoverCriteriaKey(),
+      discoverContext?.type || '',
+      discoverContext?.baseUrl || '',
+      discoverContext?.label || ''
+    ].join('|');
+  }, [
+    activeTab,
+    browseIndexer,
+    browseMode,
+    browseQuery,
+    browseResolution,
+    browseSort,
+    discoverContext?.baseUrl,
+    discoverContext?.label,
+    discoverContext?.type,
+    discoverGenre,
+    discoverList,
+    discoverMinRating,
+    discoverMinVotes,
+    discoverMode,
+    discoverOwnershipFilter,
+    discoverSearchKind,
+    discoverSort,
+    discoverYearFrom,
+    discoverYearTo,
+    pickContext,
+    pickResults,
+    tmdbQuery
+  ]);
+  const previousDiscoverSelectionScopeRef = useRef(discoverSelectionScope);
+
+  useEffect(() => {
+    if (previousDiscoverSelectionScopeRef.current === discoverSelectionScope) return;
+    previousDiscoverSelectionScopeRef.current = discoverSelectionScope;
+    setSelectedDiscoverByKey(new Map());
+  }, [discoverSelectionScope]);
+
+  const selectedDiscoverMovies = useMemo(
+    () => [...selectedDiscoverByKey.values()],
+    [selectedDiscoverByKey]
+  );
   const allDiscoverResultsSelected = activeDiscoverSelectionMovies.length > 0 && activeDiscoverSelectionMovies.every((movie) => {
     const payload = discoverMoviePayload(movie, ownedMovieFor(movie, ownership));
-    return selectedDiscoverKeys.has(movieIdentityKey(payload));
+    return selectedDiscoverByKey.has(movieIdentityKey(payload));
   });
 
   function toggleDiscoverSelection(movie, owned, checked) {
-    const key = movieIdentityKey(discoverMoviePayload(movie, owned));
-    setSelectedDiscoverKeys((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
+    const payload = discoverMoviePayload(movie, owned);
+    const key = movieIdentityKey(payload);
+    setSelectedDiscoverByKey((current) => {
+      const next = new Map(current);
+      if (checked) next.set(key, payload);
       else next.delete(key);
       return next;
     });
   }
 
   function selectAllDiscoverResults() {
-    setSelectedDiscoverKeys(new Set(activeDiscoverSelectionMovies.map((movie) => movieIdentityKey(discoverMoviePayload(movie, ownedMovieFor(movie, ownership))))));
+    setSelectedDiscoverByKey((current) => {
+      const next = new Map(current);
+      activeDiscoverSelectionMovies.forEach((movie) => {
+        const payload = discoverMoviePayload(movie, ownedMovieFor(movie, ownership));
+        next.set(movieIdentityKey(payload), payload);
+      });
+      return next;
+    });
+  }
+
+  function deselectAllDiscoverResults() {
+    setSelectedDiscoverByKey((current) => {
+      const next = new Map(current);
+      activeDiscoverSelectionMovies.forEach((movie) => {
+        const payload = discoverMoviePayload(movie, ownedMovieFor(movie, ownership));
+        next.delete(movieIdentityKey(payload));
+      });
+      return next;
+    });
   }
 
   function clearDiscoverSelection() {
-    setSelectedDiscoverKeys(new Set());
+    setSelectedDiscoverByKey(new Map());
   }
 
   async function openSelectedSourceReview() {
@@ -1542,7 +1746,7 @@ export default function DiscoverWorkspace({
               <SelectionCheckbox
                 className="discover-selection-master"
                 checked={allDiscoverResultsSelected}
-                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else clearDiscoverSelection(); }}
+                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else deselectAllDiscoverResults(); }}
                 label="Select all discover results"
               />
               <span>{selectedDiscoverMovies.length ? `${formatCount(selectedDiscoverMovies.length)} selected` : 'Select movies'}</span>
@@ -1558,7 +1762,15 @@ export default function DiscoverWorkspace({
           )}
 
           {discoverSearchKind === 'people' ? (
-            <>
+            <PaginatedDiscoverResults pagination={{
+              ariaLabel: 'TMDB People search pagination',
+              page: discoverPeoplePage,
+              totalPages: discoverPeopleTotalPages,
+              total: discoverPeopleTotalResults,
+              pageStart: (discoverPeoplePage - 1) * discoverPeoplePageSize,
+              pageEnd: (discoverPeoplePage - 1) * discoverPeoplePageSize + discoverPeopleResults.length,
+              onPageChange: (nextPage) => searchDiscoverPeople({ page: nextPage, reset: false })
+            }}>
               <PeopleSearchResults
                 loading={discoverPeopleLoading}
                 error={discoverPeopleError}
@@ -1566,18 +1778,17 @@ export default function DiscoverWorkspace({
                 onOpenFilmography={openSearchedPersonFilmography}
                 gridRef={discoverPeopleGridRef}
               />
-              <Pagination
-                ariaLabel="TMDB People search pagination"
-                page={discoverPeoplePage}
-                totalPages={discoverPeopleTotalPages}
-                total={discoverPeopleTotalResults}
-                pageStart={(discoverPeoplePage - 1) * discoverPeoplePageSize}
-                pageEnd={(discoverPeoplePage - 1) * discoverPeoplePageSize + discoverPeopleResults.length}
-                onPageChange={(nextPage) => searchDiscoverPeople({ page: nextPage, reset: false })}
-              />
-            </>
+            </PaginatedDiscoverResults>
           ) : discoverSearchKind === 'keywords' ? (
-            <>
+            <PaginatedDiscoverResults pagination={{
+              ariaLabel: 'TMDB keyword search pagination',
+              page: discoverKeywordPage,
+              totalPages: discoverKeywordTotalPages,
+              total: discoverKeywordTotalResults,
+              pageStart: (discoverKeywordPage - 1) * discoverKeywordPageSize,
+              pageEnd: (discoverKeywordPage - 1) * discoverKeywordPageSize + discoverKeywordResults.length,
+              onPageChange: (nextPage) => searchDiscoverKeywords({ page: nextPage, reset: false })
+            }}>
               <KeywordSearchResults
                 loading={discoverKeywordLoading}
                 error={discoverKeywordError}
@@ -1585,17 +1796,9 @@ export default function DiscoverWorkspace({
                 onOpenKeyword={openSearchedKeywordMovies}
                 gridRef={discoverKeywordGridRef}
               />
-              <Pagination
-                ariaLabel="TMDB keyword search pagination"
-                page={discoverKeywordPage}
-                totalPages={discoverKeywordTotalPages}
-                total={discoverKeywordTotalResults}
-                pageStart={(discoverKeywordPage - 1) * discoverKeywordPageSize}
-                pageEnd={(discoverKeywordPage - 1) * discoverKeywordPageSize + discoverKeywordResults.length}
-                onPageChange={(nextPage) => searchDiscoverKeywords({ page: nextPage, reset: false })}
-              />
-            </>
-          ) : <DiscoverResultGrid
+            </PaginatedDiscoverResults>
+          ) : <PaginatedDiscoverResults pagination={exploreMoviePagination}>
+          <DiscoverResultGrid
             error={discoverError}
             loading={discoverLoading && !discoverResults.length}
             gridRef={discoverMovieGridRef}
@@ -1630,7 +1833,7 @@ export default function DiscoverWorkspace({
                   watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
                   onToggleWatched={owned ? () => toggleDiscoverSystemList('watched', movie, owned) : undefined}
                   onToggleWatchlist={() => toggleDiscoverSystemList('watchlist', movie, owned)}
-                  selected={selectedDiscoverKeys.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
+                  selected={selectedDiscoverByKey.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
                   onSelect={(checked) => toggleDiscoverSelection(movie, owned, checked)}
                   onPlay={onPlay}
                   onStream={onStream}
@@ -1651,49 +1854,8 @@ export default function DiscoverWorkspace({
                 />
               );
             })}
-          </DiscoverResultGrid>}
-
-          {discoverSearchKind === 'movies' && localDiscoverContext && filteredDiscoverResults.length > 0 && (
-            <Pagination
-              ariaLabel="Local Discover result pagination"
-              page={safeDiscoverLocalPage}
-              totalPages={discoverLocalTotalPages}
-              total={filteredDiscoverResults.length}
-              pageStart={discoverLocalPageStart}
-              pageEnd={Math.min(discoverLocalPageStart + discoverMoviePageSize, filteredDiscoverResults.length)}
-              onPageChange={setDiscoverLocalPage}
-            />
-          )}
-
-          {discoverSearchKind !== 'people' && discoverResults.length > 0 && !discoverContext && (
-            <Pagination
-              ariaLabel="TMDB movie pagination"
-              page={discoverPage}
-              totalPages={discoverTotalPages}
-              total={discoverTotalResults || discoverResults.length}
-              pageStart={(discoverPage - 1) * discoverMoviePageSize}
-              pageEnd={(discoverPage - 1) * discoverMoviePageSize + discoverResults.length}
-              summary={isRefinedTitleSearch()
-                ? `${formatCount(filteredDiscoverResults.length)} matching result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB search page`
-                : ''}
-              onPageChange={(nextPage) => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '', page: nextPage })}
-            />
-          )}
-
-          {discoverSearchKind === 'movies' && discoverContext?.baseUrl && (
-            <Pagination
-              ariaLabel="TMDB relationship pagination"
-              page={discoverPage}
-              totalPages={discoverTotalPages}
-              total={discoverTotalResults || discoverResults.length}
-              pageStart={(discoverPage - 1) * discoverMoviePageSize}
-              pageEnd={(discoverPage - 1) * discoverMoviePageSize + discoverResults.length}
-              summary={discoverOwnershipFilter !== 'all'
-                ? `${formatCount(filteredDiscoverResults.length)} ${discoverOwnershipFilter} result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB page`
-                : ''}
-              onPageChange={(nextPage) => loadContextPage('explore', discoverContext, { page: nextPage })}
-            />
-          )}
+          </DiscoverResultGrid>
+          </PaginatedDiscoverResults>}
         </section>
       )}
 
@@ -1738,7 +1900,7 @@ export default function DiscoverWorkspace({
               <SelectionCheckbox
                 className="discover-selection-master"
                 checked={allDiscoverResultsSelected}
-                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else clearDiscoverSelection(); }}
+                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else deselectAllDiscoverResults(); }}
                 label="Select all browse indexer results"
               />
               <span>{selectedDiscoverMovies.length ? `${formatCount(selectedDiscoverMovies.length)} selected` : 'Select movies'}</span>
@@ -1786,7 +1948,7 @@ export default function DiscoverWorkspace({
                     watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
                     onToggleWatched={owned ? () => toggleDiscoverSystemList('watched', movie, owned) : undefined}
                     onToggleWatchlist={() => toggleDiscoverSystemList('watchlist', movie, owned)}
-                    selected={selectedDiscoverKeys.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
+                    selected={selectedDiscoverByKey.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
                     onSelect={(checked) => toggleDiscoverSelection(movie, owned, checked)}
                     notify={notify}
                     onVariantSelect={(index) => setSelectedVariants((state) => ({ ...state, [movie.parsed_title]: index }))}
@@ -1856,7 +2018,7 @@ export default function DiscoverWorkspace({
               <SelectionCheckbox
                 className="discover-selection-master"
                 checked={allDiscoverResultsSelected}
-                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else clearDiscoverSelection(); }}
+                onChange={(checked) => { if (checked) selectAllDiscoverResults(); else deselectAllDiscoverResults(); }}
                 label="Select all AI pick results"
               />
               <span>{selectedDiscoverMovies.length ? `${formatCount(selectedDiscoverMovies.length)} selected` : 'Select movies'}</span>
@@ -1871,6 +2033,7 @@ export default function DiscoverWorkspace({
             </div>
           )}
 
+          <PaginatedDiscoverResults pagination={pickMoviePagination}>
           <DiscoverResultGrid
             error={pickError && pickResults.length ? pickError : ''}
             loading={pickLoading && !pickResults.length}
@@ -1898,7 +2061,7 @@ export default function DiscoverWorkspace({
                   watchlisted={listsForDiscoverMovie(movie, userLists, owned).some((list) => list.system_type === 'watchlist')}
                   onToggleWatched={owned ? () => toggleDiscoverSystemList('watched', movie, owned) : undefined}
                   onToggleWatchlist={() => toggleDiscoverSystemList('watchlist', movie, owned)}
-                  selected={selectedDiscoverKeys.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
+                  selected={selectedDiscoverByKey.has(movieIdentityKey(discoverMoviePayload(movie, owned)))}
                   onSelect={(checked) => toggleDiscoverSelection(movie, owned, checked)}
                   onPlay={onPlay}
                   onStream={onStream}
@@ -1920,28 +2083,7 @@ export default function DiscoverWorkspace({
               );
             })}
           </DiscoverResultGrid>
-          {localPickContext && pickResults.length > 0 && (
-            <Pagination
-              ariaLabel="Local AI Pick pagination"
-              page={safePickLocalPage}
-              totalPages={pickLocalTotalPages}
-              total={pickResults.length}
-              pageStart={pickLocalPageStart}
-              pageEnd={Math.min(pickLocalPageStart + pickMoviePageSize, pickResults.length)}
-              onPageChange={setPickLocalPage}
-            />
-          )}
-          {pickContext?.baseUrl && (
-            <Pagination
-              ariaLabel="AI Pick relationship pagination"
-              page={pickContext.page || 1}
-              totalPages={pickContext.totalPages || 1}
-              total={pickContext.totalResults || pickResults.length}
-              pageStart={((pickContext.page || 1) - 1) * (pickContext.pageSize || 20)}
-              pageEnd={((pickContext.page || 1) - 1) * (pickContext.pageSize || 20) + pickResults.length}
-              onPageChange={(nextPage) => loadContextPage('pick', pickContext, { page: nextPage })}
-            />
-          )}
+          </PaginatedDiscoverResults>
         </section>
       )}
 

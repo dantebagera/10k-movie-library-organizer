@@ -302,6 +302,39 @@ class CatalogStoreTest(unittest.TestCase):
         )
         self.assertEqual(candidates[0]["tmdb_json"]["title"], "Movie 000")
 
+    def test_owned_identity_candidates_are_canonical_and_constant_query(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(20), {})
+            statements = []
+            original_connect = store.connect
+
+            def traced_connect():
+                connection = original_connect()
+                connection.set_trace_callback(statements.append)
+                return connection
+
+            store.connect = traced_connect
+            candidates = store.owned_identity_candidates(
+                [f"tmdb:{1000 + index}" for index in range(20)],
+                ["e:/movies/005 - movie's test.mkv"],
+            )
+
+        reads = [
+            statement for statement in statements
+            if statement.lstrip().upper().startswith(("SELECT", "WITH"))
+        ]
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(len(candidates), 20)
+        self.assertEqual(candidates[0]["movie_key"], "tmdb:1000")
+        self.assertEqual(candidates[0]["title"], "Movie 000")
+        self.assertEqual(candidates[0]["imdb_id"], "")
+        self.assertNotIn("tmdb_json", candidates[0])
+        self.assertEqual(candidates[0]["identity_keys"], [
+            "title:movie 000|1980",
+            "tmdb:1000",
+        ])
+
     def test_audit_library_candidates_return_provider_snapshots_without_filesystem_scan(self):
         with tempfile.TemporaryDirectory() as root:
             store = CatalogStore(Path(root) / "catalog.sqlite")

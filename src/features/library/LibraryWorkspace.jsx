@@ -37,7 +37,7 @@ import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, getUniqueOptions } from '../../utils/appUtils.js';
 import {
-  applyPosterOverrideToLibraryItems, buildLibraryPeopleIndex, buildLibraryViewModel,
+  applyPosterOverrideToLibraryItems, applySystemListState, buildLibraryPeopleIndex, buildLibraryViewModel,
   getLocaleTag, getMovieIdentity, getQualityFactsLabel, getQualityLabel, getTmdbCacheKey, isLowQuality, listLibraryCoverage,
   listsForItem, movieHasSystemState, movieIdentityKey, moviePayload, rootLabel
 } from '../../utils/libraryUtils.js';
@@ -1223,14 +1223,21 @@ export default function LibraryWorkspace({
   }
 
   async function toggleSystemList(systemType, item) {
+    const payload = moviePayload(item);
     const active = movieHasSystemState(item, userLists, systemType);
-    await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ movie: moviePayload(item), active: !active })
-    });
-    await loadUserLists({ force: true });
-    announceCurationChanged();
+    const nextActive = !active;
+    setUserLists((current) => applySystemListState(current, systemType, payload, nextActive));
+    try {
+      await fetchCurationJson(`/api/user/system-lists/${encodeURIComponent(systemType)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie: payload, active: nextActive })
+      });
+    } catch (error) {
+      setUserLists((current) => applySystemListState(current, systemType, payload, active));
+      notify(error.message, 'error');
+      return;
+    }
     notify(`${getMovieIdentity(item).title} ${active ? 'removed from' : 'added to'} ${systemType === 'watched' ? 'Watched' : 'Watchlist'}`);
   }
 
