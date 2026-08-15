@@ -180,6 +180,55 @@ class MediaFileBackfillTest(unittest.TestCase):
         self.assertEqual(retry["changed"], 1)
         self.assertEqual(retry["failures"], 0)
 
+    def test_classifier_upgrade_reuses_current_measurements_in_one_bounded_batch(self):
+        paths = self.seed(12)
+        initial = run_file_facts_backfill(
+            self.repository,
+            [self.movies],
+            probe=lambda target: successful_facts(target, width=1920, height=696),
+        )
+        self.assertEqual(initial["changed"], 12)
+
+        with self.repository.store.transaction() as connection:
+            connection.execute("""
+                UPDATE media_files
+                SET resolution='720p', quality_class='720p',
+                    quality_source='measured_conflict', quality_conflict=1,
+                    classifier_version=1
+            """)
+        for path in paths:
+            path.unlink()
+
+        report = run_file_facts_backfill(
+            self.repository,
+            [self.root / "not-the-library"],
+            probe=lambda _path: self.fail("classifier-only upgrades must not probe files"),
+        )
+        self.assertEqual(report["batches"], 1)
+        self.assertEqual(report["selected"], 12)
+        self.assertEqual(report["probed"], 0)
+        self.assertEqual(report["reclassified"], 12)
+        self.assertEqual(report["changed"], 12)
+        self.assertEqual(report["remaining"], 0)
+
+        connection = self.repository.store.connect()
+        try:
+            rows = [dict(row) for row in connection.execute(
+                "SELECT * FROM media_files ORDER BY path_key"
+            )]
+        finally:
+            connection.close()
+
+        self.assertEqual(len(rows), 12)
+        for row in rows:
+            self.assertEqual((row["video_width"], row["video_height"]), (1920, 696))
+            self.assertEqual(row["resolution"], "1080p")
+            self.assertEqual(row["quality_class"], "1080p")
+            self.assertEqual(row["quality_source"], "measured")
+            self.assertEqual(row["quality_conflict"], 0)
+            self.assertEqual(row["classifier_version"], 2)
+            self.assertEqual(row["probe_status"], "ok")
+
     def test_transient_failure_retains_valid_measurements_for_the_same_file(self):
         path = self.seed(1)[0]
         measured = run_file_facts_backfill(
@@ -197,7 +246,7 @@ class MediaFileBackfillTest(unittest.TestCase):
 
         with self.repository.store.transaction() as connection:
             connection.execute(
-                "UPDATE media_files SET classifier_version=0 WHERE path=?",
+                "UPDATE media_files SET file_facts_version=0 WHERE path=?",
                 (str(path),),
             )
 
@@ -234,7 +283,7 @@ class MediaFileBackfillTest(unittest.TestCase):
         self.assertEqual((row["video_width"], row["video_height"]), (1800, 960))
         self.assertEqual((row["video_codec"], row["video_bit_depth"]), ("HEVC", 10))
         self.assertEqual(row["resolution"], "1080p")
-        self.assertEqual(row["classifier_version"], 0)
+        self.assertEqual(row["file_facts_version"], 0)
         self.assertEqual(failed["remaining"], 1)
 
     def test_changed_file_during_probe_is_rejected_and_not_presented_as_measured(self):

@@ -464,6 +464,166 @@ class UserCurationStoreTest(unittest.TestCase):
         self.assertEqual(checked["movies"][0]["release_date"], "2026-07-15")
         self.assertEqual(checked["movies"][0]["status"], "watching")
 
+    def test_followed_scan_only_searches_released_due_watching_movies(self):
+        original_user_data_dir = app._user_data_dir
+        now = app.time.mktime((2026, 8, 12, 12, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                store = app._curation_store()
+                available = store.follow_movie({"tmdb_id": "1", "title": "Already Found", "year": "2026", "release_date": "2026-01-01"})
+                future = store.follow_movie({"tmdb_id": "2", "title": "Future Movie", "year": "2026", "release_date": "2026-09-01"})
+                recent = store.follow_movie({"tmdb_id": "3", "title": "Recently Checked", "year": "2026", "release_date": "2026-01-01"})
+                due = store.follow_movie({"tmdb_id": "4", "title": "Due Movie", "year": "2026", "release_date": "2026-01-01"})
+                available.update({"status": "available", "best_release": {"title": "saved"}})
+                recent["next_check_at"] = now + 3600
+                store.save_followed_all([available, future, recent, due])
+                context = {"ready": True, "indexers": [{"id": "9", "name": "Trusted"}], "indexer_ids": ["9"], "indexer_names": {"Trusted"}}
+
+                with patch("app.time.time", return_value=now), \
+                     patch("app._find_owned_movies", return_value=[None] * 4), \
+                     patch("app._movie_with_source_title_aliases", side_effect=lambda movie, **_kwargs: dict(movie)), \
+                     patch("app._followed_release_search_context", return_value=context), \
+                     patch("app._probe_followed_release", return_value={"searched": True, "release": None}) as probe:
+                    checked = app._check_followed_releases()
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        self.assertEqual(probe.call_count, 1)
+        self.assertEqual(probe.call_args.args[0]["title"], "Due Movie")
+        self.assertEqual(checked["scan_stats"]["eligible"], 1)
+        self.assertEqual(checked["scan_stats"]["skipped"], {"available": 1, "unreleased": 1, "not_due": 1})
+        by_title = {movie["title"]: movie for movie in checked["movies"]}
+        self.assertEqual(by_title["Already Found"]["best_release"], {"title": "saved"})
+        self.assertGreaterEqual(by_title["Future Movie"]["next_check_at"], now)
+
+    def test_followed_scan_uses_one_yts_rss_batch_before_prowlarr(self):
+        original_user_data_dir = app._user_data_dir
+        now = app.time.mktime((2026, 8, 12, 12, 0, 0, 0, 0, -1))
+        rss_rows = [{
+            "parsed_title": "RSS Match",
+            "parsed_year": "2026",
+            "variants": [{
+                "title": "RSS Match 2026 1080p WEBRip YTS",
+                "resolution": "1080p",
+                "magnet_url": "magnet:?xt=urn:btih:ABC",
+                "info_url": "https://example.test/rss-match",
+            }],
+        }]
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                store = app._curation_store()
+                store.follow_movie({"tmdb_id": "10", "title": "RSS Match", "year": "2026", "release_date": "2026-09-01"})
+                store.follow_movie({"tmdb_id": "20", "title": "Prowlarr Fallback", "year": "2026", "release_date": "2026-01-01"})
+                store.follow_movie({"tmdb_id": "30", "title": "Future RSS Miss", "year": "2026", "release_date": "2026-10-01"})
+                context = {"ready": True, "indexers": [{"id": "1", "name": "YTS"}], "indexer_ids": ["1"], "indexer_names": {"YTS"}}
+
+                with patch("app.time.time", return_value=now), \
+                     patch("app._find_owned_movies", return_value=[None, None, None]), \
+                     patch("app._movie_with_source_title_aliases", side_effect=lambda movie, **_kwargs: {**movie, "title_aliases": [movie["title"]], "release_years": [movie["year"]]}), \
+                     patch("app._followed_release_search_context", return_value=context), \
+                     patch("app._fetch_yts_rss_latest", return_value=rss_rows) as rss_fetch, \
+                     patch("app._probe_followed_release", return_value={"searched": True, "release": None}) as probe:
+                    checked = app._check_followed_releases()
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        rss_fetch.assert_called_once_with(limit=100, timeout=app.FOLLOWED_RELEASE_RSS_TIMEOUT_SECONDS)
+        self.assertEqual(probe.call_count, 1)
+        self.assertEqual(probe.call_args.args[0]["title"], "Prowlarr Fallback")
+        self.assertEqual(checked["scan_stats"]["rss_candidates"], 3)
+        self.assertEqual(checked["scan_stats"]["rss_matches"], 1)
+        self.assertEqual(checked["scan_stats"]["eligible"], 1)
+        self.assertEqual(checked["scan_stats"]["prowlarr_searches"], 1)
+        self.assertEqual(checked["scan_stats"]["skipped"]["unreleased"], 1)
+        by_title = {movie["title"]: movie for movie in checked["movies"]}
+        self.assertEqual(by_title["RSS Match"]["status"], "available")
+        self.assertEqual(by_title["Prowlarr Fallback"]["status"], "watching")
+        self.assertEqual(by_title["Future RSS Miss"]["status"], "watching")
+
+    def test_followed_scan_merge_cannot_update_a_refollowed_movie_from_an_old_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = app.UserCurationStore(Path(tmp))
+            old = store.follow_movie({"tmdb_id": "99", "title": "Refollowed", "year": "2026"})
+            store.unfollow_movie(old)
+            with patch("services.curation_store.time.time", return_value=float(old["followed_at"]) + 10):
+                current = store.follow_movie({"tmdb_id": "99", "title": "Refollowed", "year": "2026"})
+
+            merged = store.apply_followed_scan(updates=[{
+                "movie": old,
+                "expected_followed_at": old["followed_at"],
+                "patch": {"status": "available", "best_release": {"title": "stale"}},
+            }])
+
+        self.assertNotEqual(current["followed_at"], old["followed_at"])
+        self.assertEqual(merged[0]["status"], "watching")
+        self.assertEqual(merged[0]["best_release"], {})
+
+    def test_followed_scan_failure_keeps_watching_state_and_does_not_count_as_checked(self):
+        original_user_data_dir = app._user_data_dir
+        now = app.time.mktime((2026, 8, 12, 12, 0, 0, 0, 0, -1))
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                store = app._curation_store()
+                store.follow_movie({"tmdb_id": "77", "title": "Retry Later", "year": "2026", "release_date": "2026-01-01"})
+                context = {"ready": True, "indexers": [{"id": "9", "name": "Trusted"}], "indexer_ids": ["9"], "indexer_names": {"Trusted"}}
+                with patch("app.time.time", return_value=now), \
+                     patch("app._find_owned_movies", return_value=[None]), \
+                     patch("app._movie_with_source_title_aliases", side_effect=lambda movie, **_kwargs: dict(movie)), \
+                     patch("app._followed_release_search_context", return_value=context), \
+                     patch("app._probe_followed_release", return_value={"searched": False, "release": None}):
+                    checked = app._check_followed_releases()
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        movie = checked["movies"][0]
+        self.assertEqual(movie["status"], "watching")
+        self.assertEqual(movie["last_checked"], 0)
+        self.assertEqual(movie["next_check_at"], now + app.FOLLOWED_RELEASE_FAILURE_RETRY_SECONDS)
+        self.assertEqual(checked["scan_stats"]["failed_searches"], 1)
+
+    def test_followed_scan_bounds_parallel_prowlarr_fallbacks(self):
+        original_user_data_dir = app._user_data_dir
+        active = 0
+        peak = 0
+        lock = app.threading.Lock()
+
+        def slow_probe(_movie, _context):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            app.time.sleep(0.03)
+            with lock:
+                active -= 1
+            return {"searched": True, "release": None}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                store = app._curation_store()
+                for index in range(6):
+                    store.follow_movie({
+                        "tmdb_id": str(800 + index),
+                        "title": f"Parallel {index}",
+                        "year": "2020",
+                        "release_date": "2020-01-01",
+                    })
+                context = {"ready": True, "indexers": [{"id": "9", "name": "Trusted"}], "indexer_ids": ["9"], "indexer_names": {"Trusted"}}
+                with patch("app._find_owned_movies", return_value=[None] * 6), \
+                     patch("app._movie_with_source_title_aliases", side_effect=lambda movie, **_kwargs: dict(movie)), \
+                     patch("app._followed_release_search_context", return_value=context) as context_fetch, \
+                     patch("app._probe_followed_release", side_effect=slow_probe):
+                    checked = app._check_followed_releases()
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        context_fetch.assert_called_once_with()
+        self.assertEqual(checked["scan_stats"]["prowlarr_searches"], 6)
+        self.assertEqual(peak, app.FOLLOWED_RELEASE_WORKERS)
+
     def test_followed_ownership_reconcile_removes_only_committed_library_movies(self):
         original_user_data_dir = app._user_data_dir
         with tempfile.TemporaryDirectory() as tmp:

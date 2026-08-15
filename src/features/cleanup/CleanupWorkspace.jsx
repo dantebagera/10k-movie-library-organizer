@@ -91,6 +91,11 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   const [smartMatchProviders, setSmartMatchProviders] = useState({ tmdb: true, plex: true });
   const maintenanceSelectionScope = `${activeTab}|${filters.query.trim()}`;
   const previousMaintenanceSelectionScopeRef = useRef(maintenanceSelectionScope);
+  const duplicateSelectionTrackingRef = useRef({
+    scope: maintenanceSelectionScope,
+    userTouched: new Set(),
+    autoSelected: new Set(),
+  });
 
   useEffect(() => {
     setActiveTab(maintenanceTab(initialTab));
@@ -110,7 +115,9 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
       setAudit((current) => ({
         ...current,
         ...state,
-        storage: state.storage || current.storage,
+        storage: state.storage
+          ? { ...state.storage, selection_scope: `${section}|${query.trim()}` }
+          : current.storage,
         identity: state.identity || current.identity,
       }));
       if (state.identity_review) setIdentityAudit(state.identity_review);
@@ -131,8 +138,48 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   useEffect(() => {
     if (previousMaintenanceSelectionScopeRef.current === maintenanceSelectionScope) return;
     previousMaintenanceSelectionScopeRef.current = maintenanceSelectionScope;
+    duplicateSelectionTrackingRef.current = {
+      scope: maintenanceSelectionScope,
+      userTouched: new Set(),
+      autoSelected: new Set(),
+    };
     setSelected({ storage: new Set(), identity: new Set() });
   }, [maintenanceSelectionScope]);
+
+  useEffect(() => {
+    if (activeTab !== 'storage' || audit.storage.selection_scope !== maintenanceSelectionScope) return;
+    const groups = audit.storage.groups || [];
+    const visiblePaths = new Set(groups.flatMap((group) => (group.files || []).map((file) => file.path)));
+    const recommendedPaths = new Set(groups.flatMap((group) => {
+      const files = group.files || [];
+      return files
+        .filter((file) => file.recommendation === 'recommended')
+        .slice(0, Math.max(0, files.length - 1))
+        .map((file) => file.path);
+    }));
+    const tracking = duplicateSelectionTrackingRef.current;
+    if (tracking.scope !== maintenanceSelectionScope) return;
+
+    setSelected((state) => {
+      const next = new Set(state.storage);
+      let changed = false;
+      for (const path of [...tracking.autoSelected]) {
+        if (visiblePaths.has(path) && !recommendedPaths.has(path) && !tracking.userTouched.has(path)) {
+          tracking.autoSelected.delete(path);
+          if (next.delete(path)) changed = true;
+        }
+      }
+      for (const path of recommendedPaths) {
+        if (tracking.userTouched.has(path) || tracking.autoSelected.has(path)) continue;
+        tracking.autoSelected.add(path);
+        if (!next.has(path)) {
+          next.add(path);
+          changed = true;
+        }
+      }
+      return changed ? { ...state, storage: next } : state;
+    });
+  }, [activeTab, audit.storage.groups, audit.storage.selection_scope, maintenanceSelectionScope]);
 
   useEffect(() => {
     const refreshForLibraryChange = () => {
@@ -209,6 +256,9 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   }
 
   function toggleDuplicateSelected(groupPaths, path, checked) {
+    const tracking = duplicateSelectionTrackingRef.current;
+    tracking.userTouched.add(path);
+    tracking.autoSelected.delete(path);
     setSelected((state) => {
       const next = new Set(state.storage);
       if (checked) {
@@ -225,6 +275,13 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
   }
 
   function setSelectedPaths(tab, paths, checked) {
+    if (tab === 'storage') {
+      const tracking = duplicateSelectionTrackingRef.current;
+      paths.forEach((path) => {
+        tracking.userTouched.add(path);
+        tracking.autoSelected.delete(path);
+      });
+    }
     setSelected((state) => {
       const next = new Set(state[tab]);
       paths.forEach((path) => {
@@ -289,7 +346,11 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
       const deletedPaths = result.deleted_paths || [];
       if (deletedPaths.length) {
         removeDeletedPaths(deletedPaths);
-        announceLibraryChanged({ source: 'maintenance-delete', deleted_paths: deletedPaths });
+        announceLibraryChanged({
+          source: 'maintenance-delete',
+          deleted_paths: deletedPaths,
+          catalog_generation: result.catalog_generation
+        });
         const folderNote = result.folder_count
           ? `, including ${result.folder_count} complete folder${result.folder_count === 1 ? '' : 's'}`
           : '';
@@ -918,6 +979,38 @@ function MaintenancePagination({ pagination = {}, onPageChange }) {
   );
 }
 
+function DuplicateDecisionEvidence({ item }) {
+  const blockers = item.decision_blockers || [];
+  const warnings = item.decision_warnings || [];
+  const passed = item.decision_passed || [];
+  const needsReview = item.recommendation === 'review';
+  if (!blockers.length && !warnings.length && !passed.length) return null;
+
+  return (
+    <div className="duplicate-decision-evidence">
+      {needsReview && blockers.length > 0 && (
+        <section className="duplicate-decision-blockers" aria-label="Why CP did not automatically select this file">
+          <strong>Why CP did not automatically select this file</strong>
+          <ul>{blockers.map((message) => <li key={message}>{message}</li>)}</ul>
+          <small>You can still select it manually; deletion always requires confirmation.</small>
+        </section>
+      )}
+      {warnings.length > 0 && (
+        <section className="duplicate-decision-warnings" aria-label="Comparison warnings">
+          <strong>Warnings to review</strong>
+          <ul>{warnings.map((message) => <li key={message}>{message}</li>)}</ul>
+        </section>
+      )}
+      {passed.length > 0 && (
+        <details className="duplicate-decision-passed">
+          <summary>Evidence that passed ({passed.length})</summary>
+          <ul>{passed.map((message) => <li key={message}>{message}</li>)}</ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function CleanupFileRow({ item, selected, selectable, badge, badgeTone, onToggle, onDelete, actions }) {
   return (
     <article className="cleanup-file-row">
@@ -943,6 +1036,7 @@ function CleanupFileRow({ item, selected, selectable, badge, badgeTone, onToggle
           {item.library_root && <span className="chip chip-muted">{rootLabel(item.library_root)}</span>}
         </div>
         {item.reason && <p className={cx('cleanup-comparison-reason', `cleanup-comparison-${item.verdict_tone || 'warning'}`)}>{item.reason}</p>}
+        <DuplicateDecisionEvidence item={item} />
       </div>
       <div className="cleanup-row-actions">
         {actions}

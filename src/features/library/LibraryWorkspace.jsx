@@ -1,6 +1,6 @@
 import {
-  AlertTriangle, ChevronDown, CirclePlus, Clapperboard, Copy, Database, Folder, Library,
-  Link as LinkIcon, Loader2, Play, RefreshCcw, Search, Trash2, Wand2, X
+  AlertTriangle, ChevronDown, ChevronUp, CirclePlus, Clapperboard, Filter, Folder,
+  Loader2, Play, RefreshCcw, RefreshCw, Search, Trash2, Wand2, X
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from '../../api/client.js';
@@ -9,7 +9,6 @@ import { CATALOG_READY_EVENT } from '../../api/catalogEvents.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale } from '../../api/movieDetails.js';
 import { addMoviePayloadsToList, announceCurationChanged, CURATION_GENERATION_CHANGED_EVENT, fetchCurationJson, fetchUserListsCached } from '../../api/curation.js';
 import { previewSourceReview } from '../../api/sourceReview.js';
-import ExportCopyDialog from '../../components/ExportCopyDialog.jsx';
 import ListEditorModal from '../../components/ListEditorModal.jsx';
 import MetadataCorrectionModal from '../../components/MetadataCorrectionModal.jsx';
 import PosterEditorModal from '../../components/PosterEditorModal.jsx';
@@ -35,7 +34,7 @@ import Pagination from '../../components/Pagination.jsx';
 import { ConfirmDialog, LibraryRenameModal, LibraryStat } from '../../components/LibraryControls.jsx';
 import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
-import { cx, formatCount, getUniqueOptions } from '../../utils/appUtils.js';
+import { cx, formatCount, getUniqueOptions, movieKey } from '../../utils/appUtils.js';
 import {
   applyPosterOverrideToLibraryItems, applySystemListState, buildLibraryPeopleIndex, buildLibraryViewModel,
   getLocaleTag, getMovieIdentity, getQualityFactsLabel, getQualityLabel, getTmdbCacheKey, isLowQuality, listLibraryCoverage,
@@ -161,7 +160,6 @@ function libraryFilterQuery(filters, page, pageSize, forceScan = false) {
     page: String(page),
     page_size: String(pageSize),
     q: filters.query,
-    quality: filters.quality,
     resolution: filters.resolution,
     source: filters.source,
     genre: filters.genre,
@@ -193,7 +191,7 @@ export default function LibraryWorkspace({
   notify,
   query,
   setQuery,
-  onReviewUnmatched,
+  followed = [],
   onOpenDiscoverPerson,
   onOpenDiscoverCollection = () => {},
   filterRequest,
@@ -217,7 +215,6 @@ export default function LibraryWorkspace({
   const [mode, setMode] = useState(() => (
     typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'file' ? 'file' : 'movie'
   ));
-  const [qualityFilter, setQualityFilter] = useState('all');
   const [identityFilter, setIdentityFilter] = useState('all');
   const [sortMode, setSortMode] = useState('added');
   const [genreFilter, setGenreFilter] = useState('all');
@@ -250,7 +247,6 @@ export default function LibraryWorkspace({
   const [listFilter, setListFilter] = useState(null);
   const [collectionEditor, setCollectionEditor] = useState(null);
   const [listEditor, setListEditor] = useState(null);
-  const [listsManagerOpen, setListsManagerOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [posterEditor, setPosterEditor] = useState(null);
@@ -308,7 +304,7 @@ export default function LibraryWorkspace({
     if (!filterRequest?.id) return;
     resetAllLibraryFilters();
     setMode('movie');
-    setQualityFilter(filterRequest.quality || 'all');
+    setResolutionFilter(filterRequest.resolution || 'all');
     onFilterRequestConsumed?.(filterRequest.id);
   }, [filterRequest, onFilterRequestConsumed]);
 
@@ -320,7 +316,6 @@ export default function LibraryWorkspace({
 
   const serverFilters = useMemo(() => ({
     query,
-    quality: qualityFilter,
     resolution: resolutionFilter,
     source: sourceFilter,
     genre: genreFilter,
@@ -340,7 +335,7 @@ export default function LibraryWorkspace({
     collection_id: '',
     collection_paths: [],
     list_id: listFilter?.id || ''
-  }), [query, qualityFilter, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
+  }), [query, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
 
   const loadLibrary = useCallback(async (forceScan = false, options = {}) => {
     const background = Boolean(options.background);
@@ -670,8 +665,7 @@ export default function LibraryWorkspace({
     safePage,
     pageStart,
     pageEnd,
-    visibleItems,
-    stats
+    visibleItems
   } = useMemo(() => {
     if (mode === 'movie') {
       if (focusedMovieItem) {
@@ -713,7 +707,6 @@ export default function LibraryWorkspace({
     pageSize,
     currentPage,
     query,
-    qualityFilter,
     identityFilter,
     sortMode,
     genreFilter,
@@ -733,7 +726,7 @@ export default function LibraryWorkspace({
     tmdbCache,
     showAdultMovies
     });
-  }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, qualityFilter, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
+  }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
 
   const activeSelectedPaths = mode === 'movie' ? selectedLibraryKeys : selectedFilePaths;
   const selectedPageItems = useMemo(() => {
@@ -890,7 +883,6 @@ export default function LibraryWorkspace({
   function resetAllLibraryFilters() {
     setLibrarySearchKind('movies');
     setQuery('');
-    setQualityFilter('all');
     setIdentityFilter('all');
     setSortMode('added');
     setGenreFilter('all');
@@ -918,7 +910,6 @@ export default function LibraryWorkspace({
   function captureLibraryMovieView() {
     return {
       query,
-      qualityFilter,
       identityFilter,
       sortMode,
       genreFilter,
@@ -943,7 +934,6 @@ export default function LibraryWorkspace({
 
   function restoreLibraryMovieView(snapshot = {}) {
     setQuery(snapshot.query || '');
-    setQualityFilter(snapshot.qualityFilter || 'all');
     setIdentityFilter(snapshot.identityFilter || 'all');
     setSortMode(snapshot.sortMode || 'added');
     setGenreFilter(snapshot.genreFilter || 'all');
@@ -1192,25 +1182,6 @@ export default function LibraryWorkspace({
     setSelectedFilePaths(new Set());
   }
 
-  async function renameList(listId, name) {
-    await fetchCurationJson(`/api/user/lists/${encodeURIComponent(listId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    await loadUserLists({ force: true });
-    announceCurationChanged();
-    notify('List renamed');
-  }
-
-  async function deleteList(listId) {
-    await fetchCurationJson(`/api/user/lists/${encodeURIComponent(listId)}`, { method: 'DELETE' });
-    if (listFilter?.id === listId) setListFilter(null);
-    await loadUserLists({ force: true });
-    announceCurationChanged();
-    notify('List deleted');
-  }
-
   async function removeMovieFromList(listId, item) {
     await fetchCurationJson(`/api/user/lists/${encodeURIComponent(listId)}/movies`, {
       method: 'DELETE',
@@ -1278,14 +1249,16 @@ export default function LibraryWorkspace({
     if (!deleteTarget) return;
     const targets = deleteTarget.items || [deleteTarget];
     const deletedPaths = [];
+    let catalogGeneration = null;
     const failures = [];
     for (const target of targets) {
       try {
-        await fetchJson('/api/delete', {
+        const result = await fetchJson('/api/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: target.path, trash: true })
         });
+        catalogGeneration = result.catalog_generation ?? catalogGeneration;
         deletedPaths.push(target.path);
       } catch (deleteError) {
         failures.push(`${target.filename || target.path}: ${deleteError.message}`);
@@ -1299,7 +1272,11 @@ export default function LibraryWorkspace({
     setDeleteTarget(null);
     if (deletedPaths.length) {
       notify(`${formatCount(deletedPaths.length)} file${deletedPaths.length === 1 ? '' : 's'} moved to Recycle Bin`);
-      announceLibraryChanged({ source: 'library-delete', deleted_paths: deletedPaths });
+      announceLibraryChanged({
+        source: 'library-delete',
+        deleted_paths: deletedPaths,
+        catalog_generation: catalogGeneration
+      });
     }
     if (failures.length) notify(`Delete failed for ${formatCount(failures.length)} file${failures.length === 1 ? '' : 's'}: ${failures[0]}`, 'error');
   }
@@ -1326,21 +1303,15 @@ export default function LibraryWorkspace({
                 <Folder size={18} /> File View
               </button>
             </div>
-          </div>
-          <div className="library-action-row">
-            <button type="button" className="btn btn-secondary" onClick={() => loadLibrary(true)} disabled={activeLoading}>
-              {activeLoading ? <Loader2 size={15} className="spin" /> : <Database size={15} />} Rescan Files
-            </button>
-            {stats.unmatched > 0 && (
-              <button type="button" className="btn btn-primary btn-violet" onClick={onReviewUnmatched}>
-                <LinkIcon size={15} /> Review Unmatched
-              </button>
-            )}
-            <button type="button" className="btn btn-secondary" onClick={() => setListEditor({ item: null })}>
-              <CirclePlus size={15} /> New list
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setListsManagerOpen(true)}>
-              <Library size={15} /> My Lists
+            <button
+              type="button"
+              className="btn btn-secondary library-rescan-button"
+              onClick={() => loadLibrary(true)}
+              disabled={activeLoading}
+              aria-label="Rescan library files"
+              title="Rescan library files"
+            >
+              {activeLoading ? <Loader2 size={19} className="spin" /> : <RefreshCw size={19} />}
             </button>
           </div>
         </div>
@@ -1404,24 +1375,25 @@ export default function LibraryWorkspace({
         </button>
       </form>
 
-      {librarySearchKind === 'movies' && <div className={cx('library-toolbar library-filter-toolbar', !filtersOpen && 'library-filter-toolbar-collapsed')}>
+      {librarySearchKind === 'movies' && <div className={cx('library-toolbar library-filter-toolbar', `library-filter-toolbar-${mode}`, !filtersOpen && 'library-filter-toolbar-collapsed')}>
         {!filtersOpen ? (
           <>
-            <span>Filters collapsed: quality, resolution, source, genre, viewing state, language, country, year, rating, sort</span>
-            <button type="button" className="btn btn-secondary" onClick={() => setFiltersOpen(true)}>
-              Open Filters
+            <span>Filters collapsed: resolution, source, genre, viewing state, language, country, year, rating, sort</span>
+            <button
+              type="button"
+              className="btn btn-secondary library-filter-icon-button"
+              onClick={() => setFiltersOpen(true)}
+              aria-label="Open filters"
+              title="Open filters"
+            >
+              <Filter size={17} />
             </button>
           </>
         ) : (
           <>
-            <select aria-label="Library quality filter" value={qualityFilter} onChange={(event) => { setQualityFilter(event.target.value); resetLibraryPage(); }}>
-              <option value="all">All qualities</option>
-              <option value="upgrade">Upgrade candidates</option>
-              <option value="good">1080p and above</option>
-              <option value="4k">4K only</option>
-            </select>
-            <select value={resolutionFilter} onChange={(event) => { setResolutionFilter(event.target.value); resetLibraryPage(); }}>
+            <select aria-label="Library resolution filter" value={resolutionFilter} onChange={(event) => { setResolutionFilter(event.target.value); resetLibraryPage(); }}>
               <option value="all">All resolutions</option>
+              <option value="upgrade">Upgrade candidates</option>
               <option value="4k">4K</option>
               <option value="1080p">1080p</option>
               <option value="720p">720p</option>
@@ -1495,11 +1467,23 @@ export default function LibraryWorkspace({
             </select>
               </>
             )}
-            <button type="button" className="btn btn-secondary library-reset-filters" onClick={resetAllLibraryFilters}>
-              <RefreshCcw size={15} /> Reset filters
+            <button
+              type="button"
+              className="btn btn-secondary library-filter-icon-button library-hide-filters"
+              onClick={() => setFiltersOpen(false)}
+              aria-label="Hide filters"
+              title="Hide filters"
+            >
+              <ChevronUp size={18} />
             </button>
-            <button type="button" className="btn btn-secondary library-hide-filters" onClick={() => setFiltersOpen(false)}>
-              <X size={15} /> Hide Filters
+            <button
+              type="button"
+              className="btn btn-secondary library-filter-icon-button library-reset-filters"
+              onClick={resetAllLibraryFilters}
+              aria-label="Reset filters"
+              title="Reset filters"
+            >
+              <RefreshCcw size={17} />
             </button>
           </>
         )}
@@ -1596,6 +1580,7 @@ export default function LibraryWorkspace({
                     <LibraryMovieCard
                       key={item.path}
                       item={item}
+                      followed={followed.some((followedMovie) => movieKey(followedMovie) === movieKey(identity))}
                       expanded={expandedPath === item.path}
                       details={details}
                       collection={collectionView.data}
@@ -1712,20 +1697,6 @@ export default function LibraryWorkspace({
           onAddBulk={addMoviesToList}
         />
       )}
-      {listsManagerOpen && (
-        <MyListsManagerModal
-          lists={userLists}
-          items={items}
-          onClose={() => setListsManagerOpen(false)}
-          onCreate={createList}
-          onRename={renameList}
-          onDelete={deleteList}
-          onAdd={addMovieToList}
-          onRemove={removeMovieFromList}
-          onFilter={applyListFilter}
-          notify={notify}
-        />
-      )}
       {posterEditor && (
         <PosterEditorModal
           item={posterEditor}
@@ -1810,229 +1781,6 @@ function CollectionEditorModal({ collection, items, onClose, onSave }) {
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
           <button type="button" className="btn btn-primary" onClick={() => onSave(collection, parts)}>Save collection</button>
         </div>
-      </section>
-    </div>
-  );
-}
-
-
-function MyListsManagerModal({ lists, items, onClose, onCreate, onRename, onDelete, onAdd, onRemove, onFilter, notify }) {
-  const [selectedId, setSelectedId] = useState(lists[0]?.id || '');
-  const [newName, setNewName] = useState('');
-  const [renameValue, setRenameValue] = useState('');
-  const [search, setSearch] = useState('');
-  const [tmdbCandidates, setTmdbCandidates] = useState([]);
-  const [tmdbLoading, setTmdbLoading] = useState(false);
-  const [selectedMovieKeys, setSelectedMovieKeys] = useState(() => new Set());
-  const [copyMovies, setCopyMovies] = useState(null);
-  const selectedList = lists.find((list) => list.id === selectedId) || lists[0] || null;
-  const listMovieKeys = useMemo(() => new Set((selectedList?.movies || []).map((movie) => movieIdentityKey(movie))), [selectedList]);
-  const selectedMovies = useMemo(() => (
-    (selectedList?.movies || []).filter((movie) => selectedMovieKeys.has(movieIdentityKey(movie)))
-  ), [selectedList, selectedMovieKeys]);
-  const allListMoviesSelected = Boolean((selectedList?.movies || []).length) && (selectedList?.movies || []).every((movie) => selectedMovieKeys.has(movieIdentityKey(movie)));
-  const candidates = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q || !selectedList) return [];
-    return items
-      .filter((item) => {
-        const payload = moviePayload(item);
-        if (listMovieKeys.has(movieIdentityKey(payload))) return false;
-        return `${payload.title} ${payload.year} ${item.filename || ''}`.toLowerCase().includes(q);
-      })
-      .slice(0, 12);
-  }, [items, listMovieKeys, search, selectedList]);
-
-  useEffect(() => {
-    if (!selectedList && lists[0]) setSelectedId(lists[0].id);
-    if (selectedList) setRenameValue(selectedList.name || '');
-  }, [lists, selectedList]);
-
-  useEffect(() => {
-    setSelectedMovieKeys(new Set());
-  }, [selectedId]);
-
-  async function submitCreate(event) {
-    event.preventDefault();
-    const created = await onCreate(newName);
-    setNewName('');
-    setSelectedId(created.id);
-  }
-
-  async function submitRename(event) {
-    event.preventDefault();
-    if (!selectedList || !renameValue.trim()) return;
-    await onRename(selectedList.id, renameValue.trim());
-  }
-
-  async function deleteSelected() {
-    if (!selectedList) return;
-    await onDelete(selectedList.id);
-    const remaining = lists.filter((list) => list.id !== selectedList.id);
-    setSelectedId(remaining[0]?.id || '');
-  }
-
-  function toggleListMovie(movie, checked) {
-    const key = movieIdentityKey(movie);
-    setSelectedMovieKeys((current) => {
-      const next = new Set(current);
-      if (checked) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }
-
-  function selectAllListMovies() {
-    setSelectedMovieKeys(new Set((selectedList?.movies || []).map((movie) => movieIdentityKey(movie))));
-  }
-
-  function clearListSelection() {
-    setSelectedMovieKeys(new Set());
-  }
-
-  async function removeSelectedMovies() {
-    if (!selectedList || !selectedMovies.length) return;
-    for (const movie of selectedMovies) {
-      await onRemove(selectedList.id, movie);
-    }
-    setSelectedMovieKeys(new Set());
-  }
-
-  async function searchTmdbWatchlist() {
-    if (selectedList?.system_type !== 'watchlist' || !search.trim()) return;
-    setTmdbLoading(true);
-    try {
-      const data = await fetchJson(`/api/tmdb/search?q=${encodeURIComponent(search.trim())}&page=1&include_adult=false`);
-      setTmdbCandidates((data.results || []).slice(0, 12));
-    } finally {
-      setTmdbLoading(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <section className="torrent-dialog curation-dialog" role="dialog" aria-modal="true" aria-label="My lists" onClick={(event) => event.stopPropagation()}>
-        <div className="dialog-header">
-          <div>
-            <p className="screen-kicker">Library lists</p>
-            <h2>My Lists</h2>
-          </div>
-          <button type="button" className="inspector-close" onClick={onClose} aria-label="Close my lists">
-            <X size={18} />
-          </button>
-        </div>
-        <div className="lists-manager-grid">
-          <aside className="lists-manager-sidebar">
-            <form onSubmit={submitCreate} className="list-create-inline">
-              <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="New list name..." />
-              <button type="submit" className="mini-action" disabled={!newName.trim()}><CirclePlus size={13} /> Create</button>
-            </form>
-            {lists.length ? lists.map((list) => (
-              <button type="button" key={list.id} className={cx('list-manager-item', selectedList?.id === list.id && 'list-manager-item-active')} onClick={() => setSelectedId(list.id)}>
-                <span>{list.name}</span>
-                <small>{formatCount((list.movies || []).length)} movies</small>
-              </button>
-            )) : <small>No lists yet.</small>}
-          </aside>
-          <div className="lists-manager-detail">
-            {selectedList ? (
-              <>
-                <form className="list-rename-row" onSubmit={submitRename}>
-                  <input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} disabled={Boolean(selectedList?.system_type)} />
-                  {selectedList?.system_type ? <span className="chip chip-muted">System list</span> : <button type="submit" className="mini-action">Rename</button>}
-                  <button type="button" className="mini-action" onClick={() => onFilter(selectedList)}>Filter</button>
-                  {!selectedList?.system_type && (
-                    <button type="button" className="mini-action mini-action-danger" onClick={deleteSelected}>
-                      <Trash2 size={13} /> Delete
-                    </button>
-                  )}
-                </form>
-                <label className="library-search curation-search">
-                  <Search size={17} />
-                  <input value={search} onChange={(event) => { setSearch(event.target.value); setTmdbCandidates([]); }} placeholder={selectedList.system_type === 'watchlist' ? 'Search local movies or TMDB...' : 'Search local movies to add...'} />
-                </label>
-                {selectedList.system_type === 'watchlist' && search.trim() && (
-                  <button type="button" className="mini-action" onClick={searchTmdbWatchlist} disabled={tmdbLoading}>
-                    {tmdbLoading ? <Loader2 size={13} className="spin" /> : <Search size={13} />} Search TMDB to add to Watchlist
-                  </button>
-                )}
-                {candidates.length > 0 && (
-                  <div className="curation-candidates">
-                    {candidates.map((item) => {
-                      const payload = moviePayload(item);
-                      return (
-                        <button type="button" key={item.path} onClick={() => { onAdd(selectedList.id, item); setSearch(''); }}>
-                          <CirclePlus size={15} />
-                          {payload.title}{payload.year ? ` (${payload.year})` : ''}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {tmdbCandidates.length > 0 && selectedList.system_type === 'watchlist' && (
-                  <div className="curation-candidates">
-                    {tmdbCandidates.map((movie) => {
-                      const owned = items.some((item) => movieIdentityKey(moviePayload(item)) === movieIdentityKey(movie));
-                      return (
-                        <button type="button" key={movie.tmdb_id || movieIdentityKey(movie)} onClick={() => { onAdd(selectedList.id, movie); setSearch(''); setTmdbCandidates([]); }}>
-                          <CirclePlus size={15} />
-                          {movie.title}{movie.year ? ` (${movie.year})` : ''} · {owned ? 'Owned' : 'Not owned'}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {(selectedList.movies || []).length > 0 && (
-                  <div className="bulk-selection-bar list-bulk-selection">
-                    <SelectionCheckbox
-                      className="list-select-all"
-                      checked={allListMoviesSelected}
-                      onChange={(checked) => { if (checked) selectAllListMovies(); else clearListSelection(); }}
-                      label={`Select all movies in ${selectedList.name}`}
-                    />
-                    <span>{selectedMovies.length ? `${formatCount(selectedMovies.length)} selected` : 'Select list movies'}</span>
-                    <button type="button" className="mini-action" onClick={selectAllListMovies}>Select all</button>
-                    <button type="button" className="mini-action" onClick={clearListSelection} disabled={!selectedMovies.length}>Clear</button>
-                    <button type="button" className="mini-action mini-action-danger" onClick={removeSelectedMovies} disabled={!selectedMovies.length}>
-                      <Trash2 size={13} /> Remove selected
-                    </button>
-                    <button type="button" className="mini-action" onClick={() => setCopyMovies(selectedMovies)} disabled={!selectedMovies.length}>
-                      <Copy size={13} /> Copy selected to...
-                    </button>
-                  </div>
-                )}
-                <div className="curation-list">
-                  {(selectedList.movies || []).map((movie) => (
-                    <div className="curation-row" key={movieIdentityKey(movie)}>
-                      <SelectionCheckbox
-                        className="list-row-checkbox"
-                        checked={selectedMovieKeys.has(movieIdentityKey(movie))}
-                        onChange={(checked) => toggleListMovie(movie, checked)}
-                        label={`Select ${movie.title}`}
-                      />
-                      <span>{movie.title}{movie.year ? ` (${movie.year})` : ''}</span>
-                      <button type="button" className="mini-action mini-action-danger" onClick={() => onRemove(selectedList.id, movie)}>
-                        <Trash2 size={13} /> Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="empty-state">
-                <strong>No list selected.</strong>
-                <span>Create a list to start curating movies.</span>
-              </div>
-            )}
-          </div>
-        </div>
-        {copyMovies && (
-          <ExportCopyDialog
-            movies={copyMovies}
-            onClose={() => setCopyMovies(null)}
-            notify={notify}
-          />
-        )}
       </section>
     </div>
   );

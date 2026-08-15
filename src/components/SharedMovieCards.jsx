@@ -198,8 +198,9 @@ export function DiscoverMovieCard({
         },
         owned ? getCompactQualityLabel(ownedItem) : ''
       ]}
-      statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
+      statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? '' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
+      following={followed}
       ownedBadge={Boolean(owned)}
       expanded={expanded}
       onToggle={onToggleDetails}
@@ -693,6 +694,7 @@ function PersonAvatar({ person }) {
 
 export function LibraryMovieCard({
   item,
+  followed = false,
   expanded,
   details,
   collection,
@@ -785,6 +787,7 @@ export function LibraryMovieCard({
       ]}
       statusLabel={lowQuality ? 'Upgrade candidate' : ''}
       statusTone={lowQuality ? 'warning' : 'neutral'}
+      following={followed}
       ownedBadge={showOwnedBadge}
       expanded={expanded}
       selected={selected}

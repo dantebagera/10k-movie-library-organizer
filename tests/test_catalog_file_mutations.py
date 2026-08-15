@@ -155,6 +155,7 @@ class CatalogFileMutationTest(unittest.TestCase):
         )
         probe.assert_called_once_with(str(renamed_path))
         self.assertEqual(deleted_response.status_code, 200)
+        self.assertGreater(int(deleted_response.get_json()["catalog_generation"]), 0)
         self.assertEqual(after_delete["count"], 0)
 
     def test_only_shared_helpers_own_path_metadata_mutation(self):

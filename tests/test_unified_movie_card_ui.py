@@ -10,6 +10,9 @@ PRESENTATION_SOURCE = (ROOT / "src" / "utils" / "moviePresentation.js").read_tex
 MOVIE_LISTS_SOURCE = (ROOT / "src" / "features" / "movie-lists" / "MovieListsWorkspace.jsx").read_text(encoding="utf-8")
 AI_CONTROL_SOURCE = (ROOT / "src" / "features" / "ai-control" / "AIControlWorkspace.jsx").read_text(encoding="utf-8")
 DISCOVER_SOURCE = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
+HOME_SOURCE = (ROOT / "src" / "features" / "home" / "HomeWorkspace.jsx").read_text(encoding="utf-8")
+LIBRARY_SOURCE = (ROOT / "src" / "features" / "library" / "LibraryWorkspace.jsx").read_text(encoding="utf-8")
+IPTV_SOURCE = (ROOT / "src" / "features" / "iptv" / "IPTVWorkspace.jsx").read_text(encoding="utf-8")
 COLLECTION_CACHE_SOURCE = (ROOT / "src" / "hooks" / "useMovieCollectionCache.js").read_text(encoding="utf-8")
 APP = APP_SOURCE
 MAIN = (ROOT / "src" / "main.jsx").read_text(encoding="utf-8")
@@ -88,7 +91,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("function isUnreleasedMovie(movie)", APP)
         self.assertIn("function formatReleaseDateLabel(value)", APP)
         self.assertIn("const unreleased = !owned && isUnreleasedMovie(displayMovie);", APP)
-        self.assertIn("statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}", APP)
+        self.assertIn("statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? '' : 'Not in library'))}", APP)
         self.assertIn("{!unreleased && streamingAvailable && (", APP)
         self.assertIn("{!unreleased && (", APP)
 
@@ -104,9 +107,11 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
 
         inspector = APP[APP.index("function MovieInspector({"):APP.index("function PosterEditButton", APP.index("function MovieInspector({"))]
         self.assertIn("const unreleased = !owned && isUnreleasedMovie(displayMovie);", inspector)
+        self.assertIn("const releaseAvailable = followedMovie?.status === 'available';", inspector)
+        self.assertIn("const sourceActionsAllowed = releaseAvailable || !unreleased;", inspector)
         self.assertIn("const releaseDateLabel = unreleased ? formatReleaseDateLabel(displayMovie.release_date) : '';", inspector)
         self.assertIn("{releaseDateLabel && <span>Releases {releaseDateLabel}</span>}", inspector)
-        self.assertIn("{!unreleased && streamingAvailable && (", inspector)
+        self.assertIn("{sourceActionsAllowed && streamingAvailable && (", inspector)
         self.assertIn("const selectedMovieWithDetails = selectedMovie ? {", APP)
         self.assertIn("release_date: selectedMovie.release_date || selectedDetails?.release_date || ''", APP)
         self.assertIn("plot: selectedDetails?.plot || selectedDetails?.summary || selectedMovie.plot || ''", APP)
@@ -115,6 +120,28 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         indexer_card = APP[APP.index("function IndexerMovieCard({"):APP.index("function Rating", APP.index("function IndexerMovieCard({"))]
         self.assertNotIn("isUnreleasedMovie", indexer_card)
         self.assertIn("onFindTorrent(movie)", indexer_card)
+
+    def test_following_is_an_independent_universal_card_badge_with_experimental_palette(self):
+        component_source = COMPONENT.read_text(encoding="utf-8")
+        card_styles = STYLES.read_text(encoding="utf-8")
+        app_styles = APP_STYLES.read_text(encoding="utf-8")
+
+        self.assertIn("following = false", component_source)
+        self.assertIn('unified-status-chip unified-status-following', component_source)
+        self.assertIn(".unified-status-following {", card_styles)
+        for variable in ("--ai-violet-border", "--ai-violet-surface", "--ai-violet-text"):
+            self.assertIn(variable, app_styles)
+            self.assertIn(f"var({variable})", card_styles)
+            self.assertIn(f"var({variable})", app_styles)
+
+        self.assertGreaterEqual(SHARED_CARDS_SOURCE.count("following={followed}"), 2)
+        self.assertIn("following={followed}", HOME_SOURCE)
+        self.assertIn("following={followed}", DISCOVER_SOURCE)
+        self.assertIn("followed={followed.some", LIBRARY_SOURCE)
+        self.assertIn("followed={followed.some", MOVIE_LISTS_SOURCE)
+        self.assertIn("following={followed.some", IPTV_SOURCE)
+        self.assertIn("<IPTVWorkspace notify={notify} followed={followed} />", APP)
+        self.assertIn("followed={followed}", APP)
 
     def test_expanded_details_show_release_date_only_for_unreleased_movies(self):
         expanded_facts = SHARED_CARDS_SOURCE[

@@ -1,4 +1,5 @@
 import atexit
+import datetime
 import os
 import re
 import stat
@@ -97,6 +98,7 @@ from services.library_observer import LibraryObserverAdapter
 from services.library_startup_catchup import LibraryStartupCatchup
 from services.source_search import ProwlarrClient
 from services.download_monitor import DownloadImportMonitor
+from services.power_actions import PowerActionCoordinator, PowerActionError
 from services.media_assets import MediaAssetError, MediaAssetService
 from services.media_file_backfill import run_file_facts_backfill
 from services.media_file_facts import (
@@ -274,6 +276,11 @@ SOURCE_SEARCH_JOB_WORKERS = 5
 SOURCE_SEARCH_JOB_TTL_SECONDS = 900
 FOLLOWED_RELEASE_QUERY_TIMEOUT_SECONDS = 8
 FOLLOWED_RELEASE_DEADLINE_SECONDS = 25
+FOLLOWED_RELEASE_WORKERS = 3
+FOLLOWED_RELEASE_RSS_TIMEOUT_SECONDS = 3
+FOLLOWED_RELEASE_RECHECK_BASE_SECONDS = 24 * 60 * 60
+FOLLOWED_RELEASE_RECHECK_MAX_SECONDS = 7 * 24 * 60 * 60
+FOLLOWED_RELEASE_FAILURE_RETRY_SECONDS = 60 * 60
 _source_search_jobs = {}
 _source_search_jobs_lock = threading.Lock()
 _followed_release_scan_lock = threading.Lock()
@@ -719,7 +726,7 @@ def _iter_alternative_title_values(value):
             yield item
 
 
-def _movie_source_title_aliases(movie, metadata=None):
+def _movie_source_title_aliases(movie, metadata=None, *, allow_alias_fetch=True):
     metadata = metadata or {}
     aliases = []
     seen = set()
@@ -743,7 +750,7 @@ def _movie_source_title_aliases(movie, metadata=None):
             return aliases
 
     tmdb_id = str((movie or {}).get('tmdb_id', '') or '').strip()
-    if tmdb_id:
+    if tmdb_id and (allow_alias_fetch or tmdb_id in _smart_match_tmdb_alias_cache):
         try:
             for title in _smart_match_tmdb_alternative_titles(tmdb_id):
                 _append_source_title_alias(aliases, seen, title)
@@ -754,12 +761,16 @@ def _movie_source_title_aliases(movie, metadata=None):
     return aliases
 
 
-def _movie_with_source_title_aliases(movie):
+def _movie_with_source_title_aliases(movie, *, allow_alias_fetch=True):
     enriched = dict(movie or {})
     metadata = _movie_tmdb_metadata_for_source_search(enriched)
     if metadata and not enriched.get('imdb_id'):
         enriched['imdb_id'] = metadata.get('imdb_id', '')
-    enriched['title_aliases'] = _movie_source_title_aliases(enriched, metadata)
+    enriched['title_aliases'] = _movie_source_title_aliases(
+        enriched,
+        metadata,
+        allow_alias_fetch=allow_alias_fetch,
+    )
     evidence = _movie_source_release_year_evidence(enriched, metadata)
     enriched['release_year_evidence'] = evidence
     enriched['release_years'] = [item['year'] for item in evidence]
@@ -876,8 +887,19 @@ def _remaining_timeout(deadline_at, timeout):
     return max(1, min(timeout, remaining))
 
 
-def _prowlarr_search_movie(indexer_ids, movie, limit=100, categories='2000', timeout=30, deadline_seconds=None):
-    movie = _movie_with_source_title_aliases(movie)
+def _prowlarr_search_movie(
+    indexer_ids,
+    movie,
+    limit=100,
+    categories='2000',
+    timeout=30,
+    deadline_seconds=None,
+    *,
+    enriched=False,
+    accept_result=None,
+    stop_after_first=False,
+):
+    movie = dict(movie or {}) if enriched else _movie_with_source_title_aliases(movie)
     deadline_at = None
     if deadline_seconds:
         deadline_at = time.monotonic() + max(1, int(deadline_seconds))
@@ -905,11 +927,15 @@ def _prowlarr_search_movie(indexer_ids, movie, limit=100, categories='2000', tim
         for result in results:
             if not _prowlarr_result_matches_movie(result, movie):
                 continue
+            if accept_result is not None and not accept_result(result):
+                continue
             key = _prowlarr_result_key(result)
             if key in seen:
                 continue
             seen.add(key)
             merged.append(result)
+            if stop_after_first:
+                return merged
             if len(merged) >= limit:
                 return merged
     return merged
@@ -998,14 +1024,14 @@ def _yts_rss_variant_from_item(item):
     }
 
 
-def _fetch_yts_rss_latest(limit=100):
+def _fetch_yts_rss_latest(limit=100, timeout=20):
     for feed_url in _yts_rss_feeds:
         try:
             req = urllib.request.Request(feed_url, headers={
                 'Accept': 'application/rss+xml, application/xml, text/xml',
                 'User-Agent': 'CinemaParadiso/2.6 (+https://local.app)',
             })
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 root = _ET.fromstring(resp.read())
             movies = {}
             for item in root.findall('./channel/item'):
@@ -1855,7 +1881,14 @@ def _delete_library_file(path, *, use_trash=True):
     service = _library_mutation_service()
     result = service.delete(path, use_trash=use_trash)
     _evict_removed_library_path_from_caches(result['deleted'])
-    return result
+    generation = _catalog_repository().generation('media')
+    _catalog_event_broker.publish(
+        generation,
+        reason='library-delete',
+        changed_count=1,
+        correlation_id=f"delete:{time.time_ns()}",
+    )
+    return {**result, 'catalog_generation': generation}
 
 
 def _plan_library_file_deletions(paths):
@@ -1871,7 +1904,15 @@ def _delete_library_files(paths, *, use_trash=True, allowed_folder_targets=None)
     )
     for path in result['deleted_paths']:
         _evict_removed_library_path_from_caches(path)
-    return result
+    generation = _catalog_repository().generation('media')
+    if result['deleted_paths']:
+        _catalog_event_broker.publish(
+            generation,
+            reason='library-delete',
+            changed_count=len(result['deleted_paths']),
+            correlation_id=f"delete:{time.time_ns()}",
+        )
+    return {**result, 'catalog_generation': generation}
 
 
 def _year_from_movie(movie, fallback=''):
@@ -2364,6 +2405,8 @@ _library_reconcile_state = {
 }
 _qbittorrent_manager = None
 _qbittorrent_manager_key = None
+_power_action_coordinator_instance = None
+_power_action_coordinator_key = None
 
 def _all_config():
     config = {
@@ -2403,6 +2446,7 @@ def _all_config():
     return config
 
 VIDEO_EXTENSIONS = {'.mkv', '.mp4', '.avi', '.m4v', '.mov', '.wmv', '.flv', '.ts', '.m2ts', '.iso'}
+CP_RESTART_EXIT_CODE = 75
 
 def get_movies_dir():
     return _movies_dir
@@ -2429,6 +2473,88 @@ def _get_qbittorrent_manager():
         _qbittorrent_manager = QBittorrentManager(_user_data_dir, settings, get_movies_dirs())
         _qbittorrent_manager_key = key
     return _qbittorrent_manager
+
+
+def _close_cp_owned_playback():
+    """Close only playback processes and relays that Cinema Paradiso owns."""
+    _player_manager.close_active()
+    if _iptv_provider_manager is not None:
+        _iptv_provider_manager.close()
+
+
+def _stop_cp_background_runtime(*, close_qbittorrent=False):
+    if close_qbittorrent:
+        if _qbt_mode != 'embedded':
+            raise RuntimeError('Cinema Paradiso cannot close a system-managed qBittorrent client')
+        if _qbittorrent_manager is not None:
+            _qbittorrent_manager.shutdown()
+    _qbittorrent_import_monitor.shutdown()
+    _shutdown_library_background_services()
+
+
+def _execute_power_action(action, plan_id, claim_dispatch, *, close_qbittorrent=False):
+    if _TEST_MODE:
+        raise RuntimeError('Power execution is disabled in CP_TEST_MODE')
+    if action == 'device' and os.name != 'nt':
+        raise RuntimeError('Turning off the device is supported only on Windows')
+    if action == 'device' and not shutil.which('shutdown.exe'):
+        raise RuntimeError('Windows shutdown.exe is unavailable')
+    if close_qbittorrent and action != 'cp':
+        raise RuntimeError('qBittorrent can be closed only when turning off CP')
+    if close_qbittorrent and _qbt_mode != 'embedded':
+        raise RuntimeError('Cinema Paradiso cannot close a system-managed qBittorrent client')
+    coordinator = _library_ingestion_coordinator()
+    if not coordinator.checkpoint_for_shutdown(timeout_seconds=60):
+        coordinator.resume_after_shutdown_failure()
+        raise RuntimeError('CP could not finish its active matching operation within 60 seconds')
+    claim_dispatch(plan_id)
+    try:
+        _close_cp_owned_playback()
+        if action in {'cp', 'restart'}:
+            _stop_cp_background_runtime(close_qbittorrent=bool(close_qbittorrent))
+    except Exception:
+        coordinator.resume_after_shutdown_failure()
+        raise
+    if action == 'device':
+        startupinfo = None
+        creationflags = 0
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        try:
+            subprocess.run(
+                [
+                    'shutdown.exe', '/s', '/t', '0', '/d', 'p:0:0',
+                    '/c', 'Cinema Paradiso completed its recoverable shutdown checkpoint',
+                ],
+                check=True,
+                capture_output=True,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+            )
+        except Exception:
+            coordinator.resume_after_shutdown_failure()
+            raise
+        _power_action_coordinator_instance.complete_dispatch(plan_id)
+        return
+    _power_action_coordinator_instance.complete_dispatch(plan_id)
+    time.sleep(0.25)
+    os._exit(CP_RESTART_EXIT_CODE if action == 'restart' else 0)
+
+
+def _power_action_coordinator():
+    global _power_action_coordinator_instance, _power_action_coordinator_key
+    key = os.path.abspath(_user_data_dir)
+    if _power_action_coordinator_instance is None or _power_action_coordinator_key != key:
+        _power_action_coordinator_instance = PowerActionCoordinator(
+            Path(_user_data_dir, 'power', 'action.json'),
+            lambda: _get_qbittorrent_manager().jobs.all(),
+            _execute_power_action,
+        )
+        _power_action_coordinator_key = key
+    return _power_action_coordinator_instance
 
 
 def _completed_download_video_paths(imported_paths):
@@ -2612,9 +2738,18 @@ def _handle_completed_qbittorrent_imports(manager, results):
     return True
 
 
+def _handle_completed_download_cycle(manager, results):
+    if _power_action_coordinator_instance is not None and _power_action_coordinator_instance.submissions_blocked():
+        return False
+    handled = _handle_completed_qbittorrent_imports(manager, results)
+    if _power_action_coordinator_instance is not None:
+        _power_action_coordinator_instance.evaluate()
+    return handled
+
+
 _qbittorrent_import_monitor = DownloadImportMonitor(
     _get_qbittorrent_manager,
-    _handle_completed_qbittorrent_imports,
+    _handle_completed_download_cycle,
 )
 
 
@@ -3601,69 +3736,99 @@ def NumberSafe(value):
         return 0
 
 
-def _find_best_followed_release(movie):
+def _followed_release_search_context():
     if not _prowlarr_url or not _prowlarr_key:
-        return None
-    title = str(movie.get('title', '') or '').strip()
-    year = str(movie.get('year', '') or '').strip()
-    if not title:
-        return None
-    query = f"{title} {year}".strip()
+        return {'ready': False, 'indexers': [], 'indexer_ids': [], 'indexer_names': set()}
     try:
-        selected_indexers = []
-        try:
-            enabled_indexers = _fetch_enabled_prowlarr_indexers()
-            trusted_ids = set(_effective_trusted_release_indexer_ids(enabled_indexers))
-            selected_indexers = [ix for ix in enabled_indexers if ix['id'] in trusted_ids]
-        except Exception:
-            selected_indexers = []
-        if not selected_indexers:
-            return None
-        indexer_ids = [ix['id'] for ix in selected_indexers]
-        trusted_indexer_names = {ix.get('name', '') for ix in selected_indexers if ix.get('name')}
+        enabled_indexers = _fetch_enabled_prowlarr_indexers()
+    except Exception:
+        return {'ready': False, 'indexers': [], 'indexer_ids': [], 'indexer_names': set()}
+    trusted_ids = set(_effective_trusted_release_indexer_ids(enabled_indexers))
+    selected = [indexer for indexer in enabled_indexers if indexer['id'] in trusted_ids]
+    return {
+        'ready': bool(selected),
+        'indexers': selected,
+        'indexer_ids': [indexer['id'] for indexer in selected],
+        'indexer_names': {indexer.get('name', '') for indexer in selected if indexer.get('name')},
+    }
+
+
+def _followed_release_candidate(result, trusted_indexer_names=None, *, indexer_override=''):
+    result = result or {}
+    torrent_title = str(result.get('title', '') or '')
+    result_indexer = str(indexer_override or result.get('indexer', '') or '')
+    trusted_indexer_names = set(trusted_indexer_names or [])
+    if result_indexer and trusted_indexer_names and result_indexer not in trusted_indexer_names:
+        return None
+    if _TV_RE.search(torrent_title):
+        return None
+    quality = _proper_release_from_title(torrent_title)
+    if not quality:
+        return None
+    size = NumberSafe(result.get('size') or result.get('size_bytes'))
+    links = _prowlarr_result_links(result)
+    return {
+        'title': torrent_title,
+        'resolution': quality['resolution'],
+        'source': quality['source'],
+        'seeders': NumberSafe(result.get('seeders')),
+        'size_bytes': size,
+        'size_human': result.get('size_human') or (format_size(size) if size else '?'),
+        'indexer': result_indexer,
+        'magnet_url': links['magnet_url'],
+        'download_url': links['download_url'],
+        'info_url': result.get('infoUrl') or result.get('info_url', ''),
+    }
+
+
+def _probe_followed_release(movie, context=None):
+    context = context or _followed_release_search_context()
+    if not context.get('ready'):
+        return {'searched': False, 'release': None}
+    enriched = dict(movie or {})
+    if not enriched.get('title_aliases'):
+        enriched = _movie_with_source_title_aliases(enriched)
+    trusted_names = context.get('indexer_names') or set()
+
+    def accepts(result):
+        return _followed_release_candidate(result, trusted_names) is not None
+
+    try:
         results = _prowlarr_search_movie(
-            indexer_ids,
-            movie,
+            context.get('indexer_ids') or [],
+            enriched,
             timeout=FOLLOWED_RELEASE_QUERY_TIMEOUT_SECONDS,
             deadline_seconds=FOLLOWED_RELEASE_DEADLINE_SECONDS,
+            enriched=True,
+            accept_result=accepts,
+            stop_after_first=True,
         )
     except Exception:
-        return None
+        return {'searched': False, 'release': None}
+    release = _followed_release_candidate(results[0], trusted_names) if results else None
+    return {'searched': True, 'release': release}
 
-    candidates = []
-    for r in results:
-        torrent_title = r.get('title', '')
-        result_indexer = r.get('indexer', '')
-        if result_indexer and trusted_indexer_names and result_indexer not in trusted_indexer_names:
-            continue
-        if _TV_RE.search(torrent_title):
-            continue
-        quality = _proper_release_from_title(torrent_title)
-        if not quality:
-            continue
-        size = NumberSafe(r.get('size'))
-        links = _prowlarr_result_links(r)
-        candidates.append({
-            'title': torrent_title,
-            'resolution': quality['resolution'],
-            'source': quality['source'],
-            'seeders': NumberSafe(r.get('seeders')),
-            'size_bytes': size,
-            'size_human': format_size(size) if size else '?',
-            'indexer': result_indexer,
-            'magnet_url': links['magnet_url'],
-            'download_url': links['download_url'],
-            'info_url': r.get('infoUrl', ''),
-        })
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (
-        get_resolution_rank_str(item.get('resolution')),
-        get_rip_rank(item.get('source')),
-        NumberSafe(item.get('seeders')),
-        NumberSafe(item.get('size_bytes')),
-    ), reverse=True)
-    return candidates[0]
+
+def _find_best_followed_release(movie, context=None):
+    """Compatibility entry point; the watcher only needs the first valid release."""
+    return _probe_followed_release(movie, context).get('release')
+
+
+def _followed_rss_release(movie, rows):
+    for row in rows or []:
+        for variant in row.get('variants', []) or []:
+            result = {
+                **variant,
+                'title': variant.get('title', ''),
+                'indexer': 'YTS RSS',
+                'infoUrl': variant.get('info_url', ''),
+            }
+            if not _prowlarr_result_matches_movie(result, movie):
+                continue
+            candidate = _followed_release_candidate(result, {'YTS RSS'}, indexer_override='YTS RSS')
+            if candidate:
+                return candidate
+    return None
 
 
 def _sort_followed_releases(items):
@@ -3676,7 +3841,7 @@ def _sort_followed_releases(items):
 
 def _backfill_followed_release_dates(store, movies):
     enriched = []
-    changed = False
+    updates = []
     for item in movies or []:
         updated = dict(item or {})
         if not updated.get('release_date') and updated.get('tmdb_id'):
@@ -3684,45 +3849,213 @@ def _backfill_followed_release_dates(store, movies):
             release_date = str(metadata.get('release_date', '') or '')
             if release_date:
                 updated['release_date'] = release_date
-                changed = True
+                updates.append({
+                    'movie': item,
+                    'expected_followed_at': item.get('followed_at', 0),
+                    'patch': {'release_date': release_date},
+                })
         enriched.append(updated)
-    if changed:
-        store.save_followed_all(enriched)
+    if updates:
+        store.apply_followed_scan(updates=updates)
     return enriched
 
 
+def _followed_release_date(movie):
+    value = str((movie or {}).get('release_date', '') or '').strip()[:10]
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _followed_release_date_epoch(release_date):
+    return time.mktime(datetime.datetime.combine(release_date, datetime.time.min).timetuple())
+
+
+def _followed_release_eligibility(movie, now):
+    if str((movie or {}).get('status') or 'watching') == 'available':
+        return {'eligible': False, 'reason': 'available', 'patch': {}}
+    release_date = _followed_release_date(movie)
+    today = datetime.datetime.fromtimestamp(now).date()
+    if release_date and release_date > today:
+        return {
+            'eligible': False,
+            'reason': 'unreleased',
+            'patch': {'next_check_at': _followed_release_date_epoch(release_date)},
+        }
+    if float((movie or {}).get('next_check_at') or 0) > now:
+        return {'eligible': False, 'reason': 'not_due', 'patch': {}}
+    return {'eligible': True, 'reason': 'due', 'patch': {}}
+
+
+def _followed_release_miss_patch(movie, now):
+    miss_count = max(0, int((movie or {}).get('miss_count') or 0)) + 1
+    delay = min(
+        FOLLOWED_RELEASE_RECHECK_MAX_SECONDS,
+        FOLLOWED_RELEASE_RECHECK_BASE_SECONDS * (2 ** min(miss_count - 1, 3)),
+    )
+    return {
+        'status': 'watching',
+        'best_release': {},
+        'last_checked': now,
+        'last_attempted': now,
+        'next_check_at': now + delay,
+        'miss_count': miss_count,
+    }
+
+
+def _followed_release_failure_patch(now):
+    return {
+        'last_attempted': now,
+        'next_check_at': now + FOLLOWED_RELEASE_FAILURE_RETRY_SECONDS,
+    }
+
+
+def _followed_release_available_patch(release, now):
+    return {
+        'status': 'available',
+        'best_release': release,
+        'last_checked': now,
+        'last_attempted': now,
+        'next_check_at': 0,
+        'miss_count': 0,
+        'updated_at': now,
+    }
+
+
+def _followed_scan_update(movie, patch):
+    return {
+        'movie': movie,
+        'expected_followed_at': movie.get('followed_at', 0),
+        'patch': patch,
+    }
+
+
+def _followed_release_priority(movie):
+    last_checked = float((movie or {}).get('last_checked') or 0)
+    last_attempted = float((movie or {}).get('last_attempted') or 0)
+    if not last_checked and not last_attempted:
+        rank = 0
+    elif last_attempted > last_checked:
+        rank = 1
+    else:
+        rank = 2
+    return (
+        rank,
+        float((movie or {}).get('next_check_at') or 0),
+        -float((movie or {}).get('followed_at') or 0),
+    )
+
+
 def _check_followed_releases():
+    scan_started = time.perf_counter()
     store = _curation_store()
-    current = _backfill_followed_release_dates(store, store.followed_all())
-    checked = []
+    current = store.followed_all()
     removed_owned = []
     newly_available = []
     now = time.time()
     owned_matches = _find_owned_movies(current)
+    rss_candidates = []
+    skipped = {'available': 0, 'unreleased': 0, 'not_due': 0}
     for item, owned in zip(current, owned_matches):
-        before_status = item.get('status', 'watching')
         if owned:
             removed_owned.append({**item, 'status': 'owned', 'owned': owned, 'updated_at': now, 'last_checked': now})
             continue
-        best_release = _find_best_followed_release(item)
-        updated = {**item, 'last_checked': now}
-        if best_release:
-            updated['status'] = 'available'
-            updated['best_release'] = best_release
-            updated['updated_at'] = now if before_status != 'available' else item.get('updated_at', now)
-            if before_status != 'available':
-                newly_available.append(updated)
-        else:
-            updated['status'] = 'watching'
-            updated['best_release'] = {}
-        checked.append(updated)
-    checked = _sort_followed_releases(checked)
-    store.save_followed_all(checked)
+        if str(item.get('status') or 'watching') == 'available':
+            skipped['available'] += 1
+            continue
+        try:
+            rss_candidates.append(_movie_with_source_title_aliases(item, allow_alias_fetch=False))
+        except Exception:
+            rss_candidates.append(dict(item))
+
+    store.apply_followed_scan(removals=removed_owned)
+
+    rss_candidates.sort(key=_followed_release_priority)
+    context = _followed_release_search_context() if rss_candidates else {'ready': False, 'indexers': []}
+    pending = list(rss_candidates)
+    scan_updates = []
+    rss_matches = 0
+    prowlarr_searches = 0
+    failed_searches = 0
+    trusted_yts = any(_is_yts_indexer_name(indexer.get('name')) for indexer in context.get('indexers', []))
+    if pending and trusted_yts:
+        rss_rows = _fetch_yts_rss_latest(limit=100, timeout=FOLLOWED_RELEASE_RSS_TIMEOUT_SECONDS)
+        unmatched = []
+        for item in pending:
+            release = _followed_rss_release(item, rss_rows)
+            if not release:
+                unmatched.append(item)
+                continue
+            patch = _followed_release_available_patch(release, now)
+            scan_updates.append(_followed_scan_update(item, patch))
+            newly_available.append({**item, **patch})
+            rss_matches += 1
+        pending = unmatched
+
+    # The one cheap RSS pass deliberately precedes calendar and retry gates.
+    # A legitimate early YTS release can therefore become available without
+    # opening an individual Prowlarr search for any future-dated movie.
+    pending = _backfill_followed_release_dates(store, pending)
+    eligible = []
+    for item in pending:
+        eligibility = _followed_release_eligibility(item, now)
+        if eligibility['eligible']:
+            eligible.append(item)
+            continue
+        skipped[eligibility['reason']] += 1
+        if eligibility['patch']:
+            scan_updates.append(_followed_scan_update(item, eligibility['patch']))
+
+    eligible.sort(key=_followed_release_priority)
+    if eligible and context.get('ready'):
+        worker_count = max(1, min(FOLLOWED_RELEASE_WORKERS, len(eligible)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(_probe_followed_release, item, context): item
+                for item in eligible
+            }
+            for future in concurrent.futures.as_completed(futures):
+                item = futures[future]
+                prowlarr_searches += 1
+                try:
+                    result = future.result()
+                except Exception:
+                    result = {'searched': False, 'release': None}
+                if not result.get('searched'):
+                    scan_updates.append(_followed_scan_update(item, _followed_release_failure_patch(now)))
+                    failed_searches += 1
+                    continue
+                release = result.get('release')
+                if release:
+                    patch = _followed_release_available_patch(release, now)
+                    newly_available.append({**item, **patch})
+                else:
+                    patch = _followed_release_miss_patch(item, now)
+                scan_updates.append(_followed_scan_update(item, patch))
+    elif eligible:
+        failed_searches = len(eligible)
+        scan_updates.extend(
+            _followed_scan_update(item, _followed_release_failure_patch(now))
+            for item in eligible
+        )
+
+    merged = _sort_followed_releases(store.apply_followed_scan(updates=scan_updates))
     return {
-        'movies': checked,
+        'movies': merged,
         'removed_owned': removed_owned,
         'newly_available': newly_available,
         'checked_at': now,
+        'scan_stats': {
+            'total': len(current),
+            'rss_candidates': len(rss_candidates),
+            'eligible': len(eligible),
+            'rss_matches': rss_matches,
+            'prowlarr_searches': prowlarr_searches,
+            'failed_searches': failed_searches,
+            'skipped': skipped,
+            'duration_ms': round((time.perf_counter() - scan_started) * 1000, 1),
+        },
     }
 
 
@@ -3744,9 +4077,9 @@ def _reconcile_followed_release_ownership():
             removed_owned.append({**item, 'status': 'owned', 'owned': owned, 'updated_at': now})
         else:
             remaining.append(item)
-    remaining = _sort_followed_releases(remaining)
     if removed_owned:
-        store.save_followed_all(remaining)
+        remaining = store.apply_followed_scan(removals=removed_owned)
+    remaining = _sort_followed_releases(remaining)
     return {
         'movies': remaining,
         'removed_owned': removed_owned,
@@ -4816,6 +5149,8 @@ def _existing_qbittorrent_job_for_magnet(manager, magnet):
 
 @app.route('/api/qbittorrent/submit', methods=['POST'])
 def qbittorrent_submit():
+    if _power_action_coordinator_instance is not None and _power_action_coordinator_instance.submissions_blocked():
+        return jsonify({'error': 'CP is draining for a power action and cannot accept another download'}), 409
     if _qbt_mode != 'embedded':
         return jsonify({'error': 'Cinema Paradiso is configured to use the system torrent client'}), 409
     data = request.get_json(silent=True) or {}
@@ -4877,10 +5212,58 @@ def qbittorrent_finalize():
     try:
         manager = _get_qbittorrent_manager()
         results = manager.process_completed()
-        _handle_completed_qbittorrent_imports(manager, results)
+        _handle_completed_download_cycle(manager, results)
         return jsonify({'results': results})
     except QBittorrentError as error:
         return jsonify({'error': str(error)}), 502
+
+
+@app.route('/api/power/status')
+def power_status():
+    return jsonify(_power_status_payload())
+
+
+def _power_status_payload(status=None):
+    payload = dict(status or _power_action_coordinator().snapshot())
+    payload['torrent_client'] = {
+        'mode': _qbt_mode,
+        'can_close': _qbt_mode == 'embedded',
+    }
+    return payload
+
+
+@app.route('/api/power/actions', methods=['POST'])
+def power_action():
+    data = request.get_json(silent=True) or {}
+    try:
+        action = str(data.get('action') or '').strip().lower()
+        close_qbittorrent = bool(data.get('close_qbittorrent'))
+        if close_qbittorrent and (action != 'cp' or _qbt_mode != 'embedded'):
+            raise PowerActionError('Only CP embedded qBittorrent can be closed when turning off CP')
+        status = _power_action_coordinator().request(
+            action,
+            after_download=bool(data.get('after_download')),
+            close_qbittorrent=close_qbittorrent,
+        )
+        return jsonify(_power_status_payload(status))
+    except PowerActionError as error:
+        return jsonify({'error': str(error)}), 409
+
+
+@app.route('/api/power/cancel', methods=['POST'])
+def power_cancel():
+    try:
+        return jsonify(_power_status_payload(_power_action_coordinator().cancel()))
+    except PowerActionError as error:
+        return jsonify({'error': str(error)}), 409
+
+
+@app.route('/api/power/resume', methods=['POST'])
+def power_resume():
+    try:
+        return jsonify(_power_status_payload(_power_action_coordinator().resume()))
+    except PowerActionError as error:
+        return jsonify({'error': str(error)}), 409
 
 
 @app.route('/api/prowlarr/search')
@@ -5344,7 +5727,6 @@ def _library_query_filters(values=None):
         collection_paths = []
     return {
         'query': value('q', value('query')),
-        'quality': value('quality', 'all'),
         'resolution': value('resolution', 'all'),
         'source': value('source', 'all'),
         'genre': value('genre', 'all'),

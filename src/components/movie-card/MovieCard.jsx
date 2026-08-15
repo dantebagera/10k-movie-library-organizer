@@ -63,6 +63,7 @@ export function UnifiedMovieCard({
   mutedChips = [],
   statusLabel = '',
   statusTone = 'neutral',
+  following = false,
   ownedBadge = false,
   expanded = false,
   selected = false,
@@ -156,6 +157,7 @@ export function UnifiedMovieCard({
           {chips.filter(Boolean).map((chip) => (
             <span className="unified-chip" dir="auto" key={chip}>{chip}</span>
           ))}
+          {following ? <span className="unified-status-chip unified-status-following">Following</span> : null}
           {ownedBadge ? <span className="unified-owned-badge">Owned</span> : null}
           {mutedChips.map((chip, index) => {
             const label = typeof chip === 'object' ? chip?.label : chip;

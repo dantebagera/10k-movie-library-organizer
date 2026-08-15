@@ -621,7 +621,6 @@ test('buildLibraryViewModel preserves Library filtering sorting pagination and s
     pageSize: 1,
     currentPage: 2,
     query: '',
-    qualityFilter: 'all',
     plexFilter: 'all',
     sortMode: 'year-asc',
     genreFilter: 'all',
@@ -663,7 +662,7 @@ test('buildLibraryViewModel preserves Library filtering sorting pagination and s
   const upgradeView = buildLibraryViewModel({
     items,
     mode: 'movie',
-    qualityFilter: 'upgrade',
+    resolutionFilter: 'upgrade',
     pageSize: 40,
     currentPage: 1
   });

@@ -46,10 +46,13 @@ class LibraryActionUxTest(unittest.TestCase):
         cls.source_review_api_source = SOURCE_REVIEW_API.read_text(encoding="utf-8")
         cls.source_review_dialog_source = SOURCE_REVIEW_DIALOG.read_text(encoding="utf-8")
         cls.library_workspace_source = LIBRARY_WORKSPACE.read_text(encoding="utf-8")
+        cls.styles_source = STYLES.read_text(encoding="utf-8")
 
-    def test_library_daily_actions_are_file_scan_and_unmatched_review(self):
-        self.assertIn("Rescan Files", self.source)
-        self.assertIn("Review Unmatched", self.source)
+    def test_library_header_keeps_compact_rescan_and_removes_duplicate_shortcuts(self):
+        self.assertIn('aria-label="Rescan library files"', self.library_workspace_source)
+        self.assertIn('className="btn btn-secondary library-rescan-button"', self.library_workspace_source)
+        self.assertNotIn('className="library-action-row"', self.library_workspace_source)
+        self.assertNotIn('onReviewUnmatched', self.library_workspace_source)
         self.assertIn("params.set('force_scan', '1')", self.source)
         self.assertIn("/api/library/reconcile", self.source)
         self.assertIn("cp-library-reconciled", self.source)
@@ -96,16 +99,23 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("<OwnedFileDetailsButton", self.shared_cards_source)
         self.assertIn("onOpenFileDetails={openOwnedFileDetails}", self.source)
 
-    def test_library_action_row_does_not_expose_plex_sync(self):
-        match = re.search(
-            r'<div className="library-action-row">(.*?)<button type="button" className="btn btn-secondary" onClick=\{\(\) => setListEditor',
-            self.source,
-            flags=re.S,
-        )
-        self.assertIsNotNone(match, "Library action row should be present")
-        self.assertNotIn("Sync Plex", match.group(1))
-        self.assertNotIn("force_plex", match.group(1))
-        self.assertNotIn("Fetch Metadata", match.group(1))
+    def test_library_header_does_not_expose_maintenance_or_list_navigation(self):
+        header_start = self.library_workspace_source.index('<div className="library-header">')
+        header = self.library_workspace_source[
+            header_start:self.library_workspace_source.index('<form', header_start)
+        ]
+        self.assertNotIn("Review Unmatched", header)
+        self.assertNotIn("New list", header)
+        self.assertNotIn("My Lists", header)
+        self.assertNotIn("Sync Plex", header)
+
+    def test_library_and_discover_search_type_selects_share_cp_styling(self):
+        self.assertIn('aria-label="Library search type"', self.library_workspace_source)
+        self.assertIn('aria-label="TMDB search type"', self.discover_source)
+        self.assertIn('.discover-search-panel select,', self.styles_source)
+        self.assertIn('.library-search-panel[data-people-search="true"] select {', self.styles_source)
+        self.assertIn('appearance: none;', self.styles_source)
+        self.assertIn("stroke='%23d4af37'", self.styles_source)
 
     def test_unmatched_shortcut_targets_maintenance_identity_tab(self):
         self.assertIn("reviewUnmatchedMetadata", self.source)
@@ -216,21 +226,20 @@ class LibraryActionUxTest(unittest.TestCase):
 
     def test_home_health_refreshes_when_library_changes(self):
         self.assertIn("function announceLibraryChanged", self.source)
-        self.assertIn("window.addEventListener('cp-library-changed', refreshHealthStats)", self.source)
-        self.assertIn("window.removeEventListener('cp-library-changed', refreshHealthStats)", self.source)
+        self.assertIn("window.addEventListener('cp-library-changed', refreshHomeLibraryState)", self.source)
+        self.assertIn("window.removeEventListener('cp-library-changed', refreshHomeLibraryState)", self.source)
         self.assertIn("announceLibraryChanged({ source: 'manual-rescan'", self.source)
 
     def test_maintenance_delete_refreshes_maintenance_and_home_counts(self):
-        self.assertIn(
-            "announceLibraryChanged({ source: 'maintenance-delete', deleted_paths: deletedPaths })",
-            self.cleanup_workspace_source,
-        )
+        self.assertIn("source: 'maintenance-delete'", self.cleanup_workspace_source)
+        self.assertIn("deleted_paths: deletedPaths", self.cleanup_workspace_source)
+        self.assertIn("catalog_generation: result.catalog_generation", self.cleanup_workspace_source)
         self.assertIn(
             "window.addEventListener('cp-library-changed', refreshForLibraryChange)",
             self.cleanup_workspace_source,
         )
         self.assertIn(
-            "window.addEventListener('cp-library-changed', refreshHealthStats)",
+            "window.addEventListener('cp-library-changed', refreshHomeLibraryState)",
             self.source,
         )
 
@@ -334,11 +343,11 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("list movies found in Library", self.source)
         self.assertIn("Missing:", self.source)
 
-    def test_lists_popup_exposes_select_all_and_copy_export(self):
-        self.assertIn("list-select-all", self.source)
-        self.assertIn("Copy selected to", self.source)
+    def test_movie_lists_workspace_owns_select_all_and_copy_export(self):
+        self.assertIn("movie-lists-select-all", self.movie_lists_source)
+        self.assertIn("Copy selected to", self.movie_lists_source)
         self.assertIn("/api/library/export-jobs", self.export_dialog_source)
-        self.assertIn("ExportCopyDialog", self.source)
+        self.assertIn("ExportCopyDialog", self.movie_lists_source)
 
     def test_bulk_add_to_list_falls_back_when_backend_route_is_missing(self):
         self.assertIn("bulkError.status !== 404", self.curation_api_source)
@@ -370,7 +379,7 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertEqual(self.source.count("fetchJson('/api/library/check'"), 2)
         self.assertIn("clearOwnershipCheckCache();", self.source)
         self.assertIn("const ownershipResults = await fetchOwnershipChecks", self.source)
-        self.assertIn("setOwnership((state) => ({ ...state, ...buildOwnershipMap(ownershipResults) }))", self.source)
+        self.assertIn("replaceOwnershipScope(state, payload, ownershipResults)", self.source)
 
     def test_copy_dialog_has_folder_browser_and_library_has_reset_filters(self):
         self.assertIn("FolderBrowserDialog", self.export_dialog_source)
@@ -378,6 +387,30 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn("Browse...", self.export_dialog_source)
         self.assertIn("Reset filters", self.source)
         self.assertIn("resetAllLibraryFilters", self.source)
+
+    def test_library_unifies_quality_into_resolution_and_uses_minimal_filter_actions(self):
+        self.assertNotIn('aria-label="Library quality filter"', self.library_workspace_source)
+        self.assertNotIn("qualityFilter", self.library_workspace_source)
+        self.assertIn('aria-label="Library resolution filter"', self.library_workspace_source)
+        self.assertIn('<option value="upgrade">Upgrade candidates</option>', self.library_workspace_source)
+        self.assertIn('aria-label="Open filters"', self.library_workspace_source)
+        self.assertIn('aria-label="Reset filters"', self.library_workspace_source)
+        self.assertIn('aria-label="Hide filters"', self.library_workspace_source)
+        self.assertIn('<Filter size={17} />', self.library_workspace_source)
+        self.assertIn('<RefreshCcw size={17} />', self.library_workspace_source)
+        self.assertIn('<ChevronUp size={18} />', self.library_workspace_source)
+        self.assertIn("setLibraryFilterRequest({ id: Date.now(), resolution: 'upgrade' })", self.source)
+        self.assertNotIn('className="library-filter-actions"', self.library_workspace_source)
+        self.assertIn("grid-template-columns: repeat(5, minmax(125px, 1fr)) 38px;", self.styles_source)
+        self.assertIn(".library-filter-toolbar-file {", self.styles_source)
+        self.assertIn("grid-template-columns: repeat(3, minmax(180px, 1fr)) 38px;", self.styles_source)
+        self.assertIn(".library-hide-filters {", self.styles_source)
+        self.assertIn(".library-reset-filters {", self.styles_source)
+        self.assertIn("grid-column: -2 / -1;", self.styles_source)
+        self.assertIn("grid-row: 1;", self.styles_source)
+        self.assertIn("grid-row: 2;", self.styles_source)
+        self.assertIn(".library-toolbar .btn.library-filter-icon-button {", self.styles_source)
+        self.assertIn("width: 38px;", self.styles_source)
 
     def test_library_chrome_is_condensed_without_removing_second_header(self):
         library_source = self.source[
@@ -389,7 +422,7 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertNotIn('className="library-stat-strip"', library_source)
         self.assertIn('className="library-search-panel"', library_source)
         self.assertIn("filtersOpen", library_source)
-        self.assertIn("Open Filters", library_source)
+        self.assertIn("Open filters", library_source)
         self.assertNotIn('className="library-results-meta"', library_source)
 
     def test_cleanup_help_and_settings_do_not_render_shared_topbar(self):
@@ -439,6 +472,12 @@ class LibraryActionUxTest(unittest.TestCase):
         ]
         self.assertNotIn("setSelected", loader_source)
         self.assertIn("previousMaintenanceSelectionScopeRef", cleanup_source)
+        self.assertIn("duplicateSelectionTrackingRef", cleanup_source)
+        self.assertIn("file.recommendation === 'recommended'", cleanup_source)
+        self.assertIn("tracking.userTouched.has(path)", cleanup_source)
+        self.assertIn("Why CP did not automatically select this file", self.source)
+        self.assertIn("Warnings to review", self.source)
+        self.assertIn("Evidence that passed", self.source)
         self.assertIn("onClear={() => onSelectPaths('storage', selectedPaths, false)}", self.source)
         self.assertNotIn("/api/duplicates", cleanup_source)
         self.assertNotIn("/api/smart-scan", cleanup_source)

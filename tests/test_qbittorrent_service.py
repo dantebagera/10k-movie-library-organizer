@@ -195,6 +195,16 @@ class QBittorrentPlatformTests(unittest.TestCase):
 
 
 class QBittorrentSafetyTests(unittest.TestCase):
+    def test_shutdown_never_targets_a_system_managed_client(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = QBittorrentManager(root, {"mode": "system"}, [])
+            manager._stop_running = MagicMock()
+
+            with self.assertRaisesRegex(QBittorrentError, "system-managed"):
+                manager.shutdown()
+
+            manager._stop_running.assert_not_called()
+
     def test_validates_only_btih_or_btmh_magnets(self):
         self.assertTrue(validate_magnet_url("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"))
         self.assertTrue(validate_magnet_url("magnet:?xt=urn:btmh:1220" + ("a" * 64)))

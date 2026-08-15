@@ -28,8 +28,8 @@ import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
 import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import {
-  buildOwnershipMap, discoverMoviePayload, filterEnrichedIndexerResults,
-  listsForDiscoverMovie, ownedMovieFor, sortTorrentVariants
+  discoverMoviePayload, filterEnrichedIndexerResults, listsForDiscoverMovie,
+  ownedMovieFor, removeOwnershipPaths, replaceOwnershipScope, sortTorrentVariants
 } from '../../discoverUtils.js';
 import { applySystemListState, getCompactQualityLabel, isLowQuality, movieIdentityKey, moviePayload, resolutionRank } from '../../utils/libraryUtils.js';
 import { formatVoteCount } from '../../utils/moviePresentation.js';
@@ -250,11 +250,28 @@ export default function DiscoverWorkspace({
     if (!payload.length) return;
     try {
       const ownershipResults = await fetchOwnershipChecks(payload);
-      setOwnership((state) => ({ ...state, ...buildOwnershipMap(ownershipResults) }));
+      setOwnership((state) => replaceOwnershipScope(state, payload, ownershipResults));
     } catch {
       // Ownership is best effort for online discovery.
     }
   }
+
+  const ownershipScopeMovies = useMemo(() => (
+    [...discoverResults, ...browseRows, ...pickResults].filter((movie) => movie?.title)
+  ), [browseRows, discoverResults, pickResults]);
+
+  useEffect(() => {
+    const refreshOwnership = (event) => {
+      setOwnership((state) => removeOwnershipPaths(state, event?.detail?.deleted_paths));
+      checkOwnership(ownershipScopeMovies);
+    };
+    window.addEventListener('cp-library-changed', refreshOwnership);
+    window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, refreshOwnership);
+    return () => {
+      window.removeEventListener('cp-library-changed', refreshOwnership);
+      window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, refreshOwnership);
+    };
+  }, [ownershipScopeMovies]);
 
   const loadUserLists = useCallback(async (options = {}) => {
     try {
@@ -1049,6 +1066,16 @@ export default function DiscoverWorkspace({
     setExpandedMovieKey(nextKey);
     if (nextKey) loadDiscoverDetails(movie, owned);
   }
+
+  const expandedOwnershipMovie = ownershipScopeMovies.find((movie) => movieKey(movie) === expandedMovieKey) || null;
+  const expandedOwnership = expandedOwnershipMovie ? ownedMovieFor(expandedOwnershipMovie, ownership) : null;
+  const expandedDetailsKey = movieDetailsCacheKey(expandedOwnershipMovie, expandedOwnership);
+
+  useEffect(() => {
+    if (!expandedMovieKey || !expandedOwnershipMovie || !expandedDetailsKey) return;
+    const cached = detailsCache[expandedDetailsKey];
+    if (!cached || cached.stale) loadDiscoverDetails(expandedOwnershipMovie, expandedOwnership);
+  }, [expandedDetailsKey]);
 
   async function createDiscoverList(name) {
     const created = await fetchCurationJson('/api/user/lists', {
@@ -1938,6 +1965,7 @@ export default function DiscoverWorkspace({
                     movie={movie}
                     selectedIndex={selectedIndex}
                     owned={owned}
+                    followed={followed.some((item) => movieKey(item) === movieKey(movie))}
                     expanded={expandedMovieKey === movieKey(movie)}
                     details={details}
                     collection={collectionView.data}
@@ -2175,6 +2203,7 @@ function IndexerMovieCard({
   movie,
   selectedIndex,
   owned,
+  followed,
   expanded,
   details,
   collection,
@@ -2232,6 +2261,7 @@ function IndexerMovieCard({
       ]}
       statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : `${formatCount(selectedVariant.seeders)} seeders`}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : 'neutral'}
+      following={followed}
       ownedBadge={Boolean(owned)}
       expanded={expanded}
       onToggle={onToggleDetails}

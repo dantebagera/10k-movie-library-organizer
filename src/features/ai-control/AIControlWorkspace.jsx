@@ -14,7 +14,10 @@ import { DiscoverMovieCard } from '../../components/SharedMovieCards.jsx';
 import useCardGridMetrics from '../../hooks/useCardGridMetrics.js';
 import useMovieCollectionCache from '../../hooks/useMovieCollectionCache.js';
 import { cx, formatCount, movieKey } from '../../utils/appUtils.js';
-import { buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor } from '../../discoverUtils.js';
+import {
+  buildOwnershipMap, discoverMoviePayload, listsForDiscoverMovie, ownedMovieFor,
+  removeOwnershipPaths, replaceOwnershipScope
+} from '../../discoverUtils.js';
 import { applySystemListState, movieIdentityKey, moviePayload } from '../../utils/libraryUtils.js';
 
 const aiControlExamples = [
@@ -482,6 +485,7 @@ function AIControlCardResults({
   gridRef
 }) {
   const [ownership, setOwnership] = useState(() => buildAiControlOwnershipMap(rows));
+  const [ownershipResolved, setOwnershipResolved] = useState(false);
   const [userLists, setUserLists] = useState([]);
   const [detailsCache, setDetailsCache] = useState({});
   const {
@@ -490,6 +494,7 @@ function AIControlCardResults({
     load: loadMovieCollection
   } = useMovieCollectionCache();
   const [expandedMovieKey, setExpandedMovieKey] = useState('');
+  const [ownershipRefreshKey, setOwnershipRefreshKey] = useState(0);
   const [listEditorTarget, setListEditorTarget] = useState(null);
   const ownershipRequestSeq = useRef(0);
   const movies = rows || [];
@@ -533,12 +538,34 @@ function AIControlCardResults({
     const requestSeq = ownershipRequestSeq.current + 1;
     ownershipRequestSeq.current = requestSeq;
     setOwnership(buildAiControlOwnershipMap(movies));
+    setOwnershipResolved(false);
     setExpandedMovieKey('');
-    checkAiControlOwnership(movies, requestSeq);
     return () => {
       if (ownershipRequestSeq.current === requestSeq) ownershipRequestSeq.current += 1;
     };
   }, [ownershipScopeKey]);
+
+  useEffect(() => {
+    const requestSeq = ownershipRequestSeq.current + 1;
+    ownershipRequestSeq.current = requestSeq;
+    checkAiControlOwnership(movies, requestSeq);
+    return () => {
+      if (ownershipRequestSeq.current === requestSeq) ownershipRequestSeq.current += 1;
+    };
+  }, [ownershipRefreshKey, ownershipScopeKey]);
+
+  useEffect(() => {
+    const refreshOwnership = (event) => {
+      setOwnership((state) => removeOwnershipPaths(state, event?.detail?.deleted_paths));
+      setOwnershipRefreshKey((value) => value + 1);
+    };
+    window.addEventListener('cp-library-changed', refreshOwnership);
+    window.addEventListener(CATALOG_GENERATION_CHANGED_EVENT, refreshOwnership);
+    return () => {
+      window.removeEventListener('cp-library-changed', refreshOwnership);
+      window.removeEventListener(CATALOG_GENERATION_CHANGED_EVENT, refreshOwnership);
+    };
+  }, []);
 
   async function checkAiControlOwnership(items, requestSeq) {
     const payload = (items || []).filter((movie) => movie?.title);
@@ -546,7 +573,8 @@ function AIControlCardResults({
     try {
       const ownershipResults = await fetchOwnershipChecks(payload);
       if (requestSeq !== ownershipRequestSeq.current) return;
-      setOwnership((state) => ({ ...state, ...buildOwnershipMap(ownershipResults) }));
+      setOwnership((state) => replaceOwnershipScope(state, payload, ownershipResults));
+      setOwnershipResolved(true);
     } catch {
       // AI Control card view can still render without best-effort ownership enrichment.
     }
@@ -577,8 +605,20 @@ function AIControlCardResults({
     if (nextKey) loadAiControlDetails(movie, owned);
   }
 
+  const expandedOwnershipMovie = movies.find((movie) => movieKey(movie) === expandedMovieKey) || null;
+  const expandedOwnership = expandedOwnershipMovie
+    ? ownedMovieFor(expandedOwnershipMovie, ownership) || (!ownershipResolved && expandedOwnershipMovie.path ? expandedOwnershipMovie : null)
+    : null;
+  const expandedDetailsKey = movieDetailsCacheKey(expandedOwnershipMovie, expandedOwnership);
+
+  useEffect(() => {
+    if (!expandedMovieKey || !expandedOwnershipMovie || !expandedDetailsKey) return;
+    const cached = detailsCache[expandedDetailsKey];
+    if (!cached || cached.stale) loadAiControlDetails(expandedOwnershipMovie, expandedOwnership);
+  }, [expandedDetailsKey]);
+
   async function openAiControlTrailer(movie) {
-    const owned = ownedMovieFor(movie, ownership) || (movie.path ? movie : null);
+    const owned = ownedMovieFor(movie, ownership) || (!ownershipResolved && movie.path ? movie : null);
     if (!movieDetailsCacheKey(movie, owned)) {
       onOpenTrailer(movie, '');
       return;
@@ -679,7 +719,7 @@ function AIControlCardResults({
 
       <DiscoverResultGrid gridRef={gridRef} emptyText="No AI Control movies are available for card display.">
         {movies.map((movie, index) => {
-          const owned = ownedMovieFor(movie, ownership) || (movie.path ? movie : null);
+          const owned = ownedMovieFor(movie, ownership) || (!ownershipResolved && movie.path ? movie : null);
           const details = detailsCache[movieDetailsCacheKey(movie, owned)] || null;
           const collectionView = getCollectionView(details);
           const movieWithDetails = details ? { ...movie, plot: movie.plot || details.plot || '', release_date: movie.release_date || details.release_date || '' } : movie;

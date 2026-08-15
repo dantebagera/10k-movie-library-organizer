@@ -210,7 +210,10 @@ def _atomic_json_write(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, path)
 
 
@@ -636,6 +639,12 @@ class QBittorrentManager:
             except Exception:
                 return
         raise QBittorrentError("Embedded qBittorrent did not stop for the update")
+
+    def shutdown(self):
+        """Stop the CP-managed qBittorrent process after its state is checkpointed."""
+        if self.settings.get("mode", "embedded") != "embedded":
+            raise QBittorrentError("Cinema Paradiso cannot stop a system-managed qBittorrent client")
+        self._stop_running()
 
     def _restore_runtime_state(self, state):
         if state:

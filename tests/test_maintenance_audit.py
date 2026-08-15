@@ -390,6 +390,59 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertEqual(group["files"][0]["verdict"], "quality_winner_verify_cut")
         self.assertEqual(group["files"][1]["verdict"], "unique_features")
         self.assertIn("2 audio channels versus 6", group["files"][1]["reason"])
+        self.assertTrue(any(
+            "2 audio channels versus 6" in blocker
+            for blocker in group["files"][1]["decision_blockers"]
+        ))
+
+    def test_hollow_man_missing_bitrates_and_dc_marker_warn_without_blocking(self):
+        high = candidate(
+            "E:/Movies/Hollow.Man.2000.1080p.BluRay.x264.AAC5.1.mp4",
+            identity_title="Hollow Man",
+            identity_year="2000",
+            tmdb_id="9383",
+            imdb_id="tt0164052",
+            resolution="1080p",
+            rip_source="Blu-ray",
+            video_width=1918,
+            video_height=1040,
+            video_bitrate=2_250_000,
+            duration_ms=7_155_148,
+            audio_channels=6,
+            audio_bitrate=384_000,
+            size=2_360_616_680,
+        )
+        low = candidate(
+            "E:/Movies/Hollow.Man.2000.DC.720p.BRRip.x264.YIFY.mkv",
+            identity_title="Hollow Man",
+            identity_year="2000",
+            tmdb_id="9383",
+            imdb_id="tt0164052",
+            resolution="720p",
+            rip_source="BDRip",
+            video_width=1280,
+            video_height=692,
+            video_bitrate=0,
+            duration_ms=7_155_155,
+            audio_channels=2,
+            audio_bitrate=0,
+            size=790_852_266,
+        )
+
+        audit = build_maintenance_audit([low, high])
+
+        group = audit["storage"]["groups"][0]
+        rows = {row["filename"]: row for row in group["files"]}
+        removal = rows["Hollow.Man.2000.DC.720p.BRRip.x264.YIFY.mkv"]
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertEqual(removal["verdict"], "recommended_removal")
+        self.assertEqual(removal["decision_blockers"], [])
+        self.assertTrue(any("video bitrate" in warning for warning in removal["decision_warnings"]))
+        self.assertTrue(any("primary-audio bitrate" in warning for warning in removal["decision_warnings"]))
+        self.assertTrue(any("Director's Cut" in warning for warning in removal["decision_warnings"]))
+        self.assertTrue(any("runtime" in passed for passed in removal["decision_passed"]))
+        self.assertTrue(any("2.25x" in passed for passed in removal["decision_passed"]))
 
     def test_resolution_does_not_erase_source_or_bit_depth_tradeoffs(self):
         cases = {

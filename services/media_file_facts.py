@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterable
 
 
 FILE_FACTS_VERSION = 2
-QUALITY_CLASSIFIER_VERSION = 1
+QUALITY_CLASSIFIER_VERSION = 2
 
 QUALITY_RANK = {"4K": 4, "1080p": 3, "720p": 2, "480p": 1, "Unknown": 0}
 
@@ -26,9 +26,8 @@ UHD_LONG_EDGE = 3200
 UHD_SHORT_EDGE = 1350
 UHD_MIN_PIXELS = 5_000_000
 FULL_HD_LONG_EDGE = 1700
-FULL_HD_SHORT_EDGE = 720
 FULL_HD_UNUSUAL_MIN_EDGE = 800
-FULL_HD_UNUSUAL_MIN_PIXELS = 1_050_000
+FULL_HD_MIN_PIXELS = 1_050_000
 HD_LONG_EDGE = 1200
 HD_SHORT_EDGE = 500
 HD_ALT_SHORT_EDGE = 700
@@ -118,10 +117,10 @@ def classify_dimensions(width: Any, height: Any, claim: str = "Unknown") -> Qual
     if long_edge >= UHD_LONG_EDGE and short_edge >= UHD_SHORT_EDGE and pixels >= UHD_MIN_PIXELS:
         quality = "4K"
     elif (
-        (long_edge >= FULL_HD_LONG_EDGE and short_edge >= FULL_HD_SHORT_EDGE)
+        (long_edge >= FULL_HD_LONG_EDGE and pixels >= FULL_HD_MIN_PIXELS)
         or (
             short_edge >= FULL_HD_UNUSUAL_MIN_EDGE
-            and pixels >= FULL_HD_UNUSUAL_MIN_PIXELS
+            and pixels >= FULL_HD_MIN_PIXELS
         )
     ):
         quality = "1080p"

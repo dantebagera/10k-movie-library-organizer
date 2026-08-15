@@ -9,6 +9,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .iptv_metadata_settings import IPTVMetadataSettings
+from .iptv_movie_service import IPTVMovieService
 from .iptv_service import IPTVService
 from .iptv_xtream import normalize_server_url
 
@@ -116,6 +118,8 @@ class IPTVProviderManager:
         self.ffmpeg_path = ffmpeg_path
         self._lock = threading.RLock()
         self._services = {}
+        self._movie_services = {}
+        self.metadata_settings = IPTVMetadataSettings(Path(user_data_dir).resolve())
         self.root.mkdir(parents=True, exist_ok=True)
         self.providers_root.mkdir(parents=True, exist_ok=True)
         if migrate_legacy:
@@ -199,9 +203,35 @@ class IPTVProviderManager:
                     self._provider_path(record["provider_id"]),
                     record["provider_id"],
                     ffmpeg_path=self.ffmpeg_path,
+                    on_catalog_committed=self._catalog_committed,
                 )
                 self._services[record["provider_id"]] = service
             return service
+
+    def movie_service(self, provider_id):
+        with self._lock:
+            record = self._record(provider_id)
+            movie_service = self._movie_services.get(record["provider_id"])
+            if movie_service is None:
+                movie_service = IPTVMovieService(
+                    self._provider_path(record["provider_id"]),
+                    record["provider_id"],
+                    self.service(record["provider_id"]),
+                    self.metadata_settings,
+                )
+                self._movie_services[record["provider_id"]] = movie_service
+            return movie_service
+
+    def _catalog_committed(self, provider_id):
+        """Begin TMDB-free provider-local projection after raw sync commits."""
+        try:
+            self.movie_service(provider_id).start_projection(wait=False)
+        except Exception:
+            # Projection owns and exposes its own retryable status. A local
+            # preparation failure must never turn a successful raw sync into a
+            # Live TV or Series failure.
+            return False
+        return True
 
     @staticmethod
     def _identity(server_url, username):
@@ -343,6 +373,9 @@ class IPTVProviderManager:
             record = self._record(provider_id)
             if str(confirm_name or "") != record["name"]:
                 raise ValueError("Type the provider name exactly to remove it")
+            movie_service = self._movie_services.pop(record["provider_id"], None)
+            if movie_service:
+                movie_service.close()
             service = self._services.pop(record["provider_id"], None)
             if service:
                 service.close()
@@ -408,12 +441,16 @@ class IPTVProviderManager:
                 if secret:
                     message = message.replace(str(secret), "[redacted]")
         message = re.sub(r"(?i)(username|password)=([^&\s]+)", r"\1=[redacted]", message)
-        return message[:300]
+        return self.metadata_settings.redact(message)[:300]
 
     def close(self):
         with self._lock:
+            movie_services = list(self._movie_services.values())
+            self._movie_services.clear()
             services = list(self._services.values())
             self._services.clear()
+        for movie_service in movie_services:
+            movie_service.close()
         for service in services:
             service.close()
 

@@ -52,9 +52,13 @@ class FullRowCardGridUiTests(unittest.TestCase):
 
     def test_iptv_sends_the_measured_page_size_to_the_existing_api(self):
         self.assertIn("page_size: browsePageSize", self.iptv)
-        self.assertIn("ref={gridRef} className=\"iptv-movie-grid\"", self.iptv)
+        self.assertIn("ref={gridRef} className=\"discover-grid iptv-movie-grid\"", self.iptv)
         self.assertIn("ref={gridRef} className=\"iptv-poster-grid\"", self.iptv)
         self.assertIn("favoriteKind === 'all'", self.iptv)
+
+    def test_iptv_movies_reuse_the_discover_and_library_grid_owner(self):
+        iptv_css = (ROOT / "src" / "features" / "iptv" / "iptv.css").read_text(encoding="utf-8")
+        self.assertNotIn(".iptv-movie-grid", iptv_css)
 
     def test_discover_uses_measured_counts_for_every_remote_card_grid(self):
         self.assertIn("page_size: String(discoverMoviePageSize)", self.discover)

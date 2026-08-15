@@ -67,12 +67,18 @@ if not exist "dist\index.html" (
 
 echo.
 echo Launching Flask backend at http://localhost:5000 ...
-start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process 'http://localhost:5000'"
+start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0tools\cp_window.ps1" -Action Launch -ProjectRoot "%PROJECT_ROOT%" -Port 5000
 ".venv\Scripts\python.exe" app.py
 set APP_EXIT=%ERRORLEVEL%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\cp_window.ps1" -Action Close -ProjectRoot "%PROJECT_ROOT%" -Port 5000 >nul 2>nul
+if "%APP_EXIT%"=="75" (
+    echo Restarting Cinema Paradiso in a new command window...
+    start "Cinema Paradiso" "%ComSpec%" /d /c call "%~f0" --restart
+    exit /b 0
+)
 if not "%APP_EXIT%"=="0" (
     echo Flask stopped with exit code %APP_EXIT%.
     pause
     exit /b %APP_EXIT%
 )
-pause
+exit /b 0

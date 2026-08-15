@@ -846,6 +846,48 @@ class LibraryIngestionCoordinator:
                 "last_error": self._last_error,
             }
 
+    def checkpoint_for_shutdown(self, timeout_seconds=30):
+        """Stop new ingestion while leaving queued work recoverable at startup.
+
+        A queued retry has already written its current file state to the catalog.
+        Waiting for every retry would make a safe shutdown wait for hours. Mark
+        affected roots dirty, discard only those in-memory retries, and let the
+        active reconciliation finish before exit.
+        """
+        deadline = time.monotonic() + max(0, float(timeout_seconds))
+        with self._queue_condition:
+            self._accepting = False
+            for item in self._pending.values():
+                value = item.get("value")
+                if not value or item.get("type") == "all":
+                    self._dirty_roots.update(
+                        self.normalize_path(root) for root in self.dependencies.roots()
+                    )
+                    continue
+                root = self._root_for_path(value)
+                if root:
+                    self._dirty_roots.add(self.normalize_path(root))
+            self._pending.clear()
+            self._queue_condition.notify_all()
+            dispatcher = self._dispatcher
+        if dispatcher:
+            dispatcher.join(timeout=max(0, deadline - time.monotonic()))
+        if dispatcher and dispatcher.is_alive():
+            return False
+        remaining = max(0, deadline - time.monotonic())
+        acquired = self._run_lock.acquire(timeout=remaining)
+        if not acquired:
+            return False
+        self._run_lock.release()
+        return True
+
+    def resume_after_shutdown_failure(self):
+        """Resume background ingestion when an OS power command was rejected."""
+        with self._queue_condition:
+            self._accepting = True
+            self._ensure_dispatcher_locked()
+            self._queue_condition.notify_all()
+
     def shutdown(self, timeout_seconds=10):
         with self._queue_condition:
             self._accepting = False

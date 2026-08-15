@@ -40,7 +40,7 @@ def _safe_int(value):
 class IPTVService:
     ORPHANED_PLAYBACK_MAX_AGE = 24 * 60 * 60
 
-    def __init__(self, provider_root, provider_id, ffmpeg_path=None):
+    def __init__(self, provider_root, provider_id, ffmpeg_path=None, on_catalog_committed=None):
         self.provider_id = str(provider_id or "")
         if not self.provider_id:
             raise ValueError("An IPTV provider ID is required")
@@ -58,6 +58,7 @@ class IPTVService:
         self._sync_state = {"state": "idle", "phase": "", "error": "", "started_at": 0, "finished_at": 0}
         self._sessions = {}
         self._session_lock = threading.RLock()
+        self.on_catalog_committed = on_catalog_committed
 
     def _cleanup_orphaned_playback_directories(self, max_age=None):
         cutoff = time.time() - max(60, int(max_age or self.ORPHANED_PLAYBACK_MAX_AGE))
@@ -239,6 +240,8 @@ class IPTVService:
                 catalog[kind] = {"categories": categories(), "items": items()}
             self._set_sync_phase("Saving IPTV catalog")
             self.store.replace_catalog(catalog)
+            if self.on_catalog_committed:
+                self.on_catalog_committed(self.provider_id)
             with self._sync_lock:
                 self._sync_state.update({"state": "complete", "phase": "", "finished_at": time.time()})
         except Exception as error:
@@ -257,6 +260,14 @@ class IPTVService:
             cached = self.client().movie_info(item_id) if kind == "movie" else self.client().series_info(item_id)
             self.store.cache_detail(kind, item_id, cached)
         return self._normalize_movie_detail(item, cached) if kind == "movie" else self._normalize_series_detail(item, cached)
+
+    def enrichment_movie_detail(self, item_id):
+        """Fetch movie evidence without writing the replaceable raw detail cache."""
+        item = self.store.get_item("movie", item_id, provider_key=self.provider_key())
+        if not item:
+            raise KeyError("IPTV item was not found")
+        payload = self.client().movie_info(item_id)
+        return self._normalize_movie_detail(item, payload)
 
     @staticmethod
     def _normalize_movie_detail(item, payload):

@@ -628,6 +628,7 @@ export default function MovieListsWorkspace({
                       <LibraryMovieCard
                         key={row.identityKey}
                         item={row.ownedItem}
+                        followed={followed.some((item) => movieKey(item) === movieKey(cardMovie))}
                         expanded={expandedKey === row.identityKey}
                         details={details}
                         collection={collectionView.data}

@@ -172,6 +172,24 @@ class LibraryIngestionQueueTest(unittest.TestCase):
         self.assertEqual(maximum, 1)
         self.assertEqual(coordinator.status()["queue_depth"], 0)
 
+    def test_power_checkpoint_drops_only_memory_queue_and_can_resume_after_failure(self):
+        coordinator = LibraryIngestionCoordinator(_dependencies(self.root))
+        coordinator._ensure_dispatcher_locked = lambda: None
+        path = self.root / "Retry.Next.Start.2026.mkv"
+
+        coordinator.reconcile_paths([path], reason="qbittorrent")
+        self.assertEqual(coordinator.status()["queue_depth"], 1)
+
+        self.assertTrue(coordinator.checkpoint_for_shutdown())
+        status = coordinator.status()
+        self.assertFalse(status["accepting"])
+        self.assertEqual(status["queue_depth"], 0)
+        self.assertEqual(len(status["dirty_root_ids"]), 1)
+
+        coordinator.resume_after_shutdown_failure()
+        self.assertTrue(coordinator.status()["accepting"])
+        coordinator.shutdown()
+
     def test_final_commit_completes_before_catalog_event_is_published(self):
         timeline = []
         path = self.root / "Final.Movie.2026.mkv"

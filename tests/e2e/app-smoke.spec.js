@@ -200,6 +200,7 @@ test('release watcher keeps a three-row preview while View all and Following exp
     title: `Followed Movie ${index + 1}`,
     year: '2026',
     status: index < 2 ? 'available' : 'watching',
+    release_date: '2099-08-20',
     followed_at: 1000 - index,
     updated_at: 1000 - index,
     poster_url: ''
@@ -238,11 +239,27 @@ test('release watcher keeps a three-row preview while View all and Following exp
     } });
   });
   await page.route('**/api/tmdb/card-projections', (route) => route.fulfill({ json: { items: {}, catalog_generation: 1 } }));
+  await page.route('**/api/streaming/config', (route) => route.fulfill({ json: {
+    enabled: true,
+    label: 'Stream',
+    url_template: 'https://stream.example.test/{imdb_id}'
+  } }));
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   const releasePanel = page.locator('.release-panel');
   await expect(releasePanel.locator('.release-item')).toHaveCount(3);
   await expect.poll(() => fullScanRequests).toBe(1);
+
+  await releasePanel.locator('.release-item').filter({ hasText: 'Followed Movie 1' }).click();
+  const inspector = page.locator('.inspector');
+  await expect(inspector.getByRole('heading', { name: 'Followed Movie 1' })).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Find torrent' })).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Stream' })).toBeVisible();
+
+  await releasePanel.locator('.release-item').filter({ hasText: 'Followed Movie 3' }).click();
+  await expect(inspector.getByRole('heading', { name: 'Followed Movie 3' })).toBeVisible();
+  await expect(inspector.getByRole('button', { name: 'Find torrent' })).toHaveCount(0);
+  await expect(inspector.getByRole('button', { name: 'Stream' })).toHaveCount(0);
 
   await releasePanel.getByRole('button', { name: 'View all' }).click();
   const drawer = page.getByRole('dialog', { name: 'Followed releases' });
@@ -274,6 +291,8 @@ test('release watcher keeps a three-row preview while View all and Following exp
   await expect(page.getByLabel('Selected list name')).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Delete list' })).toBeDisabled();
   await expect(page.locator('.movie-lists-card-grid .discover-movie-card')).toHaveCount(12);
+  await expect(page.locator('.movie-lists-card-grid .unified-status-following')).toHaveCount(12);
+  await expect(page.locator('.movie-lists-card-grid .unified-status-following').first()).toBeVisible();
 });
 
 test('desktop sidebar collapses persistently while workspace margins stay fixed', async ({ page }) => {
@@ -426,6 +445,59 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
   await expect(reloadedLibraryNavItem).toHaveCSS('transition-duration', '0s');
   await expect(reloadedLibraryNavItem.locator('.nav-label')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
+});
+
+test('power menu separates frontend reset, CP restart, optional torrent close, and device shutdown', async ({ page }) => {
+  const requests = [];
+  const status = {
+    active_downloads: 2,
+    plan: {},
+    torrent_client: { mode: 'embedded', can_close: true }
+  };
+  await page.route('**/api/power/status', (route) => route.fulfill({ json: status }));
+  await page.route('**/api/power/actions', async (route) => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ json: status });
+  });
+
+  await page.goto('/help', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Power options' }).click();
+  const menu = page.getByRole('menu', { name: 'Power options' });
+  await expect(menu.getByRole('menuitem', { name: 'RESET' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'RESTART' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'TURN OFF' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'SHUT DOWN DEVICE' })).toBeVisible();
+
+  await menu.getByLabel('After current downloads finish').check();
+  await menu.getByLabel('Close qBittorrent too').check();
+  await menu.getByRole('menuitem', { name: 'TURN OFF' }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toEqual({
+    action: 'cp',
+    after_download: true,
+    close_qbittorrent: true
+  });
+
+  await menu.getByRole('menuitem', { name: 'RESTART' }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toEqual({
+    action: 'restart',
+    after_download: false,
+    close_qbittorrent: false
+  });
+
+  await menu.getByRole('menuitem', { name: 'SHUT DOWN DEVICE' }).click();
+  await expect.poll(() => requests.length).toBe(3);
+  expect(requests[2]).toEqual({
+    action: 'device',
+    after_download: true,
+    close_qbittorrent: false
+  });
+
+  await Promise.all([
+    page.waitForURL((url) => url.searchParams.has('_cp_reset')),
+    menu.getByRole('menuitem', { name: 'RESET' }).click()
+  ]);
 });
 
 test('Continue Watching uses compact uncropped posters and centralized resume restart remove actions', async ({ page }) => {
@@ -680,6 +752,14 @@ test('Settings keeps OS playback default, redacts provider secrets, and verifies
 
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
   await mockCardParityApis(page);
+  await page.route('**/api/user/followed-releases**', async (route) => {
+    await route.fulfill({ json: {
+      movies: [parityMovie],
+      newly_available: [],
+      removed_owned: [],
+      curation_generation: 1
+    } });
+  });
   let resolvedFileSelection = [];
   await page.route('**/api/library/selection/items', async (route) => {
     resolvedFileSelection = route.request().postDataJSON()?.paths || [];
@@ -690,6 +770,11 @@ test('Library switches between canonical movie and raw file views', async ({ pag
   });
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
+  const libraryFollowingBadge = page.locator('.library-movie-card .unified-status-following');
+  await expect(libraryFollowingBadge).toHaveText('Following');
+  await expect(libraryFollowingBadge).toHaveCSS('color', 'rgb(205, 189, 255)');
+  await expect(libraryFollowingBadge).toHaveCSS('border-color', 'rgba(139, 92, 246, 0.4)');
+  await expect(libraryFollowingBadge).toHaveCSS('background-color', 'rgba(139, 92, 246, 0.1)');
 
   await page.getByRole('button', { name: 'File View' }).click();
   await expect(page.getByRole('heading', { name: 'File View' })).toBeVisible();
@@ -1783,8 +1868,8 @@ test('Library credit clicks load the people projection before filtering owned wo
 
   await expect(page).toHaveURL(/\/library$/);
   await expect(page.getByText('Actor: Robert De Niro', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open Filters' }).click();
-  await expect(page.getByLabel('Library quality filter')).toHaveValue('upgrade');
+  await page.getByRole('button', { name: 'Open filters' }).click();
+  await expect(page.getByLabel('Library resolution filter')).toHaveValue('upgrade');
 });
 
 test('Library server paging, filtered selection, and navigation preserve exact result state', async ({ page }) => {
@@ -2127,8 +2212,10 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
   const keepPath = 'E:\\Movies\\Project Hail Mary (2026) [1080p]\\Project.Hail.Mary.2026.1080p.mkv';
   const folderTarget = 'E:\\Movies\\Project Hail Mary (2026) [720p]';
   let executedRequest = null;
+  let auditRequests = 0;
 
   await page.route('**/api/maintenance/audit?*', async (route) => {
+    auditRequests += 1;
     await route.fulfill({ json: {
       summary: {
         duplicate_groups: 1,
@@ -2231,6 +2318,13 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
   await expect(candidateRow.getByRole('button', { name: 'Play file' })).toBeVisible();
   await expect(keepRow.getByRole('button', { name: 'Play file' })).toBeVisible();
   await expect(keepCheckbox).toBeEnabled();
+  await expect(candidateCheckbox).toBeChecked();
+
+  await candidateCheckbox.uncheck();
+  const requestsBeforeRefresh = auditRequests;
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('cp-library-changed')));
+  await expect.poll(() => auditRequests).toBeGreaterThan(requestsBeforeRefresh);
+  await expect(candidateCheckbox).not.toBeChecked();
 
   await page.getByRole('button', { name: 'Select recommended' }).click();
   await expect(candidateCheckbox).toBeChecked();
@@ -2255,6 +2349,62 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
   expect(executedRequest.paths).toEqual([candidatePath]);
   expect(executedRequest.folder_targets).toEqual([folderTarget]);
   await expect(page.getByText('1 movie file moved to Recycle Bin, including 1 complete folder')).toBeVisible();
+});
+
+test('Maintenance highlights the exact evidence that prevented automatic selection', async ({ page }) => {
+  await page.route('**/api/maintenance/audit?*', (route) => route.fulfill({ json: {
+    summary: { duplicate_groups: 1, extra_copies: 1, recommended_removals: 0 },
+    storage: {
+      groups: [{
+        title: 'Review Me (2000)',
+        recommended_count: 0,
+        files: [{
+          path: 'E:\\Movies\\Review.Me.2000.720p.mkv',
+          filename: 'Review.Me.2000.720p.mkv',
+          role: 'candidate',
+          recommendation: 'review',
+          verdict: 'lower_quality_verify_cut',
+          verdict_label: 'Lower quality · verify cut',
+          verdict_tone: 'warning',
+          reason: 'Lower quality, but the cut must be reviewed.',
+          resolution: '720p',
+          quality_class: '720p',
+          audio_codec: 'AAC',
+          audio_channels: 2,
+          decision_blockers: ['Runtime differs by 8.40%; allowed limit is 0.50%'],
+          decision_warnings: ['Primary-audio bitrate is unavailable'],
+          decision_passed: ['All copies share TMDB identity 1234', 'The other copy has 2.25x as many pixels'],
+        }, {
+          path: 'E:\\Movies\\Review.Me.2000.1080p.mkv',
+          filename: 'Review.Me.2000.1080p.mkv',
+          role: 'keep',
+          recommendation: 'review',
+          verdict: 'quality_winner_verify_cut',
+          verdict_label: 'Quality winner · verify cut',
+          verdict_tone: 'warning',
+          reason: 'Quality winner, but the cut must be reviewed.',
+          resolution: '1080p',
+          quality_class: '1080p',
+          audio_codec: 'AAC',
+          audio_channels: 2,
+          decision_blockers: ['Runtime differs by 8.40%; allowed limit is 0.50%'],
+          decision_warnings: [],
+          decision_passed: ['All copies share TMDB identity 1234'],
+        }],
+      }],
+      pagination: { total: 1, page: 1, total_pages: 1, page_start: 1, page_end: 1 },
+    },
+    identity: { items: [], pagination: { total: 0, page: 1, total_pages: 1 } },
+  } }));
+
+  await page.goto('/cleanup', { waitUntil: 'domcontentloaded' });
+  const row = page.locator('.cleanup-file-row').filter({ hasText: 'Review.Me.2000.720p.mkv' });
+  await expect(row.getByRole('checkbox', { name: 'Select' })).not.toBeChecked();
+  await expect(row.getByRole('region', { name: 'Why CP did not automatically select this file' })).toContainText('Runtime differs by 8.40%');
+  await expect(row.getByRole('region', { name: 'Comparison warnings' })).toContainText('Primary-audio bitrate is unavailable');
+  await row.getByText('Evidence that passed (2)').click();
+  await expect(row).toContainText('All copies share TMDB identity 1234');
+  await expect(row).toContainText('2.25x as many pixels');
 });
 
 test('Maintenance explains quality, content, and frame-rate evidence without using fps as a quality score', async ({ page }) => {
@@ -2349,6 +2499,60 @@ test('Maintenance explains quality, content, and frame-rate evidence without usi
   await expect(dvdRow).toContainText('Framing Δ 0.21%');
 });
 
+test('Library unifies resolution filtering and right-aligns its compact filter actions in both views', async ({ page }) => {
+  await mockCardParityApis(page);
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+
+  const openFilters = page.getByRole('button', { name: 'Open filters', exact: true });
+  await expect(openFilters).toBeVisible();
+  await expect(openFilters).toHaveCSS('width', '38px');
+  await expect(openFilters).toHaveCSS('height', '38px');
+  await expect(openFilters.locator('svg.lucide-filter')).toHaveCount(1);
+  expect(await openFilters.evaluate((button) => button.textContent.trim())).toBe('');
+  await openFilters.click();
+
+  const resolutionFilter = page.getByLabel('Library resolution filter');
+  await expect(resolutionFilter).toBeVisible();
+  expect(await resolutionFilter.locator('option').allTextContents()).toEqual([
+    'All resolutions',
+    'Upgrade candidates',
+    '4K',
+    '1080p',
+    '720p',
+    'Below 720p',
+  ]);
+  await expect(page.getByLabel('Library quality filter')).toHaveCount(0);
+
+  for (const label of ['Reset filters', 'Hide filters']) {
+    const button = page.getByRole('button', { name: label, exact: true });
+    await expect(button).toHaveCSS('width', '38px');
+    await expect(button).toHaveCSS('height', '38px');
+    expect(await button.evaluate((element) => element.textContent.trim())).toBe('');
+  }
+  const movieLayout = await page.locator('.library-filter-toolbar').evaluate((toolbar) => {
+    const selects = [...toolbar.querySelectorAll('select')];
+    const hide = toolbar.querySelector('.library-hide-filters').getBoundingClientRect();
+    const reset = toolbar.querySelector('.library-reset-filters').getBoundingClientRect();
+    return {
+      columnCount: getComputedStyle(toolbar).gridTemplateColumns.split(' ').length,
+      filterRows: new Set(selects.map((select) => Math.round(select.getBoundingClientRect().top))).size,
+      iconsShareRightEdge: Math.round(hide.right) === Math.round(reset.right),
+      hideAboveReset: hide.top < reset.top,
+    };
+  });
+  expect(movieLayout).toEqual({ columnCount: 6, filterRows: 2, iconsShareRightEdge: true, hideAboveReset: true });
+
+  await page.getByRole('button', { name: 'File View', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'File View', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Library resolution filter')).toBeVisible();
+  await expect(page.getByLabel('Library quality filter')).toHaveCount(0);
+  const fileLayout = await page.locator('.library-filter-toolbar').evaluate((toolbar) => ({
+    columnCount: getComputedStyle(toolbar).gridTemplateColumns.split(' ').length,
+    filterRows: new Set([...toolbar.querySelectorAll('select')].map((select) => Math.round(select.getBoundingClientRect().top))).size,
+  }));
+  expect(fileLayout).toEqual({ columnCount: 4, filterRows: 2 });
+});
+
 test('Maintenance upgrade summary opens the authoritative Library filter', async ({ page }) => {
   const upgradeItem = {
     ...parityLibraryItem,
@@ -2388,16 +2592,16 @@ test('Maintenance upgrade summary opens the authoritative Library filter', async
 
   await expect(page).toHaveURL(/\/library$/);
   await expect(page.getByRole('heading', { name: 'Movie View' })).toBeVisible();
-  await page.getByRole('button', { name: 'Open Filters' }).click();
-  await expect(page.getByLabel('Library quality filter')).toHaveValue('upgrade');
+  await page.getByRole('button', { name: 'Open filters' }).click();
+  await expect(page.getByLabel('Library resolution filter')).toHaveValue('upgrade');
   await expect(page.getByText('Upgrade candidate', { exact: true }).first()).toBeVisible();
 
-  await page.getByLabel('Library quality filter').selectOption('all');
+  await page.getByLabel('Library resolution filter').selectOption('all');
   await page.getByRole('button', { name: 'Discover', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Movie View', exact: true })).toBeVisible();
-  await expect(page.getByLabel('Library quality filter')).toHaveValue('all');
+  await expect(page.getByLabel('Library resolution filter')).toHaveValue('all');
 });
 
 test('every stateful workspace preserves its page state after sidebar navigation', async ({ page }) => {
@@ -2425,12 +2629,16 @@ test('every stateful workspace preserves its page state after sidebar navigation
   await page.route('**/api/iptv/providers/provider-a/recent**', (route) => route.fulfill({ json: { items: [] } }));
   await page.route('**/api/iptv/providers/provider-a/categories**', (route) => route.fulfill({ json: { items: [] } }));
   await page.route('**/api/iptv/providers/provider-a/items**', (route) => route.fulfill({ json: { items: [], total: 0, page: 1, page_size: 30 } }));
+  await page.route('**/api/iptv/providers/provider-a/movies/facets', (route) => route.fulfill({ json: { playlists: [], lists: [], genres: [], languages: [], countries: [], qualities: [] } }));
+  await page.route('**/api/iptv/providers/provider-a/movies/status', (route) => route.fulfill({ json: { state: 'idle', generation: 0, sources: 0, queue: {}, matches: {} } }));
+  await page.route('**/api/iptv/providers/provider-a/movies?*', (route) => route.fulfill({ json: { items: [], total: 0, page: 1, page_size: 30, generation: 0 } }));
+  await page.route('**/api/iptv/metadata/settings', (route) => route.fulfill({ json: { tmdb_configured: false, credential_type: 'bearer' } }));
 
   const openSection = (name) => page.getByRole('button', { name: name === 'AI Control' ? /AI Control/ : name, exact: name !== 'AI Control' }).click();
 
   await page.goto('/library', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Open Filters' }).click();
-  await page.getByLabel('Library quality filter').selectOption('upgrade');
+  await page.getByRole('button', { name: 'Open filters' }).click();
+  await page.getByLabel('Library resolution filter').selectOption('upgrade');
 
   await openSection('Discover');
   await page.getByLabel('Library ownership').selectOption('owned');
@@ -2463,7 +2671,7 @@ test('every stateful workspace preserves its page state after sidebar navigation
   await downloadsFrame.evaluate((frame) => frame.dataset.stateToken = 'preserved');
 
   await openSection('Library');
-  await expect(page.getByLabel('Library quality filter')).toHaveValue('upgrade');
+  await expect(page.getByLabel('Library resolution filter')).toHaveValue('upgrade');
   await openSection('Discover');
   await expect(page.getByLabel('Library ownership')).toHaveValue('owned');
   await openSection('Movie Lists');
@@ -2483,6 +2691,111 @@ test('every stateful workspace preserves its page state after sidebar navigation
   await expect(downloadsFrame).toHaveAttribute('data-state-token', 'preserved');
 });
 
+test('IPTV Movies keeps provider playlists, My list, grouped sources, unmatched fallback, and metadata settings separate', async ({ page }) => {
+  let arabicDefaultLocalizationRequests = 0;
+  await page.route('**/api/iptv/providers/*/movies/*/localization/ar-SA', async (route) => {
+    arabicDefaultLocalizationRequests += 1;
+    await route.fulfill({ json: {
+      title: '\u0641\u064a\u0644\u0645 \u0627\u062e\u062a\u0628\u0627\u0631\u064a \u0639\u0631\u0628\u064a',
+      plot: 'English fallback plot for the Arabic fixture.',
+      display_locale: 'ar-SA',
+      directors: [{ id: 201, name: '\u0645\u062e\u0631\u062c \u0627\u062e\u062a\u0628\u0627\u0631\u064a', profile_url: 'https://images.example/director.jpg' }],
+      writers: [],
+      cast: [{ id: 202, name: '\u0645\u0645\u062b\u0644 \u0627\u062e\u062a\u0628\u0627\u0631\u064a', character: '\u0627\u0644\u0628\u0637\u0644', profile_url: 'https://images.example/actor.jpg' }],
+    } });
+  });
+  await page.setViewportSize({ width: 2048, height: 1100 });
+  await page.goto('/iptv', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Movies', exact: true }).click();
+
+  await expect(page.getByLabel('Provider playlist')).toBeVisible();
+  await expect(page.getByLabel('My list')).toBeVisible();
+  await expect(page.getByPlaceholder('Search movie...')).toBeVisible();
+  await expect(page.getByText('First Enriched Movie', { exact: true })).toBeVisible();
+  await expect(page.getByText('First Unmatched Movie', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 sources', { exact: true })).toBeVisible();
+  const movieGrid = page.locator('.iptv-movie-grid');
+  const renderedColumnCount = () => movieGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length);
+  await expect.poll(renderedColumnCount).toBe(3);
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+  await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible();
+  await expect.poll(renderedColumnCount).toBe(4);
+  const enrichedCard = page.locator('.iptv-movie-card').filter({ hasText: 'First Enriched Movie' })
+    .or(page.locator('.iptv-movie-card.unified-movie-card-expanded'));
+  await expect(enrichedCard.getByText('Matched', { exact: true })).toHaveCount(1);
+  await expect(enrichedCard).not.toContainText(/\b(?:MKV|MP4)\b/i);
+
+  await page.getByLabel('My list').selectOption({ index: 1 });
+  await expect(page.getByText('First Enriched Movie', { exact: true })).toBeVisible();
+  await expect(page.getByText('First Unmatched Movie', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Reset filters', exact: true }).click();
+
+  await page.getByText('First Enriched Movie', { exact: true }).click();
+  await expect(enrichedCard.getByText('Matched', { exact: true })).toHaveCount(1);
+  await expect(enrichedCard.locator('.unified-expanded-rating')).toContainText('8.1');
+  await expect(enrichedCard.locator('.unified-expanded-rating')).toContainText('100 votes');
+  await expect(enrichedCard.locator('.movie-expanded-people-grid strong').filter({ hasText: 'Fixture Director' })).toBeVisible();
+  await expect(enrichedCard.locator('.movie-expanded-writers').filter({ hasText: 'Fixture Writer' })).toBeVisible();
+  await expect(enrichedCard.locator('.movie-expanded-people-grid strong').filter({ hasText: 'Fixture Actor' })).toBeVisible();
+  await expect(enrichedCard.locator('.movie-expanded-people-grid .person-card')).toHaveCount(2);
+  await expect(enrichedCard.locator('.unified-movie-header-meta').getByRole('link', { name: 'Open First Enriched Movie on IMDb' })).toHaveAttribute('href', 'https://www.imdb.com/title/tt0137523/');
+  await expect(enrichedCard.locator('.unified-chip-row-actions').getByRole('button', { name: 'العربية' })).toBeVisible();
+  await expect(enrichedCard.locator('.unified-movie-expanded-row .movie-expanded-credits-panel')).toBeVisible();
+  await enrichedCard.getByRole('button', { name: 'العربية' }).click();
+  await expect(enrichedCard.getByText('وصف عربي محلي للاختبار.', { exact: true })).toBeVisible();
+  await enrichedCard.getByRole('button', { name: 'English' }).click();
+  await expect(enrichedCard.getByText('A disposable provider-local enriched movie used by Playwright.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Choose source', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Choose provider source' })).toBeVisible();
+  await expect(page.locator('.iptv-source-list > button')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Close source chooser' }).click();
+
+  await enrichedCard.getByRole('heading', { name: 'First Enriched Movie' }).click();
+  const arabicTitle = '\u0641\u064a\u0644\u0645 \u0627\u062e\u062a\u0628\u0627\u0631\u064a \u0639\u0631\u0628\u064a';
+  const arabicCard = page.locator('.iptv-movie-card').filter({ hasText: arabicTitle })
+    .or(page.locator('.iptv-movie-card.unified-movie-card-expanded'));
+  await arabicCard.getByRole('heading', { name: arabicTitle }).click();
+  await expect.poll(() => arabicDefaultLocalizationRequests).toBe(1);
+  await expect(arabicCard.getByRole('button', { name: 'English' })).toBeVisible();
+  await expect(arabicCard.getByText('English fallback plot for the Arabic fixture.', { exact: true })).toBeVisible();
+  await expect(arabicCard.getByText('\u0645\u062e\u0631\u062c \u0627\u062e\u062a\u0628\u0627\u0631\u064a', { exact: true })).toBeVisible();
+  await expect(arabicCard.getByText('\u0645\u0645\u062b\u0644 \u0627\u062e\u062a\u0628\u0627\u0631\u064a', { exact: true })).toBeVisible();
+  await expect(arabicCard.locator('.movie-expanded-people-grid img')).toHaveCount(2);
+  await expect(arabicCard.locator('.movie-expanded-people-grid img').first()).toHaveAttribute('src', 'https://images.example/director.jpg');
+  await arabicCard.getByRole('button', { name: 'English' }).click();
+  await expect(arabicCard.getByRole('heading', { name: 'Arabic Fixture Transliteration' })).toBeVisible();
+  await arabicCard.locator('.movie-language-toggle').click();
+  await expect(arabicCard.getByRole('heading', { name: arabicTitle })).toBeVisible();
+  await expect(arabicCard.locator('.movie-expanded-people-grid img')).toHaveCount(2);
+  await arabicCard.getByRole('heading', { name: arabicTitle }).click();
+
+  const indianCard = page.locator('.iptv-movie-card').filter({ hasText: 'English Indian Fixture' })
+    .or(page.locator('.iptv-movie-card.unified-movie-card-expanded'));
+  await page.getByRole('heading', { name: 'English Indian Fixture' }).click();
+  await expect(indianCard.getByRole('heading', { name: 'English Indian Fixture' })).toBeVisible();
+  await indianCard.locator('.movie-language-toggle').click();
+  await expect(indianCard.getByRole('heading', { name: 'English Indian Fixture' })).toBeVisible();
+  await expect(indianCard).not.toContainText('\u0c24\u0c46\u0c32\u0c41\u0c17\u0c41 \u0c2a\u0c47\u0c30\u0c41');
+  await expect(indianCard.getByText('English plot for the Indian fixture.', { exact: true })).toBeVisible();
+  await expect(indianCard.getByText('English Indian Director', { exact: true })).toBeVisible();
+  await expect(indianCard.getByText('English Indian Actor', { exact: true })).toBeVisible();
+  await expect(indianCard.locator('.movie-expanded-people-grid img')).toHaveCount(2);
+  await indianCard.getByRole('heading', { name: 'English Indian Fixture' }).click();
+
+  await page.getByText('First Unmatched Movie', { exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Match metadata', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: /^Metadata/ }).click();
+  await expect(page.getByRole('heading', { name: 'Provider One' })).toBeVisible();
+  await expect(page.getByText('Local projection', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: "Improve this provider's Movies" })).toBeDisabled();
+  await expect(page.getByRole('navigation', { name: 'Metadata review queues' })).toBeVisible();
+  await page.getByText('Diagnostics', { exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Run next 100' })).toBeVisible();
+  await expect(page.getByText('IPTV TMDB not configured', { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder('Enter credential')).toHaveValue('');
+});
+
 test('IPTV providers keep same IDs isolated, stop playback on switch, and remove only the selected provider', async ({ page }) => {
   const registry = await page.request.get('/api/iptv/providers');
   expect(registry.ok()).toBeTruthy();
@@ -2492,11 +2805,8 @@ test('IPTV providers keep same IDs isolated, stop playback on switch, and remove
   expect(first).toBeTruthy();
   expect(second).toBeTruthy();
 
-  await page.route(`**/api/iptv/providers/${first.provider_id}/items?*`, async (route) => {
-    const requestUrl = new URL(route.request().url());
-    if (requestUrl.searchParams.get('kind') === 'movie') {
-      await new Promise((resolve) => setTimeout(resolve, 650));
-    }
+  await page.route(`**/api/iptv/providers/${first.provider_id}/movies?*`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 650));
     await route.continue();
   });
 

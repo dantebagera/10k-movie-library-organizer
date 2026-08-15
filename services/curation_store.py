@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -86,6 +87,7 @@ class UserCurationStore:
 
     def __init__(self, base_dir, catalog=None):
         self.base_dir = Path(base_dir).resolve()
+        self._followed_lock = threading.RLock()
         self.collections_file = self.base_dir / 'user_collections.json'
         self.lists_file = self.base_dir / 'user_lists.json'
         self.followed_file = self.base_dir / 'followed_releases.json'
@@ -329,40 +331,86 @@ class UserCurationStore:
         }
 
     def followed_all(self):
-        return self._followed()['movies']
+        with self._followed_lock:
+            return self._followed()['movies']
 
     def follow_movie(self, movie):
-        data = self._followed()
-        normalized = normalize_curated_movie(movie)
-        key = _movie_identity_key(normalized)
-        now = time.time()
-        existing = next((item for item in data['movies'] if _movie_identity_key(item) == key), None)
-        if existing:
-            existing.update({key: value for key, value in normalized.items() if value})
-            existing['updated_at'] = now
+        with self._followed_lock:
+            data = self._followed()
+            normalized = normalize_curated_movie(movie)
+            key = _movie_identity_key(normalized)
+            now = time.time()
+            existing = next((item for item in data['movies'] if _movie_identity_key(item) == key), None)
+            if existing:
+                existing.update({key: value for key, value in normalized.items() if value})
+                existing['updated_at'] = now
+                self._save_followed(data)
+                return existing
+            created = {
+                **normalized,
+                'status': 'watching',
+                'followed_at': now,
+                'updated_at': now,
+                'last_checked': 0,
+                'next_check_at': 0,
+                'miss_count': 0,
+                'best_release': {},
+            }
+            data['movies'].insert(0, created)
             self._save_followed(data)
-            return existing
-        created = {
-            **normalized,
-            'status': 'watching',
-            'followed_at': now,
-            'updated_at': now,
-            'last_checked': 0,
-            'best_release': {},
-        }
-        data['movies'].insert(0, created)
-        self._save_followed(data)
-        return created
+            return created
 
     def unfollow_movie(self, movie):
-        data = self._followed()
-        key = _movie_identity_key(normalize_curated_movie(movie))
-        before = len(data['movies'])
-        data['movies'] = [item for item in data['movies'] if _movie_identity_key(item) != key]
-        self._save_followed(data)
-        return len(data['movies']) != before
+        with self._followed_lock:
+            data = self._followed()
+            key = _movie_identity_key(normalize_curated_movie(movie))
+            before = len(data['movies'])
+            data['movies'] = [item for item in data['movies'] if _movie_identity_key(item) != key]
+            self._save_followed(data)
+            return len(data['movies']) != before
 
     def save_followed_all(self, movies):
-        data = {'movies': movies}
-        self._save_followed(data)
-        return movies
+        with self._followed_lock:
+            data = {'movies': movies}
+            self._save_followed(data)
+            return movies
+
+    def apply_followed_scan(self, updates=None, removals=None):
+        """Merge scan results into the current list without replacing user mutations."""
+        updates = updates or []
+        removals = removals or []
+        update_by_key = {
+            _movie_identity_key(normalize_curated_movie(entry.get('movie') or {})): entry
+            for entry in updates
+        }
+        removal_by_key = {
+            _movie_identity_key(normalize_curated_movie(movie or {})): float((movie or {}).get('followed_at') or 0)
+            for movie in removals
+        }
+        with self._followed_lock:
+            data = self._followed()
+            changed = False
+            merged = []
+            for current in data['movies']:
+                key = _movie_identity_key(current)
+                if key in removal_by_key:
+                    expected_followed_at = removal_by_key[key]
+                    current_followed_at = float(current.get('followed_at') or 0)
+                    if not expected_followed_at or current_followed_at == expected_followed_at:
+                        changed = True
+                        continue
+                entry = update_by_key.get(key)
+                if entry:
+                    expected_followed_at = float(entry.get('expected_followed_at') or 0)
+                    current_followed_at = float(current.get('followed_at') or 0)
+                    if not expected_followed_at or current_followed_at == expected_followed_at:
+                        patch = dict(entry.get('patch') or {})
+                        next_item = {**current, **patch}
+                        if next_item != current:
+                            current = next_item
+                            changed = True
+                merged.append(current)
+            if changed:
+                data['movies'] = merged
+                self._save_followed(data)
+            return data['movies']

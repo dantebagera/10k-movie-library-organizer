@@ -14,6 +14,13 @@ function providerPath(providerId, suffix = '') {
 }
 
 export const iptvApi = {
+  metadataSettings: () => fetchJson('/api/iptv/metadata/settings'),
+  saveMetadataSettings: (payload) => fetchJson('/api/iptv/metadata/settings', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  testMetadata: () => fetchJson('/api/iptv/metadata/test', { method: 'POST' }),
   providers: () => fetchJson('/api/iptv/providers'),
   provider: (providerId) => fetchJson(providerPath(providerId)),
   createProvider: (payload) => fetchJson('/api/iptv/providers', {
@@ -41,6 +48,38 @@ export const iptvApi = {
   sync: (providerId) => fetchJson(providerPath(providerId, '/sync'), { method: 'POST' }),
   categories: (providerId, kind) => fetchJson(`${providerPath(providerId, '/categories')}?${queryString({ kind })}`),
   items: (providerId, params) => fetchJson(`${providerPath(providerId, '/items')}?${queryString(params)}`),
+  movies: (providerId, params) => fetchJson(`${providerPath(providerId, '/movies')}?${queryString(params)}`),
+  movieFacets: (providerId) => fetchJson(providerPath(providerId, '/movies/facets')),
+  movieProjectionStatus: (providerId) => fetchJson(providerPath(providerId, '/movies/projection/status')),
+  retryMovieProjection: (providerId) => fetchJson(providerPath(providerId, '/movies/projection/retry'), { method: 'POST' }),
+  movieStatus: (providerId) => fetchJson(providerPath(providerId, '/movies/metadata/status')),
+  movieMetadataReview: (providerId, params = {}) => fetchJson(`${providerPath(providerId, '/movies/metadata/review')}?${queryString(params)}`),
+  movieEnrichment: (providerId, action, payload = {}) => fetchJson(providerPath(providerId, `/movies/enrichment/${encodeURIComponent(action)}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  prioritizeMovies: (providerId, movieKeys) => fetchJson(providerPath(providerId, '/movies/prioritize'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ movie_keys: movieKeys })
+  }),
+  movieDetail: (providerId, movieKey) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}`)),
+  movieSources: (providerId, movieKey) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/sources`)),
+  movieLocalization: (providerId, movieKey, locale) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/localization/${encodeURIComponent(locale)}`)),
+  movieMatchSearch: (providerId, movieKey, params = {}) => fetchJson(`${providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/match/search`)}?${queryString(params)}`),
+  setMovieMatch: (providerId, movieKey, tmdbId) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/match`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tmdb_id: tmdbId })
+  }),
+  removeMovieMatch: (providerId, movieKey, reprocess = false) => fetchJson(`${providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/match`)}${reprocess ? '?reprocess=1' : ''}`, { method: 'DELETE' }),
+  movieFavorite: (providerId, movieKey, favorite) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/favorite`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ favorite })
+  }),
+  setMovieList: (providerId, movieKey, listId, included) => fetchJson(providerPath(providerId, `/movies/${encodeURIComponent(movieKey)}/lists/${encodeURIComponent(listId)}`), {
+    method: included ? 'POST' : 'DELETE'
+  }),
   favorites: (providerId, params) => fetchJson(`${providerPath(providerId, '/favorites')}?${queryString(params)}`),
   detail: (providerId, kind, itemId) => fetchJson(providerPath(providerId, `/items/${encodeURIComponent(kind)}/${encodeURIComponent(itemId)}`)),
   epg: (providerId, streamId) => fetchJson(`${providerPath(providerId, `/epg/${encodeURIComponent(streamId)}`)}?limit=4`),

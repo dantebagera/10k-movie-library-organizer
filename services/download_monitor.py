@@ -12,6 +12,7 @@ class DownloadImportMonitor:
         self.clock = clock
         self.sleeper = sleeper
         self._lock = threading.Lock()
+        self._stop = threading.Event()
         self._status = {
             'state': 'idle',
             'last_checked_at': 0,
@@ -58,6 +59,13 @@ class DownloadImportMonitor:
         return True
 
     def run_forever(self, enabled):
-        while True:
+        while not self._stop.is_set():
             self.run_once(enabled=bool(enabled()))
-            self.sleeper(self.interval_seconds)
+            if self.sleeper is time.sleep:
+                self._stop.wait(self.interval_seconds)
+            else:
+                self.sleeper(self.interval_seconds)
+
+    def shutdown(self):
+        self._stop.set()
+        return True

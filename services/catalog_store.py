@@ -1533,16 +1533,11 @@ class CatalogStore:
                 ) LIKE ?
             """)
             parameters.append(f"%{query}%")
-        quality = _text(filters.get("quality")) or "all"
-        if quality == "upgrade":
+        resolution = _text(filters.get("resolution")) or "all"
+        if resolution == "upgrade":
             clauses.append("e.path_key IN (SELECT value FROM json_each(?))")
             parameters.append(_json_text(list(filters.get("upgrade_path_keys") or [])))
-        elif quality == "good":
-            clauses.append("e.resolution_rank >= 3")
-        elif quality == "4k":
-            clauses.append("e.resolution_rank = 4")
-        resolution = _text(filters.get("resolution")) or "all"
-        if resolution == "4k":
+        elif resolution == "4k":
             clauses.append("e.resolution_rank = 4")
         elif resolution == "1080p":
             clauses.append("e.resolution_rank = 3")
@@ -2040,10 +2035,10 @@ class CatalogStore:
         )
         connection = self.connect()
         try:
+            fact_columns = ", ".join(MEDIA_FILE_FACT_COLUMNS)
             rows = connection.execute(f"""
                 SELECT path_key, path, filename, library_root, size, modified_time,
-                       probe_status, file_facts_version, classifier_version,
-                       probe_size, probe_modified_time
+                       {fact_columns}
                 FROM media_files
                 WHERE file_facts_version < ?
                    OR classifier_version < ?

@@ -531,6 +531,12 @@
   color: var(--archive-amber);
 }
 
+.unified-status-following {
+  border-color: var(--ai-violet-border);
+  background: var(--ai-violet-surface);
+  color: var(--ai-violet-text);
+}
+
 .unified-status-missing,
 .unified-status-neutral {
   border-color: var(--border);

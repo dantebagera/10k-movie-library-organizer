@@ -86,6 +86,7 @@ export async function fetchOwnershipChecks(movies = []) {
 
 export function announceLibraryChanged(detail = {}) {
   clearOwnershipCheckCache();
+  observeCatalogGeneration(detail?.catalog_generation);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cp-library-changed', { detail }));
   }

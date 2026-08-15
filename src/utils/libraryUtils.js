@@ -417,7 +417,6 @@ export function buildLibraryViewModel({
   pageSize = 40,
   currentPage = 1,
   query = '',
-  qualityFilter = 'all',
   identityFilter = '',
   plexFilter = 'all',
   sortMode = 'added',
@@ -459,10 +458,9 @@ export function buildLibraryViewModel({
       ].filter(Boolean).join(' ').toLowerCase();
       if (!haystack.includes(normalizedQuery)) return false;
     }
-    if (qualityFilter === 'upgrade' && item.maintenance_upgrade_candidate !== true) return false;
-    if (qualityFilter === 'good' && resolutionRank(item.resolution) < 3) return false;
-    if (qualityFilter === '4k' && resolutionRank(item.resolution) !== 4) return false;
-    if (!matchesLibraryResolutionFilter(item.resolution, resolutionFilter)) return false;
+    if (resolutionFilter === 'upgrade') {
+      if (item.maintenance_upgrade_candidate !== true) return false;
+    } else if (!matchesLibraryResolutionFilter(item.resolution, resolutionFilter)) return false;
     if (sourceFilter !== 'all' && item.rip_source !== sourceFilter) return false;
     if (genreFilter !== 'all' && !(canonical.genres?.length ? canonical.genres : item.plex_genres || []).includes(genreFilter)) return false;
     if (languageFilter !== 'all' && (canonical.language || item.plex_language) !== languageFilter) return false;

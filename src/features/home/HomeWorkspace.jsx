@@ -54,6 +54,9 @@ export default function HomeWorkspace(props) {
     onRemoveWatching
   } = props;
   const [releaseDrawerOpen, setReleaseDrawerOpen] = useState(false);
+  const selectedFollowedMovie = followed.find(
+    (item) => movieKey(item) === movieKey(selectedMovie || {})
+  ) || null;
 
   return (
     <div className="home-grid">
@@ -157,7 +160,7 @@ export default function HomeWorkspace(props) {
             movie={selectedMovie}
             owned={selectedOwnership}
             details={selectedDetails}
-            followed={followed.some((item) => movieKey(item) === movieKey(selectedMovie || {}))}
+            followedMovie={selectedFollowedMovie}
             watched={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watched')}
             watchlisted={listsForDiscoverMovie(selectedMovie || {}, userLists, selectedOwnership).some((list) => list.system_type === 'watchlist')}
             onClose={() => onSelectMovie(null)}
@@ -583,7 +586,7 @@ function ReleasePanel({ followed, checking, onScan, onSelectMovie, onViewAll }) 
         )) : (
           <div className="empty-state">
             <strong>No followed releases yet.</strong>
-            <span>Use Follow on a Discover card to watch for a proper WEB-DL or Blu-ray copy.</span>
+            <span>Use Follow on a Discover card to watch for a proper WEBRip, Blu-ray, or BDRip copy.</span>
           </div>
         )}
       </div>
@@ -667,7 +670,7 @@ function FollowedReleasesDrawer({ followed, checking, selectedMovie, onClose, on
           )) : (
             <div className="empty-state">
               <strong>No followed releases in this filter.</strong>
-              <span>Available movies are always sorted to the top when the backend finds a proper WEB or Blu-ray source.</span>
+              <span>Available movies are always sorted to the top when the backend finds a proper WEBRip, Blu-ray, or BDRip source.</span>
             </div>
           )}
         </div>
@@ -702,8 +705,9 @@ function SmartMovieCard(props) {
         displayMovie.country_flag || displayMovie.country,
         owned ? getCompactQualityLabel(ownedItem) : ''
       ]}
-      statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? 'Following' : 'Not in library'))}
+      statusLabel={owned ? (lowQuality ? 'Upgrade candidate' : '') : (unreleased ? 'Unreleased' : (followed ? '' : 'Not in library'))}
       statusTone={owned ? (lowQuality ? 'warning' : 'neutral') : (unreleased ? 'warning' : 'missing')}
+      following={followed}
       ownedBadge={Boolean(owned)}
       selected={selected}
       onToggle={onSelect}
@@ -726,7 +730,7 @@ function SmartMovieCard(props) {
 }
 
 function MovieInspector({
-  movie, owned, details, followed, watched, watchlisted,
+  movie, owned, details, followedMovie, watched, watchlisted,
   onClose, onPlay, onStream, streamingAvailable, streamingLabel, onFindTorrent, onFollow,
   onTrailer, onToggleWatched, onToggleWatchlist, onEditPoster, onOpenFileDetails
 }) {
@@ -752,6 +756,8 @@ function MovieInspector({
   } : details;
   const lowQuality = Boolean(owned?.maintenance_upgrade_candidate);
   const unreleased = !owned && isUnreleasedMovie(displayMovie);
+  const releaseAvailable = followedMovie?.status === 'available';
+  const sourceActionsAllowed = releaseAvailable || !unreleased;
   const releaseDateLabel = unreleased ? formatReleaseDateLabel(displayMovie.release_date) : '';
   const cast = displayDetails?.cast || displayMovie.cast || [];
   const trailerUrl = displayDetails?.trailer_url || '';
@@ -814,17 +820,17 @@ function MovieInspector({
           </>
         ) : (
           <>
-            {!unreleased && (
+            {sourceActionsAllowed && (
               <button type="button" className="btn btn-primary" onClick={() => onFindTorrent(displayMovie)}>
                 <Search size={15} /> Find torrent
               </button>
             )}
             <button type="button" className="btn btn-secondary" onClick={() => onFollow(displayMovie)}>
-              <Bell size={15} /> {followed ? 'Following' : 'Follow release'}
+              <Bell size={15} /> {followedMovie ? 'Following' : 'Follow release'}
             </button>
           </>
         )}
-        {!unreleased && streamingAvailable && (
+        {sourceActionsAllowed && streamingAvailable && (
           <button type="button" className="btn btn-secondary" onClick={() => onStream(displayMovie)}>
             <MonitorPlay size={15} /> {streamingLabel}
           </button>

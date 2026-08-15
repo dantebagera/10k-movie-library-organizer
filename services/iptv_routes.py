@@ -1,5 +1,6 @@
 from flask import Response, jsonify, request, send_file, stream_with_context
 
+from .iptv_tmdb import IPTVTMDBClient, IPTVTMDBError
 from .iptv_xtream import XtreamError
 
 
@@ -22,6 +23,9 @@ def register_iptv_routes(app, manager_provider):
     def service(provider_id):
         return current_manager().service(provider_id)
 
+    def movie_service(provider_id):
+        return current_manager().movie_service(provider_id)
+
     def error_response(error, provider_id="", status=400):
         if isinstance(error, KeyError):
             status = 404
@@ -34,6 +38,30 @@ def register_iptv_routes(app, manager_provider):
             return jsonify(current_manager().list_providers())
         except RuntimeError as error:
             return error_response(error, status=500)
+
+    @app.route("/api/iptv/metadata/settings", methods=["GET", "PATCH"])
+    def iptv_metadata_settings():
+        manager = current_manager()
+        try:
+            if request.method == "GET":
+                return jsonify(manager.metadata_settings.public())
+            data = request.get_json(silent=True) or {}
+            return jsonify(manager.metadata_settings.save(
+                data.get("credential", ""),
+                data.get("credential_type"),
+                clear=bool(data.get("clear")),
+            ))
+        except (ValueError, RuntimeError) as error:
+            return error_response(error)
+
+    @app.post("/api/iptv/metadata/test")
+    def iptv_metadata_test():
+        manager = current_manager()
+        try:
+            configured = IPTVTMDBClient(manager.metadata_settings).validate()
+            return jsonify({"tmdb_configured": bool(configured), "valid": bool(configured)})
+        except (ValueError, RuntimeError, IPTVTMDBError) as error:
+            return error_response(error)
 
     @app.post("/api/iptv/providers")
     def iptv_provider_create():
@@ -118,6 +146,172 @@ def register_iptv_routes(app, manager_provider):
                 favorites_only=request.args.get("favorites", "").lower() in {"1", "true", "yes"},
             ))
         except (KeyError, TypeError, ValueError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies")
+    def iptv_movies(provider_id):
+        try:
+            filters = {
+                "q": request.args.get("q", ""),
+                "playlist_id": request.args.get("playlist_id", ""),
+                "list_id": request.args.get("list_id", ""),
+                "genre_id": request.args.get("genre_id", ""),
+                "language": request.args.get("language", ""),
+                "country": request.args.get("country", ""),
+                "year_from": request.args.get("year_from", ""),
+                "year_to": request.args.get("year_to", ""),
+                "min_rating": request.args.get("min_rating", ""),
+                "metadata_status": request.args.get("metadata_status", ""),
+                "quality": request.args.get("quality", ""),
+                "dubbed": request.args.get("dubbed", ""),
+                "subtitled": request.args.get("subtitled", ""),
+                "watched": request.args.get("watched", ""),
+                "sort": request.args.get("sort", "recent"),
+            }
+            return jsonify(movie_service(provider_id).list_movies(
+                filters, page=request.args.get("page", 1), page_size=request.args.get("page_size", 30)
+            ))
+        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/facets")
+    def iptv_movie_facets(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).facets())
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/projection/status")
+    def iptv_movie_projection_status(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).projection_status())
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.post("/api/iptv/providers/<provider_id>/movies/projection/retry")
+    def iptv_movie_projection_retry(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).retry_projection())
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/status")
+    def iptv_movie_status(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).enrichment_status())
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/metadata/status")
+    def iptv_movie_metadata_status(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).metadata_status())
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/metadata/review")
+    def iptv_movie_metadata_review(provider_id):
+        try:
+            return jsonify(movie_service(provider_id).metadata_review(
+                request.args.get("view", "needs-review"),
+                request.args.get("page", 1), request.args.get("page_size", 50),
+            ))
+        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.post("/api/iptv/providers/<provider_id>/movies/prioritize")
+    def iptv_movie_prioritize(provider_id):
+        try:
+            data = request.get_json(silent=True) or {}
+            return jsonify({"prioritized": movie_service(provider_id).prioritize_movies(data.get("movie_keys") or [])})
+        except (KeyError, TypeError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.post("/api/iptv/providers/<provider_id>/movies/enrichment/<action>")
+    def iptv_movie_enrichment(provider_id, action):
+        data = request.get_json(silent=True) or {}
+        try:
+            provider_movies = movie_service(provider_id)
+            if action == "start":
+                result = provider_movies.start_enrichment(consent=bool(data.get("consent")), diagnostic=bool(data.get("diagnostic")))
+            elif action == "pause":
+                result = provider_movies.pause_enrichment()
+            elif action == "resume":
+                result = provider_movies.resume_enrichment(continue_after_restart=bool(data.get("continue_after_restart")))
+            elif action == "cancel":
+                result = provider_movies.cancel_enrichment()
+            elif action == "retry-failures":
+                result = provider_movies.retry_failures()
+            elif action == "re-evaluate-stale":
+                result = provider_movies.re_evaluate_stale()
+            else:
+                raise KeyError("IPTV enrichment action was not found")
+            return jsonify(result)
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/<movie_key>")
+    def iptv_movie_detail(provider_id, movie_key):
+        try:
+            return jsonify(movie_service(provider_id).movie(movie_key))
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/<movie_key>/sources")
+    def iptv_movie_sources(provider_id, movie_key):
+        try:
+            return jsonify({"items": movie_service(provider_id).sources(movie_key)})
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/<movie_key>/localization/<locale>")
+    def iptv_movie_localization(provider_id, movie_key, locale):
+        try:
+            return jsonify(movie_service(provider_id).localization(movie_key, locale))
+        except (KeyError, ValueError, RuntimeError, IPTVTMDBError) as error:
+            return error_response(error, provider_id)
+
+    @app.get("/api/iptv/providers/<provider_id>/movies/<movie_key>/match/search")
+    def iptv_movie_match_search(provider_id, movie_key):
+        try:
+            return jsonify(movie_service(provider_id).manual_search(
+                movie_key, request.args.get("q", ""), request.args.get("year", 0)
+            ))
+        except (KeyError, TypeError, ValueError, RuntimeError, IPTVTMDBError) as error:
+            return error_response(error, provider_id)
+
+    @app.route("/api/iptv/providers/<provider_id>/movies/<movie_key>/match", methods=["POST", "DELETE"])
+    def iptv_movie_match(provider_id, movie_key):
+        data = request.get_json(silent=True) or {}
+        try:
+            provider_movies = movie_service(provider_id)
+            if request.method == "DELETE":
+                provider_movies.remove_match(
+                    movie_key,
+                    reprocess=request.args.get("reprocess", "").lower() in {"1", "true", "yes"},
+                )
+                return jsonify({"success": True})
+            next_key = provider_movies.manual_match(movie_key, data.get("tmdb_id"))
+            return jsonify({"success": True, "movie_key": next_key})
+        except (KeyError, TypeError, ValueError, RuntimeError, IPTVTMDBError) as error:
+            return error_response(error, provider_id)
+
+    @app.post("/api/iptv/providers/<provider_id>/movies/<movie_key>/favorite")
+    def iptv_movie_favorite(provider_id, movie_key):
+        data = request.get_json(silent=True) or {}
+        try:
+            favorite = movie_service(provider_id).set_favorite(movie_key, bool(data.get("favorite", True)))
+            return jsonify({"success": True, "favorite": favorite})
+        except (KeyError, ValueError, RuntimeError) as error:
+            return error_response(error, provider_id)
+
+    @app.route("/api/iptv/providers/<provider_id>/movies/<movie_key>/lists/<list_id>", methods=["POST", "DELETE"])
+    def iptv_movie_list_membership(provider_id, movie_key, list_id):
+        try:
+            included = request.method == "POST"
+            changed = movie_service(provider_id).set_list_membership(movie_key, list_id, included)
+            return jsonify({"success": True, "included": changed})
+        except (KeyError, ValueError, RuntimeError) as error:
             return error_response(error, provider_id)
 
     @app.get("/api/iptv/providers/<provider_id>/favorites")

@@ -1,6 +1,7 @@
 """Catalog-backed maintenance projections for the local movie archive."""
 
 import os
+import re
 import time
 
 from services.identity_verification import verify_catalog_identity
@@ -194,22 +195,72 @@ def _split_bulk_plex_groups(groups):
     return split
 
 
+def _content_fact_blockers(item):
+    filename = item.get("filename") or "copy"
+    blockers = []
+    if item.get("probe_status") != "ok":
+        blockers.append(f"{filename}: the media probe did not complete successfully")
+    if int(item.get("file_facts_version") or 0) < FILE_FACTS_VERSION:
+        blockers.append(f"{filename}: measured file facts are outdated")
+    if int(item.get("classifier_version") or 0) < QUALITY_CLASSIFIER_VERSION:
+        blockers.append(f"{filename}: the resolution classification is outdated")
+    if item.get("quality_conflict"):
+        blockers.append(f"{filename}: measured quality conflicts with the stored quality")
+
+    missing = []
+    if int(item.get("video_width") or 0) <= 0 or int(item.get("video_height") or 0) <= 0:
+        missing.append("video dimensions")
+    if int(item.get("duration_ms") or 0) <= 0:
+        missing.append("runtime")
+    if not _text(item.get("video_codec")):
+        missing.append("video codec")
+    if int(item.get("video_bit_depth") or 0) <= 0:
+        missing.append("video bit depth")
+    if not _text(item.get("audio_codec")):
+        missing.append("primary-audio codec")
+    if float(item.get("audio_channels") or 0) <= 0:
+        missing.append("primary-audio channels")
+    if missing:
+        blockers.append(f"{filename}: missing {', '.join(missing)}")
+    return blockers
+
+
+def _optional_fact_warnings(*items):
+    warnings = []
+    for item in items:
+        missing = []
+        if int(item.get("video_bitrate") or 0) <= 0:
+            missing.append("video bitrate")
+        if int(item.get("audio_bitrate") or 0) <= 0:
+            missing.append("primary-audio bitrate")
+        if missing:
+            warnings.append(
+                f"{item.get('filename') or 'copy'}: {', '.join(missing)} unavailable; "
+                "CP did not treat unavailable bitrate as evidence of lower quality"
+            )
+    if len(items) == 2:
+        left, right = items
+        if _text(left.get("video_codec")).lower() != _text(right.get("video_codec")).lower():
+            warnings.append(
+                f"Video codecs differ: {left.get('video_codec') or 'Unknown'} versus "
+                f"{right.get('video_codec') or 'Unknown'}"
+            )
+        if _text(left.get("audio_codec")).lower() != _text(right.get("audio_codec")).lower():
+            warnings.append(
+                f"Primary-audio codecs differ: {left.get('audio_codec') or 'Unknown'} versus "
+                f"{right.get('audio_codec') or 'Unknown'}"
+            )
+    return warnings
+
+
 def _facts_complete(item):
-    return bool(
-        item.get("probe_status") == "ok"
-        and int(item.get("file_facts_version") or 0) >= FILE_FACTS_VERSION
-        and int(item.get("classifier_version") or 0) >= QUALITY_CLASSIFIER_VERSION
-        and not item.get("quality_conflict")
-        and int(item.get("video_width") or 0) > 0
-        and int(item.get("video_height") or 0) > 0
-        and int(item.get("duration_ms") or 0) > 0
-        and _text(item.get("video_codec"))
-        and int(item.get("video_bit_depth") or 0) > 0
-        and int(item.get("video_bitrate") or 0) > 0
-        and _text(item.get("audio_codec"))
-        and float(item.get("audio_channels") or 0) > 0
-        and int(item.get("audio_bitrate") or 0) > 0
-    )
+    """Return whether the facts needed for content and feature safety are present.
+
+    Bitrates are supporting evidence, not a prerequisite. Some containers do not
+    expose them reliably; a missing bitrate must not erase otherwise decisive
+    identity, runtime, framing, resolution, codec, depth, and channel evidence.
+    """
+    return not _content_fact_blockers(item)
 
 
 def _duration_equivalent(left, right):
@@ -285,7 +336,9 @@ def _duration_evidence(left, right):
         "equivalent": False,
         "kind": "runtime_mismatch",
         "reason": (
-            f"runtime differs by {delta_ratio * 100:.2f}% without matching speed-conversion evidence"
+            f"runtime differs by {delta_ratio * 100:.2f}% "
+            f"({abs(left_duration - right_duration) / 1000:.1f}s); automatic selection allows "
+            f"{tolerance / 1000:.1f}s, and no matching speed-conversion evidence was found"
         ),
         "duration_delta_percent": round(delta_ratio * 100, 3),
         "frame_count_delta_percent": None,
@@ -301,7 +354,10 @@ def _aspect_evidence(left, right):
     elif equivalent:
         reason = f"framing differs by {delta_ratio * 100:.2f}% (minor crop)"
     else:
-        reason = f"framing differs by {delta_ratio * 100:.2f}%"
+        reason = (
+            f"framing differs by {delta_ratio * 100:.2f}%; automatic selection allows up to "
+            f"{_ASPECT_RATIO_TOLERANCE * 100:.2f}%"
+        )
     return {
         "equivalent": equivalent,
         "reason": reason,
@@ -311,56 +367,90 @@ def _aspect_evidence(left, right):
 
 
 def _edition_tokens(filename):
-    normalized = _text(filename).lower().replace(".", " ").replace("_", " ").replace("-", " ")
-    tokens = (
-        "extended", "director cut", "directors cut", "theatrical", "unrated",
-        "alternate", "subbed", "dubbed", "multi audio", "commentary",
+    normalized = re.sub(r"[^a-z0-9]+", " ", _text(filename).lower()).strip()
+    markers = set()
+    patterns = (
+        ("Extended", r"\bextended\b"),
+        ("Director's Cut", r"\b(?:dc|director(?:s| s)? cut)\b"),
+        ("Theatrical", r"\btheatrical\b"),
+        ("Unrated", r"\bunrated\b"),
+        ("Alternate", r"\balternate\b"),
+        ("Subbed", r"\bsubbed\b"),
+        ("Dubbed", r"\bdubbed\b"),
+        ("Multi audio", r"\bmulti audio\b"),
+        ("Commentary", r"\bcommentary\b"),
     )
-    return {token for token in tokens if token in normalized}
+    for label, pattern in patterns:
+        if re.search(pattern, normalized):
+            markers.add(label)
+    return markers
+
+
+def _edition_warning(left, right):
+    left_markers = _edition_tokens(left.get("filename"))
+    right_markers = _edition_tokens(right.get("filename"))
+    if left_markers == right_markers:
+        return ""
+    details = []
+    left_only = sorted(left_markers - right_markers)
+    right_only = sorted(right_markers - left_markers)
+    if left_only:
+        details.append(f"{left.get('filename')}: {', '.join(left_only)}")
+    if right_only:
+        details.append(f"{right.get('filename')}: {', '.join(right_only)}")
+    return (
+        "Filename edition markers differ (" + "; ".join(details) + "). "
+        "Runtime and framing still determine content equivalence, but review the cut label before deletion"
+    )
 
 
 def _content_equivalence(left, right):
-    if not _facts_complete(left) or not _facts_complete(right):
-        return {
-            "equivalent": False,
-            "kind": "incomplete",
-            "reason": "Measured file facts are incomplete or conflicted.",
-            "duration_delta_percent": None,
-            "frame_count_delta_percent": None,
-            "aspect_delta_percent": None,
-            "uses_frame_rate": False,
-            "uses_aspect_ratio": False,
-        }
-    if _edition_tokens(left.get("filename")) != _edition_tokens(right.get("filename")):
-        return {
-            "equivalent": False,
-            "kind": "edition_mismatch",
-            "reason": "Filename edition, subtitle, audio, or commentary evidence differs.",
-            "duration_delta_percent": None,
-            "frame_count_delta_percent": None,
-            "aspect_delta_percent": None,
-            "uses_frame_rate": False,
-            "uses_aspect_ratio": False,
-        }
+    blockers = _content_fact_blockers(left) + _content_fact_blockers(right)
+    warnings = _optional_fact_warnings(left, right)
+    edition_warning = _edition_warning(left, right)
+    if edition_warning:
+        warnings.append(edition_warning)
 
-    duration = _duration_evidence(left, right)
-    aspect = _aspect_evidence(left, right)
-    reasons = [duration["reason"], aspect["reason"]]
-    return {
-        "equivalent": duration["equivalent"] and aspect["equivalent"],
-        "kind": (
-            duration["kind"]
-            if not duration["equivalent"]
+    duration = None
+    if int(left.get("duration_ms") or 0) > 0 and int(right.get("duration_ms") or 0) > 0:
+        duration = _duration_evidence(left, right)
+        if not duration["equivalent"]:
+            blockers.append(duration["reason"])
+
+    aspect = None
+    if _pixel_count(left) and _pixel_count(right):
+        aspect = _aspect_evidence(left, right)
+        if not aspect["equivalent"]:
+            blockers.append(aspect["reason"])
+
+    passed = []
+    if duration and duration["equivalent"]:
+        passed.append(duration["reason"])
+    if aspect and aspect["equivalent"]:
+        passed.append(aspect["reason"])
+
+    if blockers:
+        kind = (
+            "runtime_mismatch"
+            if duration and not duration["equivalent"]
             else "framing_mismatch"
-            if not aspect["equivalent"]
-            else duration["kind"]
-        ),
-        "reason": "; ".join(reasons),
-        "duration_delta_percent": duration["duration_delta_percent"],
-        "frame_count_delta_percent": duration["frame_count_delta_percent"],
-        "aspect_delta_percent": aspect["aspect_delta_percent"],
-        "uses_frame_rate": duration["uses_frame_rate"],
-        "uses_aspect_ratio": aspect["uses_aspect_ratio"],
+            if aspect and not aspect["equivalent"]
+            else "incomplete"
+        )
+    else:
+        kind = duration["kind"] if duration else "equivalent"
+    return {
+        "equivalent": not blockers,
+        "kind": kind,
+        "reason": "; ".join(passed if not blockers else blockers),
+        "blockers": blockers,
+        "warnings": warnings,
+        "passed": passed,
+        "duration_delta_percent": duration["duration_delta_percent"] if duration else None,
+        "frame_count_delta_percent": duration["frame_count_delta_percent"] if duration else None,
+        "aspect_delta_percent": aspect["aspect_delta_percent"] if aspect else None,
+        "uses_frame_rate": bool(duration and duration["uses_frame_rate"]),
+        "uses_aspect_ratio": bool(aspect and aspect["uses_aspect_ratio"]),
     }
 
 
@@ -466,6 +556,28 @@ def _feature_regressions(winner, loser):
     return regressions, regression_kind
 
 
+def _feature_passes(winner, loser):
+    passed = []
+    winner_depth = int(winner.get("video_bit_depth") or 0)
+    loser_depth = int(loser.get("video_bit_depth") or 0)
+    if winner_depth >= loser_depth:
+        passed.append(f"Keeper bit depth is {winner_depth}-bit versus {loser_depth}-bit")
+    if int(winner.get("rip_rank", -3)) >= int(loser.get("rip_rank", -3)):
+        passed.append(
+            f"Keeper source tier is {winner.get('rip_source') or 'Unknown'} versus "
+            f"{loser.get('rip_source') or 'Unknown'}"
+        )
+    winner_channels = float(winner.get("audio_channels") or 0)
+    loser_channels = float(loser.get("audio_channels") or 0)
+    if winner_channels >= loser_channels:
+        passed.append(
+            f"Keeper primary audio has {winner_channels:g} channels versus {loser_channels:g}"
+        )
+    if _is_lossless_audio(loser.get("audio_codec")) and _is_lossless_audio(winner.get("audio_codec")):
+        passed.append("Keeper preserves lossless primary audio")
+    return passed
+
+
 def _size_evidence(left, right):
     left_size = int(left.get("size") or 0)
     right_size = int(right.get("size") or 0)
@@ -492,16 +604,20 @@ def _pair_comparison(left, right):
     visual = _visual_comparison(left, right)
     storage = _size_evidence(left, right)
     regressions = []
+    feature_passed = []
     regression_kind = "unique_features"
     if visual["winner"] == "left":
         regressions, regression_kind = _feature_regressions(left, right)
+        feature_passed = _feature_passes(left, right)
     elif visual["winner"] == "right":
         regressions, regression_kind = _feature_regressions(right, left)
+        feature_passed = _feature_passes(right, left)
     return {
         "content": content,
         "visual": visual,
         "storage": storage,
         "feature_regressions": regressions,
+        "feature_passed": feature_passed,
         "regression_kind": regression_kind,
     }
 
@@ -518,6 +634,39 @@ def _comparison_fields(peer, pair):
         "storage_delta_bytes": int(pair["storage"].get("bytes") or 0),
         "storage_delta_percent": round(float(pair["storage"].get("percent") or 0), 2),
     }
+
+
+def _unique_messages(messages):
+    return list(dict.fromkeys(_text(message) for message in messages if _text(message)))
+
+
+def _shared_identity_evidence(files):
+    evidence = []
+    for field, label in (("tmdb_id", "TMDB"), ("imdb_id", "IMDb")):
+        identities = [_text(file.get(field)) for file in files]
+        if identities and all(identities) and len(set(identity.lower() for identity in identities)) == 1:
+            evidence.append(f"All copies share {label} identity {identities[0]}")
+    return evidence
+
+
+def _decision_fields(*, blockers=(), warnings=(), passed=()):
+    return {
+        "decision_blockers": _unique_messages(blockers),
+        "decision_warnings": _unique_messages(warnings),
+        "decision_passed": _unique_messages(passed),
+    }
+
+
+def _visual_uncertainty_reason(winner, loser, visual):
+    ratio = float(visual.get("pixel_ratio") or 0)
+    if ratio < _STRONG_PIXEL_ADVANTAGE:
+        return (
+            f"Pixel advantage is {ratio:.2f}x; automatic recommendation requires at least "
+            f"{_STRONG_PIXEL_ADVANTAGE:.2f}x"
+        )
+    if _resolution_rank(winner) <= _resolution_rank(loser):
+        return "The higher-pixel copy does not have a higher recognized resolution class"
+    return "The higher-pixel copy is not at least as wide and as tall as the other copy"
 
 
 def _tradeoff_reason(left, right, pair):
@@ -565,6 +714,7 @@ def _duplicate_groups(items):
             item["filename"].lower(),
         ), reverse=True)
         identity_safe = _duplicate_identity_safe(ranked)
+        identity_passed = _shared_identity_evidence(ranked) if identity_safe else []
         pair_results = {}
         for left_index, left in enumerate(ranked):
             for right_index in range(left_index + 1, len(ranked)):
@@ -576,6 +726,19 @@ def _duplicate_groups(items):
             current_side = "left" if index == left_index else "right"
             other_side = "right" if current_side == "left" else "left"
             return pair, current_side, other_side
+
+        def pair_decision(pair, *, blockers=(), warnings=(), passed=()):
+            content = pair.get("content") or {}
+            return _decision_fields(
+                blockers=[*content.get("blockers", []), *blockers],
+                warnings=[*content.get("warnings", []), *warnings],
+                passed=[
+                    *identity_passed,
+                    *content.get("passed", []),
+                    *pair.get("feature_passed", []),
+                    *passed,
+                ],
+            )
 
         output_files = []
         for index, file in enumerate(ranked):
@@ -609,6 +772,12 @@ def _duplicate_groups(items):
                     "verdict_label": "Identity review required",
                     "verdict_tone": "warning",
                     "reason": "Duplicate files share an identity, but that identity must be confirmed before removal.",
+                    **_decision_fields(
+                        blockers=[
+                            "The accepted movie identity is not confirmed by one shared TMDB or IMDb ID",
+                        ],
+                        passed=["CP grouped these files as possible copies of the same movie"],
+                    ),
                 })
             elif safe_dominators:
                 peer, pair = max(safe_dominators, key=lambda entry: entry[1]["visual"]["pixel_ratio"])
@@ -624,6 +793,12 @@ def _duplicate_groups(items):
                         f"{pair['content']['reason'].rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
+                    **pair_decision(
+                        pair,
+                        passed=[
+                            f"{peer['filename']} has {ratio:.2f}x as many pixels and a higher resolution class",
+                        ],
+                    ),
                 })
             elif uncertain_dominators:
                 peer, pair = max(uncertain_dominators, key=lambda entry: entry[1]["visual"]["pixel_ratio"])
@@ -640,6 +815,9 @@ def _duplicate_groups(items):
                     verdict = "lower_quality_verify_cut"
                     label = "Lower quality · verify cut"
                     explanation = pair["content"]["reason"]
+                decision_blockers = list(pair["feature_regressions"])
+                if not decision_blockers and not pair["content"].get("blockers"):
+                    decision_blockers.append(_visual_uncertainty_reason(peer, file, pair["visual"]))
                 row.update({
                     "role": "candidate",
                     "recommendation": "review",
@@ -651,6 +829,11 @@ def _duplicate_groups(items):
                         f"{explanation.rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
+                    **pair_decision(
+                        pair,
+                        blockers=decision_blockers,
+                        passed=[f"{peer['filename']} has {ratio:.2f}x as many pixels"],
+                    ),
                 })
             elif safe_dominated:
                 peer, pair = max(safe_dominated, key=lambda entry: entry[1]["visual"]["pixel_ratio"])
@@ -666,6 +849,13 @@ def _duplicate_groups(items):
                         f"{pair['content']['reason'].rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
+                    **pair_decision(
+                        pair,
+                        passed=[
+                            f"This copy has {ratio:.2f}x the pixels of {peer['filename']}",
+                            "CP recommends keeping this stronger copy",
+                        ],
+                    ),
                 })
             elif uncertain_dominated:
                 peer, pair = max(uncertain_dominated, key=lambda entry: entry[1]["visual"]["pixel_ratio"])
@@ -675,6 +865,9 @@ def _duplicate_groups(items):
                     if pair["feature_regressions"]
                     else pair["content"]["reason"]
                 )
+                decision_blockers = list(pair["feature_regressions"])
+                if not decision_blockers and not pair["content"].get("blockers"):
+                    decision_blockers.append(_visual_uncertainty_reason(file, peer, pair["visual"]))
                 row.update({
                     "role": "keep",
                     "recommendation": "review",
@@ -686,6 +879,11 @@ def _duplicate_groups(items):
                         f"{explanation.rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
+                    **pair_decision(
+                        pair,
+                        blockers=decision_blockers,
+                        passed=[f"This copy has {ratio:.2f}x the pixels of {peer['filename']}"],
+                    ),
                 })
             elif tradeoffs:
                 peer, pair = max(
@@ -700,6 +898,12 @@ def _duplicate_groups(items):
                     "verdict_tone": "neutral",
                     "reason": _tradeoff_reason(file, peer, pair),
                     **_comparison_fields(peer, pair),
+                    **pair_decision(
+                        pair,
+                        blockers=[
+                            "Neither copy has a decisive resolution advantage; cross-codec encoding quality cannot be proven",
+                        ],
+                    ),
                 })
             else:
                 row.update({
@@ -709,6 +913,12 @@ def _duplicate_groups(items):
                     "verdict_label": "Manual comparison",
                     "verdict_tone": "warning",
                     "reason": "No copy has a strong, safely equivalent technical advantage.",
+                    **_decision_fields(
+                        blockers=[
+                            "No copy reaches the decisive technical advantage required for automatic selection",
+                        ],
+                        passed=identity_passed,
+                    ),
                 })
             output_files.append(row)
 

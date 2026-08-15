@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +21,7 @@ from services.media_file_facts import (
 
 
 DEFAULT_BATCH_SIZE = 8
+DEFAULT_RECLASSIFY_BATCH_SIZE = 100
 DEFAULT_CONCURRENCY = 2
 MAX_CONCURRENCY = 4
 MAX_FAILURE_SUMMARY = 25
@@ -59,19 +60,38 @@ def _probe_row(
     row: dict[str, Any],
     roots: list[str],
     probe: Callable[[str], MediaFileFacts],
-) -> tuple[dict[str, Any], MediaFileFacts, float]:
+) -> tuple[dict[str, Any], MediaFileFacts, float, bool]:
     started = time.perf_counter()
+    if _can_reclassify_from_stored(row):
+        stored = MediaFileFacts(**{
+            field.name: row.get(field.name, field.default)
+            for field in fields(MediaFileFacts)
+        })
+        decision = classify_dimensions(
+            stored.video_width,
+            stored.video_height,
+            stored.filename_quality_claim,
+        )
+        return row, replace(
+            stored,
+            quality_class=decision.quality_class,
+            quality_source=decision.source,
+            quality_conflict=decision.conflict,
+            quality_nonstandard=decision.nonstandard,
+            classifier_version=QUALITY_CLASSIFIER_VERSION,
+        ), 0.0, True
+
     path = str(row.get("path") or "")
     if not path or not _inside_root(path, roots):
-        return row, _failure(row, "inaccessible", "outside_library_root"), 0.0
+        return row, _failure(row, "inaccessible", "outside_library_root"), 0.0, False
     try:
         before = os.stat(path)
     except FileNotFoundError:
-        return row, _failure(row, "missing", "missing"), 0.0
+        return row, _failure(row, "missing", "missing"), 0.0, False
     except PermissionError:
-        return row, _failure(row, "inaccessible", "access_denied"), 0.0
+        return row, _failure(row, "inaccessible", "access_denied"), 0.0, False
     except OSError:
-        return row, _failure(row, "inaccessible", "stat_failed"), 0.0
+        return row, _failure(row, "inaccessible", "stat_failed"), 0.0, False
     expected_size = int(row.get("size") or 0)
     expected_modified = float(row.get("modified_time") or 0)
     if (
@@ -83,7 +103,7 @@ def _probe_row(
             "file_changed",
             "catalog_fingerprint_changed",
             stat_result=before,
-        ), 0.0
+        ), 0.0, False
     facts = probe(path)
     elapsed_ms = (time.perf_counter() - started) * 1000
     if (
@@ -95,7 +115,22 @@ def _probe_row(
             file_facts_version=FILE_FACTS_VERSION,
             classifier_version=QUALITY_CLASSIFIER_VERSION,
         )
-    return row, facts, elapsed_ms
+    return row, facts, elapsed_ms, False
+
+
+def _can_reclassify_from_stored(row: dict[str, Any]) -> bool:
+    return (
+        int(row.get("file_facts_version") or 0) == FILE_FACTS_VERSION
+        and int(row.get("classifier_version") or 0) < QUALITY_CLASSIFIER_VERSION
+        and row.get("probe_status") == "ok"
+        and int(row.get("video_width") or 0) > 0
+        and int(row.get("video_height") or 0) > 0
+        and int(row.get("probe_size") or 0) == int(row.get("size") or 0)
+        and abs(
+            float(row.get("probe_modified_time") or 0)
+            - float(row.get("modified_time") or 0)
+        ) <= 0.001
+    )
 
 
 def run_file_facts_backfill(
@@ -110,7 +145,7 @@ def run_file_facts_backfill(
     cancel_event: threading.Event | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Probe stale SQL rows in bounded batches and advance one generation/batch."""
+    """Refresh stale SQL file facts and advance one generation per committed batch."""
 
     batch_size = min(max(int(batch_size or DEFAULT_BATCH_SIZE), 1), 100)
     concurrency = min(max(int(concurrency or DEFAULT_CONCURRENCY), 1), MAX_CONCURRENCY)
@@ -126,6 +161,7 @@ def run_file_facts_backfill(
         "batches": 0,
         "selected": 0,
         "probed": 0,
+        "reclassified": 0,
         "changed": 0,
         "rejected": 0,
         "failures": 0,
@@ -142,14 +178,23 @@ def run_file_facts_backfill(
         if max_batches is not None and report["batches"] >= int(max_batches):
             report["status"] = "paused"
             break
-        candidates = repository.file_facts_backfill_candidates(
-            min(100, batch_size + len(attempted)),
+        available = repository.file_facts_backfill_candidates(
+            DEFAULT_RECLASSIFY_BATCH_SIZE,
             retry_failed=retry_failed,
         )
-        candidates = [
-            row for row in candidates
+        available = [
+            row for row in available
             if row.get("path_key") not in attempted
-        ][:batch_size]
+        ]
+        reclassifiable = [
+            row for row in available
+            if _can_reclassify_from_stored(row)
+        ]
+        candidates = (
+            reclassifiable[:DEFAULT_RECLASSIFY_BATCH_SIZE]
+            if reclassifiable
+            else available[:batch_size]
+        )
         if not candidates:
             report["status"] = "completed"
             break
@@ -167,9 +212,12 @@ def run_file_facts_backfill(
                 if cancel_event.is_set():
                     for pending in futures:
                         pending.cancel()
-                row, facts, elapsed_ms = future.result()
+                row, facts, elapsed_ms, reclassified = future.result()
                 attempted.add(row.get("path_key"))
-                report["probed"] += 1
+                if reclassified:
+                    report["reclassified"] += 1
+                else:
+                    report["probed"] += 1
                 if elapsed_ms:
                     report["probe_ms"].append(round(elapsed_ms, 3))
                 if facts.probe_status != "ok":

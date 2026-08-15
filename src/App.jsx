@@ -14,14 +14,19 @@ import {
   Loader2,
   PanelLeftClose,
   PanelLeftOpen,
+  Power,
+  RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   ShieldCheck,
+  MonitorOff,
   Tv,
   X
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { fetchJson } from './api/client.js';
+import { cancelPowerAction, fetchPowerStatus, requestPowerAction, resumePowerAction } from './api/power.js';
 import { announceLibraryReconciled, CATALOG_GENERATION_CHANGED_EVENT, fetchOwnershipChecks, observeCatalogGeneration } from './api/library.js';
 import { CATALOG_READY_EVENT, startCatalogEvents } from './api/catalogEvents.js';
 import { fetchCanonicalMovieDetails, markMovieDetailsCacheStale, movieDetailsCacheKey } from './api/movieDetails.js';
@@ -57,7 +62,9 @@ import {
   buildOwnershipMap,
   discoverMoviePayload,
   listsForDiscoverMovie,
-  ownedMovieFor
+  ownedMovieFor,
+  removeOwnershipPaths,
+  replaceOwnershipScope
 } from './discoverUtils.js';
 import { applySystemListState, resolutionRank } from './utils/libraryUtils.js';
 import { buildUpcomingHomeMovies, uniqueHomeMovies } from './utils/homeMovies.js';
@@ -315,6 +322,7 @@ function ArchiveApp() {
     trailersMore: false
   });
   const [toast, setToast] = useState(null);
+  const [powerStatus, setPowerStatus] = useState({ active_downloads: 0, plan: {} });
   const [torrentModal, setTorrentModal] = useState(null);
   const [trailerModal, setTrailerModal] = useState(null);
   const [streamModal, setStreamModal] = useState(null);
@@ -406,9 +414,21 @@ function ArchiveApp() {
 
   useEffect(() => {
     if (activeSection !== 'home') return undefined;
-    window.addEventListener('cp-library-changed', refreshHealthStats);
-    return () => window.removeEventListener('cp-library-changed', refreshHealthStats);
-  }, [activeSection, refreshHealthStats]);
+    const refreshHomeLibraryState = async (event) => {
+      refreshHealthStats();
+      const scope = uniqueHomeMovies(movies, upcomingMovies);
+      setOwnership((state) => removeOwnershipPaths(state, event?.detail?.deleted_paths));
+      if (!scope.length) return;
+      try {
+        const ownershipResults = await fetchOwnershipChecks(scope);
+        setOwnership((state) => replaceOwnershipScope(state, scope, ownershipResults));
+      } catch {
+        // Home remains usable while best-effort ownership refresh is unavailable.
+      }
+    };
+    window.addEventListener('cp-library-changed', refreshHomeLibraryState);
+    return () => window.removeEventListener('cp-library-changed', refreshHomeLibraryState);
+  }, [activeSection, movies, refreshHealthStats, upcomingMovies]);
 
   const loadHomeLists = useCallback(async (options = {}) => {
     try {
@@ -434,6 +454,63 @@ function ArchiveApp() {
       // Playback history is optional while the OS player remains selected.
     }
   }, []);
+
+  const refreshPowerStatus = useCallback(async () => {
+    try {
+      setPowerStatus(await fetchPowerStatus());
+    } catch {
+      // Power controls remain available for a later retry if the backend is restarting.
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPowerStatus();
+    const interval = window.setInterval(refreshPowerStatus, 5000);
+    return () => window.clearInterval(interval);
+  }, [refreshPowerStatus]);
+
+  const handleFrontendReset = useCallback(() => {
+    const resetUrl = new URL(window.location.href);
+    resetUrl.searchParams.set('_cp_reset', Date.now().toString());
+    window.location.replace(resetUrl.toString());
+  }, []);
+
+  const handlePowerAction = useCallback(async (action, afterDownload, closeQbittorrent = false) => {
+    try {
+      const status = await requestPowerAction(action, afterDownload, closeQbittorrent);
+      setPowerStatus(status);
+      notify(
+        action === 'restart'
+          ? 'Restarting Cinema Paradiso'
+          : afterDownload
+          ? `${action === 'device' ? 'Device' : 'Cinema Paradiso'} will turn off after the selected downloads are recoverably checkpointed`
+          : `Turning off ${action === 'device' ? 'the device' : 'Cinema Paradiso'}`,
+        'neutral'
+      );
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }, [notify]);
+
+  const handleCancelPowerAction = useCallback(async () => {
+    try {
+      const status = await cancelPowerAction();
+      setPowerStatus(status);
+      notify('Scheduled power action cancelled', 'neutral');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }, [notify]);
+
+  const handleResumePowerAction = useCallback(async () => {
+    try {
+      const status = await resumePowerAction();
+      setPowerStatus(status);
+      notify('Scheduled power action resumed', 'neutral');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }, [notify]);
 
   useEffect(() => {
     if (activeSection !== 'home') return undefined;
@@ -774,7 +851,7 @@ function ArchiveApp() {
 
   function openCleanupTab(tab) {
     if (tab === 'low' || tab === 'upgrades') {
-      setLibraryFilterRequest({ id: Date.now(), quality: 'upgrade' });
+      setLibraryFilterRequest({ id: Date.now(), resolution: 'upgrade' });
       selectSection('library');
       return;
     }
@@ -1069,6 +1146,11 @@ function ArchiveApp() {
         collapsed={sidebarCollapsed}
         onSelect={selectSection}
         onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        powerStatus={powerStatus}
+        onFrontendReset={handleFrontendReset}
+        onPowerAction={handlePowerAction}
+        onPowerCancel={handleCancelPowerAction}
+        onPowerResume={handleResumePowerAction}
       />
       <main ref={workspaceRef} className={cx('workspace', activeSection === 'home' && 'workspace-home', activeSection === 'downloads' && 'workspace-downloads')}>
         {activeSection !== 'home' && activeSection !== 'library' && activeSection !== 'movie-lists' && activeSection !== 'cleanup' && activeSection !== 'discover' && activeSection !== 'ai-control' && activeSection !== 'iptv' && activeSection !== 'help' && activeSection !== 'settings' && (
@@ -1142,7 +1224,7 @@ function ArchiveApp() {
                 notify={notify}
                 query={libraryQuery}
                 setQuery={setLibraryQuery}
-                onReviewUnmatched={reviewUnmatchedMetadata}
+                followed={followed}
                 onOpenDiscoverPerson={openPersonInDiscover}
                 onOpenDiscoverCollection={openCollectionInDiscover}
                 filterRequest={libraryFilterRequest}
@@ -1235,7 +1317,7 @@ function ArchiveApp() {
         {mountedSections.has('iptv') && (
           <div className="workspace-panel" hidden={activeSection !== 'iptv'}>
             <Suspense fallback={<div className="loading-state"><Loader2 className="spin" size={20} /></div>}>
-              <IPTVWorkspace notify={notify} />
+              <IPTVWorkspace notify={notify} followed={followed} />
             </Suspense>
           </div>
         )}
@@ -1315,8 +1397,33 @@ function ArchiveApp() {
   );
 }
 
-function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
+function Sidebar({
+  activeSection,
+  collapsed,
+  onSelect,
+  onToggleCollapsed,
+  powerStatus,
+  onFrontendReset,
+  onPowerAction,
+  onPowerCancel,
+  onPowerResume
+}) {
   const [navTooltip, setNavTooltip] = useState(null);
+  const [powerMenuOpen, setPowerMenuOpen] = useState(false);
+  const [afterDownload, setAfterDownload] = useState(false);
+  const [closeQbittorrent, setCloseQbittorrent] = useState(false);
+  const plan = powerStatus?.plan || {};
+  const planActive = ['armed', 'draining', 'paused', 'failed', 'dispatch_claimed', 'dispatch_failed', 'dispatch_unknown'].includes(plan.state);
+  const cancellable = ['armed', 'paused', 'failed', 'dispatch_failed', 'dispatch_unknown'].includes(plan.state);
+  const checkpointed = (plan.target_status || []).filter((target) => target.checkpointed).length;
+  const canCloseQbittorrent = powerStatus?.torrent_client?.can_close === true;
+  const planLabel = plan.action === 'device'
+    ? 'SHUT DOWN DEVICE'
+    : plan.action === 'restart' ? 'RESTART' : 'TURN OFF';
+
+  useEffect(() => {
+    if (!canCloseQbittorrent) setCloseQbittorrent(false);
+  }, [canCloseQbittorrent]);
 
   const showNavTooltip = useCallback((label, event) => {
     if (!collapsed) return;
@@ -1393,15 +1500,85 @@ function Sidebar({ activeSection, collapsed, onSelect, onToggleCollapsed }) {
           );
         })}
       </nav>
-      <div
-        className="sidebar-footer"
-        title={collapsed ? APP_VERSION : undefined}
-      >
-        <div className="sidebar-footer-status">
-          <span className="status-dot" />
-          <span>Local-first archive</span>
+      <div className={cx('sidebar-power-zone', planActive && 'sidebar-power-zone-active')}>
+        <button
+          type="button"
+          className="sidebar-power-button"
+          aria-label="Power options"
+          aria-expanded={powerMenuOpen}
+          title="Power options"
+          onClick={() => setPowerMenuOpen((open) => !open)}
+        >
+          <Power size={21} />
+          <span>{planActive ? 'Power action active' : 'Power'}</span>
+        </button>
+        <div
+          className="sidebar-footer"
+          title={collapsed ? APP_VERSION : undefined}
+        >
+          <span className="sidebar-version">{APP_VERSION}</span>
         </div>
-        <span className="sidebar-version">{APP_VERSION}</span>
+        {powerMenuOpen && (
+          <div className={cx('sidebar-power-menu', collapsed && 'sidebar-power-menu-collapsed')} role="menu" aria-label="Power options">
+            <div className="sidebar-power-menu-heading">
+              <strong>Power</strong>
+              {planActive && <span>{plan.state.replace('_', ' ')}</span>}
+            </div>
+            {planActive ? (
+              <div className="sidebar-power-plan">
+                <strong>{planLabel}</strong>
+                <span>{plan.detail}</span>
+                {plan.action === 'cp' && plan.close_qbittorrent && <small>qBittorrent will also close</small>}
+                {!!plan.target_status?.length && (
+                  <small>{checkpointed} of {plan.target_status.length} downloads checkpointed</small>
+                )}
+                {plan.state === 'paused' && (
+                  <button type="button" className="sidebar-power-action" onClick={onPowerResume}>Resume scheduled action</button>
+                )}
+                {cancellable && (
+                  <button type="button" className="sidebar-power-action sidebar-power-cancel" onClick={onPowerCancel}>Cancel scheduled action</button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="sidebar-power-runtime-actions">
+                  <button type="button" className="sidebar-power-action" role="menuitem" onClick={onFrontendReset}>
+                    <RefreshCw size={18} /> <span>RESET</span>
+                  </button>
+                  <button type="button" className="sidebar-power-action" role="menuitem" onClick={() => onPowerAction('restart', false, false)}>
+                    <RotateCcw size={18} /> <span>RESTART</span>
+                  </button>
+                </div>
+                <label className="sidebar-power-after">
+                  <input
+                    type="checkbox"
+                    checked={afterDownload}
+                    disabled={!powerStatus?.active_downloads}
+                    onChange={(event) => setAfterDownload(event.target.checked)}
+                  />
+                  <span>After current downloads finish</span>
+                </label>
+                {!powerStatus?.active_downloads && <small className="sidebar-power-note">No active CP downloads</small>}
+                <label className="sidebar-power-after sidebar-power-torrent-option">
+                  <input
+                    type="checkbox"
+                    checked={closeQbittorrent}
+                    disabled={!canCloseQbittorrent}
+                    onChange={(event) => setCloseQbittorrent(event.target.checked)}
+                  />
+                  <span>Close qBittorrent too</span>
+                </label>
+                {!canCloseQbittorrent && <small className="sidebar-power-note">System qBittorrent is not owned by CP</small>}
+                <button type="button" className="sidebar-power-action" role="menuitem" onClick={() => onPowerAction('cp', afterDownload, closeQbittorrent)}>
+                  <Power size={18} /> <span>TURN OFF</span>
+                </button>
+                <button type="button" className="sidebar-power-action" role="menuitem" onClick={() => onPowerAction('device', afterDownload, false)}>
+                  <MonitorOff size={18} /> <span>SHUT DOWN DEVICE</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
       </aside>
       {collapsed && (

@@ -55,6 +55,27 @@ export function buildOwnershipMap(results = []) {
   return map;
 }
 
+export function replaceOwnershipScope(ownership = {}, movies = [], results = []) {
+  const scopeKeys = new Set((movies || []).flatMap((movie) => ownershipKeys(movie)));
+  const retained = Object.fromEntries(
+    Object.entries(ownership || {}).filter(([key, value]) => (
+      !scopeKeys.has(key)
+      && !ownershipKeys(value).some((valueKey) => scopeKeys.has(valueKey))
+    ))
+  );
+  return { ...retained, ...buildOwnershipMap(results) };
+}
+
+export function removeOwnershipPaths(ownership = {}, paths = []) {
+  const removed = new Set((paths || []).map((path) => String(path || '').toLowerCase()).filter(Boolean));
+  if (!removed.size) return ownership;
+  return Object.fromEntries(
+    Object.entries(ownership || {}).filter(([, value]) => (
+      !removed.has(String(value?.path || '').toLowerCase())
+    ))
+  );
+}
+
 export function ownershipKeys(movie = {}) {
   const keys = [];
   if (movie.movie_key) keys.push(String(movie.movie_key));

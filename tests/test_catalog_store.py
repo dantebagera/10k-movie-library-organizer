@@ -236,6 +236,10 @@ class CatalogStoreTest(unittest.TestCase):
             inventory = store.file_inventory()[0]
             measured_1080 = store.library_page({"resolution": "1080p"})
             measured_720 = store.library_page({"resolution": "720p"})
+            upgrade = store.library_page({
+                "resolution": "upgrade",
+                "upgrade_path_keys": ["e:/movies/alien.mkv"],
+            })
 
         self.assertEqual(report, {"changed": 1, "rejected": 0})
         for projection in (library, inventory):
@@ -247,6 +251,7 @@ class CatalogStoreTest(unittest.TestCase):
             self.assertEqual(projection["probe_status"], "ok")
         self.assertEqual(measured_1080["total"], 1)
         self.assertEqual(measured_720["total"], 0)
+        self.assertEqual(upgrade["total"], 1)
 
     def test_ownership_candidates_support_all_existing_identity_aliases(self):
         with tempfile.TemporaryDirectory() as root:

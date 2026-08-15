@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildOwnershipMap,
+  replaceOwnershipScope,
   canonicalOwnedMovie,
   discoverMoviePayload,
   discoverMovieKey,
@@ -166,6 +167,21 @@ test('listsForDiscoverMovie matches online movies by tmdb id without a file path
   const matches = listsForDiscoverMovie({ tmdb_id: 155, title: 'The Dark Knight', year: '2008' }, lists);
 
   assert.deepEqual(matches.map((list) => list.name), ['Favorites']);
+});
+
+test('replaceOwnershipScope removes every stale alias when a movie becomes unowned', () => {
+  const movie = { tmdb_id: 601, title: 'E.T.', year: '1982' };
+  const ownership = buildOwnershipMap([{
+    ...movie,
+    found: true,
+    path: 'E:/Movies/ET.mkv',
+    movie_key: 'tmdb:601'
+  }]);
+
+  const refreshed = replaceOwnershipScope(ownership, [movie], [{ ...movie, found: false, path: '' }]);
+
+  assert.equal(ownedMovieFor(movie, refreshed), null);
+  assert.equal(Object.keys(refreshed).length, 0);
 });
 
 test('owned list membership uses the canonical CP movie key after legacy projection', () => {
