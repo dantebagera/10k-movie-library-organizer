@@ -23,7 +23,7 @@ class PlayerRouteOwnershipTests(unittest.TestCase):
 
     def test_iptv_and_streaming_players_are_not_migrated(self):
         self.assertNotIn("/api/player/play", self.iptv)
-        self.assertIn("<IPTVWorkspace notify={notify} />", self.app_source)
+        self.assertIn("<IPTVWorkspace notify={notify} followed={followed} />", self.app_source)
         stream_modal = self.app_source.split(
             "function StreamPlayerModal(",
             1,

@@ -8,6 +8,7 @@ metadata provider.
 from __future__ import annotations
 
 import os
+import json
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-FILE_FACTS_VERSION = 2
+FILE_FACTS_VERSION = 3
 QUALITY_CLASSIFIER_VERSION = 2
 
 QUALITY_RANK = {"4K": 4, "1080p": 3, "720p": 2, "480p": 1, "Unknown": 0}
@@ -166,6 +167,7 @@ class MediaFileFacts:
     audio_codec: str = ""
     audio_channels: float = 0.0
     audio_bitrate: int = 0
+    audio_tracks_json: str = "[]"
     filename_quality_claim: str = "Unknown"
     quality_class: str = "Unknown"
     quality_source: str = "unavailable"
@@ -217,6 +219,29 @@ def _is_yes(value: Any) -> bool:
     return str(value or "").strip().lower() in {"yes", "true", "1"}
 
 
+_AUDIO_LANGUAGE_ALIASES = {
+    "en": "eng", "english": "eng",
+    "fr": "fra", "fre": "fra", "french": "fra",
+    "de": "deu", "ger": "deu", "german": "deu",
+    "es": "spa", "spanish": "spa",
+    "it": "ita", "italian": "ita",
+    "ja": "jpn", "japanese": "jpn",
+    "ko": "kor", "korean": "kor",
+    "zh": "zho", "chi": "zho", "chinese": "zho",
+    "pt": "por", "portuguese": "por",
+    "ru": "rus", "russian": "rus",
+    "ar": "ara", "arabic": "ara",
+    "hi": "hin", "hindi": "hin",
+}
+
+
+def _normalize_audio_language(value: Any) -> str:
+    language = _text(value).lower()
+    if language in {"und", "undefined", "unknown", "unk", "zxx"}:
+        return ""
+    return _AUDIO_LANGUAGE_ALIASES.get(language, language)
+
+
 def _primary_video(tracks: Iterable[Any]) -> Any | None:
     videos = [
         (index, track)
@@ -255,6 +280,28 @@ def _primary_audio(tracks: Iterable[Any]) -> Any | None:
             -pair[0],
         ),
     )[1]
+
+
+def _audio_tracks_json(tracks: Iterable[Any]) -> str:
+    """Return the complete audio inventory without involving subtitle streams."""
+    inventory = []
+    for index, track in enumerate(tracks):
+        if _text(_track_value(track, "track_type")).lower() != "audio":
+            continue
+        language = _normalize_audio_language(
+            _track_value(track, "language")
+            or _track_value(track, "language_string")
+        )
+        inventory.append({
+            "index": index,
+            "language": language,
+            "title": _text(_track_value(track, "title")),
+            "codec": _text(_track_value(track, "format")),
+            "channels": _float(_track_value(track, "channel_s")),
+            "bitrate": _integer(_track_value(track, "bit_rate")),
+            "default": _is_yes(_track_value(track, "default")),
+        })
+    return json.dumps(inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _probe_failure(
@@ -360,6 +407,7 @@ def probe_media_file(
         audio_codec=_text(_track_value(audio, "format")) if audio is not None else "",
         audio_channels=_float(_track_value(audio, "channel_s")) if audio is not None else 0.0,
         audio_bitrate=_integer(_track_value(audio, "bit_rate")) if audio is not None else 0,
+        audio_tracks_json=_audio_tracks_json(tracks),
         filename_quality_claim=claim,
         quality_class=decision.quality_class,
         quality_source=decision.source,

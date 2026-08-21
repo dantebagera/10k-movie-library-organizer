@@ -10,6 +10,11 @@ def drop_v10_playback_history(connection):
 def downgrade_catalog_to_v9(store):
     with store.transaction() as connection:
         drop_v10_playback_history(connection)
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(media_files)")
+        }
+        if "audio_tracks_json" in columns:
+            connection.execute("ALTER TABLE media_files DROP COLUMN audio_tracks_json")
         connection.execute(
             "UPDATE catalog_meta SET value='9' WHERE key='schema_version'"
         )

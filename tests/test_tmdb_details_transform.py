@@ -374,7 +374,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
                 response = app.app.test_client().get(
                     "/api/tmdb/discover"
                     "?list=catalog&keyword_id=501&keyword_name=time+travel&page=2"
-                    "&genre=878&year_from=2020&min_rating=7&min_votes=1000&sort=vote_average.desc"
+                    "&genre=878&language=en&country=GB&year_from=2020&min_rating=7&min_votes=1000&sort=vote_average.desc"
                 )
         finally:
             app._tmdb_key = original_key
@@ -387,6 +387,8 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertIn("page=2", requested)
         self.assertNotIn("/search/movie", requested)
         self.assertIn("with_genres=878", requested)
+        self.assertIn("with_original_language=en", requested)
+        self.assertIn("with_origin_country=GB", requested)
         self.assertIn("primary_release_date.gte=2020-01-01", requested)
         self.assertEqual(response.get_json()["keyword"], {
             "tmdb_id": "501",
@@ -396,6 +398,58 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(response.get_json()["total_pages"], 3)
         self.assertEqual(response.get_json()["results"][0]["title"], "Temporal Feature")
         self.assertEqual(response.get_json()["results"][0]["genres"], ["Sci-Fi"])
+
+    def test_discover_filter_options_use_tmdb_configuration_and_cache_the_result(self):
+        original_key = app._tmdb_key
+        original_cache = app._tmdb_filter_options_cache
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_filter_options_cache = None
+        requested_urls = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return app._json.dumps(self.payload).encode()
+
+        def fake_urlopen(request, timeout=0):
+            requested_urls.append(request.full_url)
+            if "/configuration/languages" in request.full_url:
+                return FakeResponse([
+                    {"iso_639_1": "fr", "english_name": "French", "name": "Français"},
+                    {"iso_639_1": "en", "english_name": "English", "name": "English"},
+                ])
+            return FakeResponse([
+                {"iso_3166_1": "US", "english_name": "United States", "native_name": "United States"},
+                {"iso_3166_1": "EG", "english_name": "Egypt", "native_name": "مصر"},
+            ])
+
+        try:
+            with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                first = app.app.test_client().get("/api/tmdb/filter-options")
+                second = app.app.test_client().get("/api/tmdb/filter-options")
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_filter_options_cache = original_cache
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.get_json()["languages"], [
+            {"label": "English", "value": "en"},
+            {"label": "French", "value": "fr"},
+        ])
+        self.assertEqual(first.get_json()["countries"], [
+            {"label": "Egypt", "value": "EG"},
+            {"label": "United States", "value": "US"},
+        ])
+        self.assertEqual(len(requested_urls), 2)
 
     def test_person_movies_filters_and_sorts_the_full_filmography_before_paging(self):
         original_key = app._tmdb_key
@@ -413,10 +467,11 @@ class TmdbDetailsTransformTest(unittest.TestCase):
             def read(self):
                 return app._json.dumps({
                     "cast": [
-                        {"id": 1, "title": "Zed Animation", "release_date": "2005-01-01", "genre_ids": [16], "vote_average": 7.5, "vote_count": 100, "popularity": 1},
-                        {"id": 2, "title": "Alpha Animation", "release_date": "2010-01-01", "genre_ids": [16], "vote_average": 8.0, "vote_count": 200, "popularity": 5},
-                        {"id": 3, "title": "Drama", "release_date": "2010-01-01", "genre_ids": [18], "vote_average": 9.0, "vote_count": 500, "popularity": 8},
-                        {"id": 4, "title": "Old Animation", "release_date": "1990-01-01", "genre_ids": [16], "vote_average": 9.0, "vote_count": 500, "popularity": 8},
+                        {"id": 1, "title": "Zed Animation", "release_date": "2005-01-01", "genre_ids": [16], "vote_average": 7.5, "vote_count": 100, "popularity": 1, "original_language": "en", "origin_country": ["GB"]},
+                        {"id": 2, "title": "Alpha Animation", "release_date": "2010-01-01", "genre_ids": [16], "vote_average": 8.0, "vote_count": 200, "popularity": 5, "original_language": "en", "origin_country": ["GB"]},
+                        {"id": 3, "title": "Drama", "release_date": "2010-01-01", "genre_ids": [18], "vote_average": 9.0, "vote_count": 500, "popularity": 8, "original_language": "en", "origin_country": ["GB"]},
+                        {"id": 4, "title": "Old Animation", "release_date": "1990-01-01", "genre_ids": [16], "vote_average": 9.0, "vote_count": 500, "popularity": 8, "original_language": "en", "origin_country": ["GB"]},
+                        {"id": 5, "title": "French Animation", "release_date": "2010-01-01", "genre_ids": [16], "vote_average": 8.2, "vote_count": 300, "popularity": 6, "original_language": "fr", "origin_country": ["FR"]},
                     ],
                     "crew": []
                 }).encode()
@@ -424,7 +479,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         try:
             with patch("app._ensure_tmdb_genres"), patch("app.urllib.request.urlopen", return_value=FakeResponse()):
                 response = app.app.test_client().get(
-                    "/api/tmdb/person_movies?person_id=55&role=actor&genre=16&year_from=2000&min_rating=7&min_votes=100&sort=title.asc"
+                    "/api/tmdb/person_movies?person_id=55&role=actor&genre=16&language=en&country=GB&year_from=2000&min_rating=7&min_votes=100&sort=title.asc"
                 )
         finally:
             app._tmdb_key = original_key

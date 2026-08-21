@@ -4,6 +4,7 @@
 
 #include <QGuiApplication>
 #include <QIcon>
+#include <QMetaObject>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -43,6 +44,16 @@ int main(int argc, char *argv[])
     windowChrome.attach(qobject_cast<QQuickWindow *>(root));
 
     bridge.attachPlayer(player);
+    QObject::connect(&windowChrome,
+                     &WindowsWindowChrome::mediaPlayPauseRequested,
+                     &bridge,
+                     [root, player, &bridge]() {
+                         if (bridge.resumeDecisionPending()) {
+                             return;
+                         }
+                         player->togglePause();
+                         QMetaObject::invokeMethod(root, "showControls");
+                     });
     QObject::connect(&bridge, &PlayerBridge::closeWindowRequested,
                      &application, &QCoreApplication::quit);
     QTimer::singleShot(0, &bridge, &PlayerBridge::connectToBackend);

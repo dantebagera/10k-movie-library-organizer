@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import tempfile
 import unittest
@@ -101,8 +102,9 @@ class MediaFileFactsTest(unittest.TestCase):
                 frame_rate="24.000", duration="5780917", display_aspect_ratio="1.875",
                 rotation="0.000", default="Yes",
             ),
-            track("Audio", format="AAC", channel_s="2", bit_rate="132300", duration="5495616", default="Yes"),
-            track("Audio", format="AAC", channel_s="6", bit_rate="384000", duration="5495616", default="No"),
+            track("Audio", format="AAC", channel_s="2", bit_rate="132300", duration="5495616", default="Yes", language="eng", title="Main"),
+            track("Audio", format="AAC", channel_s="6", bit_rate="384000", duration="5495616", default="No", language="fre", title="French"),
+            track("Text", format="ASS", language="spa", title="Spanish subtitles"),
         ])
         with tempfile.TemporaryDirectory() as root:
             movie = Path(root) / "The.Monkey.2025.1080p.x265.10bit.mkv"
@@ -115,6 +117,11 @@ class MediaFileFactsTest(unittest.TestCase):
         self.assertEqual(result.video_codec, "HEVC")
         self.assertEqual(result.video_bit_depth, 10)
         self.assertEqual(result.audio_channels, 2)
+        self.assertEqual(
+            [track["language"] for track in json.loads(result.audio_tracks_json)],
+            ["eng", "fra"],
+        )
+        self.assertNotIn("spa", result.audio_tracks_json)
         self.assertEqual(result.quality_class, "1080p")
         self.assertEqual(result.file_facts_version, FILE_FACTS_VERSION)
 

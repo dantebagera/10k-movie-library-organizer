@@ -1,7 +1,7 @@
 {
   "schema": "cinema-paradiso-player-build-v1",
-  "bundle_version": "0.1.24-qt6.10.3-mpv20260610-lgpl-cp2.8.4",
-  "player_version": "0.1.24",
+  "bundle_version": "0.1.25-qt6.10.3-mpv20260610-lgpl-cp2.8.5",
+  "player_version": "0.1.25",
   "ipc_protocol_version": 1,
   "mpv_version": "git-48e6c35c0e05",
   "mpv_commit": "48e6c35c0e056d9e4ff04b98e012416697736d8a",
@@ -18,13 +18,14 @@
     "2.8.1",
     "2.8.2",
     "2.8.3",
-    "2.8.4"
+    "2.8.4",
+    "2.8.5"
   ],
   "sources": [
     {
       "name": "Cinema Paradiso Player",
       "url": "https://github.com/dantebagera/cinema-paradiso",
-      "revision": "Cinema Paradiso 2.8.4 source distribution"
+      "revision": "Cinema Paradiso 2.8.5 source distribution"
     },
     {
       "name": "Qt",

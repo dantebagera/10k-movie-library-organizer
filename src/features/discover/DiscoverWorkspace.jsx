@@ -19,6 +19,10 @@ import WorkspacePathBar from '../../components/WorkspacePathBar.jsx';
 import { MovieLanguageToggle, useTransientMovieLanguage } from '../../components/MovieLanguageToggle.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
+import AdvancedSearchBuilder from '../search/AdvancedSearchBuilder.jsx';
+import {
+  compileDiscoverSimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature
+} from '../search/advancedSearchModel.js';
 import {
   DiscoverMovieCard, MovieExpandedCuration, MovieExpandedDetails, MovieExpandedFacts, OwnedFileDetailsButton, PosterEditButton, PosterStateControls
 } from '../../components/SharedMovieCards.jsx';
@@ -45,12 +49,19 @@ const discoverLists = [
   { value: 'best_all_time', label: 'Best All Time' }
 ];
 
+function boundedScanError(data) {
+  if (!data?.budget_exhausted) return '';
+  return 'TMDB reached the safe scan limit before filling this page. Retry to continue the bounded scan.';
+}
+
 function PaginatedDiscoverResults({ children, pagination }) {
   if (!pagination) return children;
   const topAriaLabel = pagination.ariaLabel.replace(/ pagination$/i, ' page controls above results');
+  const singlePageSummary = pagination.totalPages != null && pagination.totalPages <= 1 && pagination.total > 0 && pagination.summary;
   return (
     <>
       <Pagination {...pagination} ariaLabel={topAriaLabel} />
+      {singlePageSummary && <p className="discover-result-scope" role="status">{pagination.summary}</p>}
       {children}
       <Pagination {...pagination} />
     </>
@@ -74,6 +85,60 @@ const discoverGenres = [
   { value: '878', label: 'Sci-Fi' },
   { value: '53', label: 'Thriller' },
   { value: '10752', label: 'War' }
+];
+
+const discoverLanguages = [
+  { value: '', label: 'All languages' },
+  { value: 'en', label: 'English' },
+  { value: 'ar', label: 'Arabic' },
+  { value: 'fr', label: 'French' },
+  { value: 'es', label: 'Spanish' },
+  { value: 'de', label: 'German' },
+  { value: 'it', label: 'Italian' },
+  { value: 'pt', label: 'Portuguese' },
+  { value: 'ru', label: 'Russian' },
+  { value: 'ja', label: 'Japanese' },
+  { value: 'ko', label: 'Korean' },
+  { value: 'zh', label: 'Chinese' },
+  { value: 'hi', label: 'Hindi' },
+  { value: 'tr', label: 'Turkish' },
+  { value: 'nl', label: 'Dutch' },
+  { value: 'sv', label: 'Swedish' },
+  { value: 'pl', label: 'Polish' },
+  { value: 'da', label: 'Danish' },
+  { value: 'fi', label: 'Finnish' },
+  { value: 'no', label: 'Norwegian' }
+];
+
+const discoverCountries = [
+  { value: '', label: 'All countries' },
+  { value: 'US', label: 'United States' },
+  { value: 'GB', label: 'United Kingdom' },
+  { value: 'CA', label: 'Canada' },
+  { value: 'AU', label: 'Australia' },
+  { value: 'FR', label: 'France' },
+  { value: 'DE', label: 'Germany' },
+  { value: 'IT', label: 'Italy' },
+  { value: 'ES', label: 'Spain' },
+  { value: 'JP', label: 'Japan' },
+  { value: 'KR', label: 'South Korea' },
+  { value: 'CN', label: 'China' },
+  { value: 'HK', label: 'Hong Kong' },
+  { value: 'IN', label: 'India' },
+  { value: 'BR', label: 'Brazil' },
+  { value: 'MX', label: 'Mexico' },
+  { value: 'AR', label: 'Argentina' },
+  { value: 'SE', label: 'Sweden' },
+  { value: 'NO', label: 'Norway' },
+  { value: 'DK', label: 'Denmark' },
+  { value: 'FI', label: 'Finland' },
+  { value: 'NL', label: 'Netherlands' },
+  { value: 'PL', label: 'Poland' },
+  { value: 'RU', label: 'Russia' },
+  { value: 'TR', label: 'Turkey' },
+  { value: 'EG', label: 'Egypt' },
+  { value: 'SA', label: 'Saudi Arabia' },
+  { value: 'ZA', label: 'South Africa' }
 ];
 
 export default function DiscoverWorkspace({
@@ -101,6 +166,10 @@ export default function DiscoverWorkspace({
 }) {
   const [discoverList, setDiscoverList] = useState('trending_week');
   const [discoverGenre, setDiscoverGenre] = useState('');
+  const [discoverLanguage, setDiscoverLanguage] = useState('');
+  const [discoverCountry, setDiscoverCountry] = useState('');
+  const [discoverLanguageOptions, setDiscoverLanguageOptions] = useState(discoverLanguages);
+  const [discoverCountryOptions, setDiscoverCountryOptions] = useState(discoverCountries);
   const [discoverMinVotes, setDiscoverMinVotes] = useState('0');
   const [discoverYearFrom, setDiscoverYearFrom] = useState('');
   const [discoverYearTo, setDiscoverYearTo] = useState('');
@@ -108,6 +177,8 @@ export default function DiscoverWorkspace({
   const [discoverSort, setDiscoverSort] = useState('auto');
   const [discoverOwnershipFilter, setDiscoverOwnershipFilter] = useState('all');
   const [discoverSearchKind, setDiscoverSearchKind] = useState('movies');
+  const [advancedQuery, setAdvancedQuery] = useState(() => createEmptyQuery('discover'));
+  const [executedAdvancedQuery, setExecutedAdvancedQuery] = useState(() => createEmptyQuery('discover'));
   const [discoverPeopleResults, setDiscoverPeopleResults] = useState([]);
   const [discoverPeoplePage, setDiscoverPeoplePage] = useState(1);
   const [discoverPeopleTotalPages, setDiscoverPeopleTotalPages] = useState(1);
@@ -125,6 +196,10 @@ export default function DiscoverWorkspace({
   const [discoverLocalPage, setDiscoverLocalPage] = useState(1);
   const [discoverTotalPages, setDiscoverTotalPages] = useState(1);
   const [discoverTotalResults, setDiscoverTotalResults] = useState(0);
+  const [discoverHasPrevious, setDiscoverHasPrevious] = useState(false);
+  const [discoverHasNext, setDiscoverHasNext] = useState(false);
+  const [discoverTotalLabel, setDiscoverTotalLabel] = useState('');
+  const [discoverLocalCriteria, setDiscoverLocalCriteria] = useState([]);
   const [discoverMode, setDiscoverMode] = useState('discover');
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
@@ -175,6 +250,8 @@ export default function DiscoverWorkspace({
   const handledRelationshipRequestRef = useRef(0);
   const handledListRequestRef = useRef(0);
   const handledMovieRequestRef = useRef(0);
+  const advancedImportedRef = useRef(false);
+  const discoverResultIdentityRef = useRef('');
   const {
     gridRef: discoverMovieGridRef,
     pageSize: discoverMoviePageSize
@@ -183,6 +260,23 @@ export default function DiscoverWorkspace({
     gridRef: discoverPeopleGridRef,
     pageSize: discoverPeoplePageSize
   } = useCardGridMetrics({ target: 20, max: 100, bias: 'lower' });
+
+  const simpleDiscoverQuery = useMemo(() => compileDiscoverSimpleQuery({
+    query: tmdbQuery,
+    genre: discoverGenre,
+    genreLabel: discoverGenres.find((item) => item.value === discoverGenre)?.label,
+    language: discoverLanguage,
+    languageLabel: discoverLanguageOptions.find((item) => item.value === discoverLanguage)?.label,
+    country: discoverCountry,
+    countryLabel: discoverCountryOptions.find((item) => item.value === discoverCountry)?.label,
+    minimumVotes: discoverMinVotes,
+    yearFrom: discoverYearFrom,
+    yearTo: discoverYearTo,
+    minRating: discoverMinRating,
+    availability: discoverOwnershipFilter,
+    feed: discoverList,
+    sort: discoverSort
+  }), [tmdbQuery, discoverGenre, discoverLanguage, discoverLanguageOptions, discoverCountry, discoverCountryOptions, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverOwnershipFilter, discoverList, discoverSort]);
   const {
     gridRef: discoverKeywordGridRef,
     pageSize: discoverKeywordPageSize
@@ -195,6 +289,24 @@ export default function DiscoverWorkspace({
   useEffect(() => () => {
     discoverAbortRef.current?.abort();
     pickAbortRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchJson('/api/tmdb/filter-options')
+      .then((data) => {
+        if (cancelled) return;
+        const languages = Array.isArray(data.languages) ? data.languages.filter((item) => item?.value && item?.label) : [];
+        const countries = Array.isArray(data.countries) ? data.countries.filter((item) => item?.value && item?.label) : [];
+        if (languages.length) setDiscoverLanguageOptions([{ value: '', label: 'All languages' }, ...languages]);
+        if (countries.length) setDiscoverCountryOptions([{ value: '', label: 'All countries' }, ...countries]);
+      })
+      .catch(() => {
+        // The built-in common options remain available when TMDB configuration is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function beginDiscoverRequest() {
@@ -298,6 +410,8 @@ export default function DiscoverWorkspace({
   function hasAdvancedDiscoverCriteria() {
     return Boolean(
       discoverGenre
+      || discoverLanguage
+      || discoverCountry
       || discoverMinVotes !== '0'
       || discoverYearFrom.trim()
       || discoverYearTo.trim()
@@ -306,47 +420,31 @@ export default function DiscoverWorkspace({
     );
   }
 
-  function discoverResultContextLabel() {
-    if (discoverContext) {
-      return `${discoverContext.label}${hasAdvancedDiscoverCriteria() ? ' / refined' : ''}`;
-    }
-    if (discoverMode === 'search' && tmdbQuery.trim()) {
-      return `Search: ${tmdbQuery.trim()}${hasAdvancedDiscoverCriteria() ? ' / refined' : ''}`;
-    }
-    return discoverLists.find((item) => item.value === discoverList)?.label || 'TMDB Catalog';
-  }
-
   function isRefinedTitleSearch() {
     return discoverMode === 'search' && Boolean(tmdbQuery.trim()) && hasAdvancedDiscoverCriteria();
   }
 
-  function appendDiscoverCriteria(params) {
-    if (discoverGenre) params.set('genre', discoverGenre);
-    if (discoverMinVotes !== '0') params.set('min_votes', discoverMinVotes);
-    if (discoverYearFrom.trim()) params.set('year_from', discoverYearFrom.trim());
-    if (discoverYearTo.trim()) params.set('year_to', discoverYearTo.trim());
-    if (discoverMinRating !== '0') params.set('min_rating', discoverMinRating);
-    if (discoverSort !== 'auto') params.set('sort', discoverSort);
-    return params;
-  }
-
   function discoverCriteriaKey() {
-    return [discoverGenre, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort].join('|');
+    return JSON.stringify(discoverSearchKind === 'advanced' ? executedAdvancedQuery : simpleDiscoverQuery);
   }
 
-  function buildDiscoverUrl(query, page) {
-    const params = new URLSearchParams({
-      page: String(page),
-      page_size: String(discoverMoviePageSize)
+  function compileCurrentDiscoverQuery(search) {
+    return compileDiscoverSimpleQuery({
+      query: search,
+      genre: discoverGenre,
+      genreLabel: discoverGenres.find((item) => item.value === discoverGenre)?.label,
+      language: discoverLanguage,
+      languageLabel: discoverLanguageOptions.find((item) => item.value === discoverLanguage)?.label,
+      country: discoverCountry,
+      countryLabel: discoverCountryOptions.find((item) => item.value === discoverCountry)?.label,
+      minimumVotes: discoverMinVotes,
+      yearFrom: discoverYearFrom,
+      yearTo: discoverYearTo,
+      minRating: discoverMinRating,
+      availability: discoverOwnershipFilter,
+      feed: discoverList,
+      sort: discoverSort
     });
-    if (query) {
-      params.set('q', query);
-      params.set('include_adult', 'false');
-    } else {
-      params.set('list', discoverList);
-    }
-    appendDiscoverCriteria(params);
-    return `/api/tmdb/${query ? 'search' : 'discover'}?${params.toString()}`;
   }
 
   function setDiscoverCriterion(setter, value, defaultValue) {
@@ -358,6 +456,8 @@ export default function DiscoverWorkspace({
 
   function resetDiscoverCriteria() {
     setDiscoverGenre('');
+    setDiscoverLanguage('');
+    setDiscoverCountry('');
     setDiscoverMinVotes('0');
     setDiscoverYearFrom('');
     setDiscoverYearTo('');
@@ -373,6 +473,8 @@ export default function DiscoverWorkspace({
     setDiscoverList(value);
     if (value !== 'catalog') {
       setDiscoverGenre('');
+      setDiscoverLanguage('');
+      setDiscoverCountry('');
       setDiscoverMinVotes('0');
       setDiscoverYearFrom('');
       setDiscoverYearTo('');
@@ -390,6 +492,8 @@ export default function DiscoverWorkspace({
       page: discoverPage,
       totalPages: discoverTotalPages,
       totalResults: discoverTotalResults,
+      hasPrevious: discoverHasPrevious,
+      hasNext: discoverHasNext,
       mode: discoverMode,
       query: tmdbQuery,
       searchKind: discoverSearchKind,
@@ -406,11 +510,17 @@ export default function DiscoverWorkspace({
       ownershipFilter: discoverOwnershipFilter,
       list: discoverList,
       genre: discoverGenre,
+      language: discoverLanguage,
+      country: discoverCountry,
       minVotes: discoverMinVotes,
       yearFrom: discoverYearFrom,
       yearTo: discoverYearTo,
       minRating: discoverMinRating,
-      sort: discoverSort
+      sort: discoverSort,
+      advancedQuery,
+      executedAdvancedQuery,
+      totalLabel: discoverTotalLabel,
+      localCriteria: discoverLocalCriteria
     };
   }
 
@@ -431,8 +541,10 @@ export default function DiscoverWorkspace({
     setDiscoverKeywordLoading(false);
     setDiscoverResults(snapshot.results || []);
     setDiscoverPage(snapshot.page || 1);
-    setDiscoverTotalPages(snapshot.totalPages || 1);
-    setDiscoverTotalResults(snapshot.totalResults || 0);
+    setDiscoverTotalPages(snapshot.totalPages ?? 1);
+    setDiscoverTotalResults(snapshot.totalResults ?? 0);
+    setDiscoverHasPrevious(Boolean(snapshot.hasPrevious));
+    setDiscoverHasNext(Boolean(snapshot.hasNext));
     setDiscoverMode(snapshot.mode || 'discover');
     setDiscoverContext(snapshot.context || null);
     setDiscoverContextSourceResults(snapshot.contextSourceResults || []);
@@ -451,11 +563,17 @@ export default function DiscoverWorkspace({
     setDiscoverOwnershipFilter(snapshot.ownershipFilter || 'all');
     setDiscoverList(snapshot.list || 'trending_week');
     setDiscoverGenre(snapshot.genre || '');
+    setDiscoverLanguage(snapshot.language || '');
+    setDiscoverCountry(snapshot.country || '');
     setDiscoverMinVotes(snapshot.minVotes || '0');
     setDiscoverYearFrom(snapshot.yearFrom || '');
     setDiscoverYearTo(snapshot.yearTo || '');
     setDiscoverMinRating(snapshot.minRating || '0');
     setDiscoverSort(snapshot.sort || 'auto');
+    setAdvancedQuery(snapshot.advancedQuery || createEmptyQuery('discover'));
+    setExecutedAdvancedQuery(snapshot.executedAdvancedQuery || snapshot.advancedQuery || createEmptyQuery('discover'));
+    setDiscoverTotalLabel(snapshot.totalLabel || '');
+    setDiscoverLocalCriteria(snapshot.localCriteria || []);
     setDiscoverError('');
     setDiscoverHistory(nextHistory || []);
     setExpandedMovieKey('');
@@ -517,42 +635,64 @@ export default function DiscoverWorkspace({
     return enriched;
   }
 
-  async function loadDiscover({ append = false, search = '', page } = {}) {
+  async function loadDiscover({ append = false, search = '', page, force = false } = {}) {
     const query = String(search || '').trim();
     const nextPage = page || (append ? discoverPage + 1 : 1);
+    const requestQuery = discoverSearchKind === 'advanced'
+      ? executedAdvancedQuery
+      : compileCurrentDiscoverQuery(query);
+    const resultIdentity = `${querySignature(requestQuery)}|${nextPage}|${discoverMoviePageSize}`;
+    if (!append && !force && !discoverContext && discoverResultIdentityRef.current === resultIdentity) {
+      setDiscoverMode(query ? 'search' : 'discover');
+      return;
+    }
     const { controller, requestSeq } = beginDiscoverRequest();
     setDiscoverLoading(true);
     setDiscoverPeopleLoading(false);
     setDiscoverKeywordLoading(false);
     setDiscoverError('');
     if (!append) {
-      setDiscoverResults([]);
       setDiscoverContext(null);
       setDiscoverContextSourceResults([]);
       setDiscoverHistory([]);
       setExpandedMovieKey('');
     }
     try {
-      const data = await fetchJson(buildDiscoverUrl(query, nextPage), { signal: controller.signal });
+      const data = await fetchJson('/api/tmdb/discover/advanced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: requestQuery, page: nextPage, page_size: discoverMoviePageSize }),
+        signal: controller.signal
+      });
       if (requestSeq !== discoverRequestSeq.current) return;
+      const scanError = boundedScanError(data);
+      if (scanError) {
+        setDiscoverTotalLabel(data.total_label || 'Bounded TMDB results');
+        setDiscoverError(scanError);
+        return;
+      }
       const nextResults = data.results || [];
-      const nextTotalPages = Math.max(1, Number(data.total_pages || 1));
+      const nextTotalPages = data.total_pages == null ? null : Math.max(1, Number(data.total_pages || 1));
       const responsePage = Math.max(1, Number(data.page || nextPage));
-      if (nextPage > nextTotalPages && responsePage !== nextTotalPages) {
+      if (nextTotalPages != null && nextPage > nextTotalPages && responsePage !== nextTotalPages) {
         await loadDiscover({ append: false, search: query, page: nextTotalPages });
         return;
       }
       setDiscoverResults((state) => (append ? [...state, ...nextResults] : nextResults));
       setDiscoverPage(responsePage);
       setDiscoverTotalPages(nextTotalPages);
-      setDiscoverTotalResults(data.total_results || nextResults.length);
+      setDiscoverTotalResults(data.total_results ?? null);
+      setDiscoverHasPrevious(data.has_previous ?? responsePage > 1);
+      setDiscoverHasNext(data.has_next ?? (nextTotalPages != null && responsePage < nextTotalPages));
+      setDiscoverTotalLabel(data.total_label || '');
+      setDiscoverLocalCriteria(data.local_criteria || []);
       setDiscoverMode(query ? 'search' : 'discover');
+      discoverResultIdentityRef.current = resultIdentity;
       checkOwnership(nextResults);
     } catch (error) {
       if (requestSeq !== discoverRequestSeq.current) return;
       if (isAbortedRequest(error)) return;
       setDiscoverError(error.message);
-      if (!append) setDiscoverResults([]);
     } finally {
       if (requestSeq === discoverRequestSeq.current) {
         setDiscoverLoading(false);
@@ -659,7 +799,7 @@ export default function DiscoverWorkspace({
   }
 
   async function loadContextPage(target, context, { page = 1 } = {}) {
-    if (!context?.baseUrl) return;
+    if (!context?.baseUrl && !context?.query) return;
     const isPick = target === 'pick';
     const { controller, requestSeq } = isPick ? beginPickRequest() : beginDiscoverRequest();
     const requestedPage = Math.max(1, Number(page || 1));
@@ -667,7 +807,6 @@ export default function DiscoverWorkspace({
     const params = new URLSearchParams(existingQuery);
     params.set('page', String(requestedPage));
     params.set('page_size', String(isPick ? pickMoviePageSize : discoverMoviePageSize));
-    if (!isPick) appendDiscoverCriteria(params);
     const url = `${baseUrl}?${params.toString()}`;
     if (isPick) {
       setPickLoading(true);
@@ -682,12 +821,25 @@ export default function DiscoverWorkspace({
     }
     setExpandedMovieKey('');
     try {
-      const data = await fetchJson(url, { signal: controller.signal });
+      const data = context.owner === 'advanced' && !isPick
+        ? await fetchJson('/api/tmdb/discover/advanced', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: context.query, page: requestedPage, page_size: discoverMoviePageSize }),
+            signal: controller.signal
+          })
+        : await fetchJson(url, { signal: controller.signal });
       if (isPick ? requestSeq !== pickRequestSeq.current : requestSeq !== discoverRequestSeq.current) return;
+      const scanError = boundedScanError(data);
+      if (!isPick && scanError) {
+        setDiscoverTotalLabel(data.total_label || 'Bounded TMDB results');
+        setDiscoverError(scanError);
+        return;
+      }
       const nextResults = data.results || [];
-      const totalPages = Math.max(1, Number(data.total_pages || 1));
+      const totalPages = data.total_pages == null ? null : Math.max(1, Number(data.total_pages || 1));
       const responsePage = Math.max(1, Number(data.page || requestedPage));
-      if (requestedPage > totalPages && responsePage !== totalPages) {
+      if (totalPages != null && requestedPage > totalPages && responsePage !== totalPages) {
         await loadContextPage(target, context, { page: totalPages });
         return;
       }
@@ -696,7 +848,9 @@ export default function DiscoverWorkspace({
         page: responsePage,
         pageSize: Number(data.page_size || 20),
         totalPages,
-        totalResults: Number(data.total_results || nextResults.length),
+        totalResults: data.total_results ?? null,
+        hasPrevious: data.has_previous ?? responsePage > 1,
+        hasNext: data.has_next ?? (totalPages != null && responsePage < totalPages),
         criteriaKey: isPick ? context.criteriaKey || '' : discoverCriteriaKey()
       };
       if (isPick) {
@@ -706,10 +860,15 @@ export default function DiscoverWorkspace({
         setDiscoverResults(nextResults);
         setDiscoverPage(responsePage);
         setDiscoverTotalPages(totalPages);
-        setDiscoverTotalResults(data.total_results || nextResults.length);
+        setDiscoverTotalResults(data.total_results ?? null);
+        setDiscoverHasPrevious(data.has_previous ?? responsePage > 1);
+        setDiscoverHasNext(data.has_next ?? (totalPages != null && responsePage < totalPages));
+        setDiscoverTotalLabel(data.total_label || '');
+        setDiscoverLocalCriteria(data.local_criteria || []);
         setDiscoverContext(nextContext);
         setDiscoverContextSourceResults([]);
         setDiscoverMode(context.type || 'related');
+        discoverResultIdentityRef.current = `context|${context.owner || 'provider'}|${context.baseUrl || ''}|${responsePage}|${discoverMoviePageSize}|${context.query ? querySignature(context.query) : ''}`;
       }
       checkOwnership(nextResults);
     } catch (error) {
@@ -726,23 +885,77 @@ export default function DiscoverWorkspace({
     }
   }
 
-  function filterDiscoverContextResults(results) {
-    if (!hasAdvancedDiscoverCriteria()) return [...(results || [])];
-    const genreLabel = discoverGenres.find((item) => item.value === discoverGenre)?.label || '';
-    const filtered = (results || []).filter((movie) => {
-      const year = String(movie.release_date || movie.year || '').slice(0, 4);
-      if (genreLabel && !(movie.genres || []).includes(genreLabel)) return false;
-      if (discoverMinVotes !== '0' && Number(movie.tmdb_vote_count || 0) < Number(discoverMinVotes)) return false;
-      if (discoverYearFrom.trim() && (!year || year < discoverYearFrom.trim())) return false;
-      if (discoverYearTo.trim() && (!year || year > discoverYearTo.trim())) return false;
-      if (discoverMinRating !== '0' && Number(movie.tmdb_rating || 0) < Number(discoverMinRating)) return false;
+  function relationshipQuery(type, value) {
+    const active = discoverSearchKind === 'advanced' ? executedAdvancedQuery : simpleDiscoverQuery;
+    return normalizeAdvancedQuery({
+      ...active,
+      mode: 'advanced',
+      feed: 'catalog',
+      groups: [
+        ...active.groups.filter((group) => !['title', 'person', 'keyword'].includes(group.type)),
+        { type, join: 'or', values: [value] }
+      ]
+    }, 'discover');
+  }
+
+  function filterFiniteDiscoverResults(results) {
+    const activeQuery = discoverSearchKind === 'advanced' ? executedAdvancedQuery : simpleDiscoverQuery;
+    const matchesNumber = (actual, value) => {
+      const number = Number(actual || 0);
+      if (value.operator === 'between') return number >= value.from && number <= value.to;
+      if (value.operator === 'at_most') return number <= value.value;
+      if (value.operator === 'exactly') return number === value.value;
+      return number >= value.value;
+    };
+    const normalizedList = (items) => (items || []).map((item) => String(item?.id || item?.tmdb_id || item?.name || item).trim().toLowerCase());
+    const valueMatches = (movie, type, value) => {
+      const year = Number(String(movie.release_date || movie.year || '').slice(0, 4) || 0);
+      const owned = ownedMovieFor(movie, ownership);
+      const memberships = listsForDiscoverMovie(movie, userLists, owned);
+      if (type === 'title') return String(movie.title || '').toLowerCase().includes(String(value.text || '').toLowerCase());
+      if (type === 'genre') {
+        const genres = normalizedList([...(movie.genres || []), ...(movie.genre_ids || [])]);
+        return genres.includes(String(value.id || '').toLowerCase()) || genres.includes(String(value.label || '').toLowerCase());
+      }
+      if (type === 'year') return matchesNumber(year, value);
+      if (type === 'rating') return matchesNumber(movie.tmdb_rating || movie.vote_average, value);
+      if (type === 'minimum_votes') return Number(movie.tmdb_vote_count || movie.vote_count || 0) >= Number(value.value || 0);
+      if (type === 'language') {
+        const language = String(movie.original_language || movie.language || '').toLowerCase();
+        return [value.id, value.label].some((candidate) => language === String(candidate || '').toLowerCase());
+      }
+      if (type === 'country') return normalizedList(movie.origin_country || movie.countries).some((country) => [value.id, value.label].map((item) => String(item || '').toLowerCase()).includes(country));
+      if (type === 'runtime') {
+        const runtime = Number(movie.runtime || movie.runtime_minutes || 0);
+        if (!runtime) return false;
+        if (value.preset === 'short') return runtime < 60;
+        if (value.preset === 'feature') return runtime >= 60 && runtime < 150;
+        if (value.preset === 'long') return runtime >= 150;
+        return runtime >= value.from && runtime <= value.to;
+      }
+      if (type === 'availability') return value.id === 'owned' ? Boolean(owned) : !owned;
+      if (type === 'viewing_status') {
+        const active = memberships.some((list) => list.system_type === value.id || list.id === value.id);
+        return value.id === 'unwatched' ? !memberships.some((list) => list.system_type === 'watched' || list.id === 'watched') : active;
+      }
+      if (type === 'movie_list') return memberships.some((list) => String(list.id) === String(value.id));
+      if (type === 'keyword') return normalizedList(movie.keywords).some((keyword) => [value.id, value.label].map((item) => String(item || '').toLowerCase()).includes(keyword));
+      if (type === 'person') {
+        const credits = value.role === 'director' ? movie.directors : value.role === 'writer' ? movie.writers : movie.cast;
+        return normalizedList(credits).some((person) => [value.id, value.label].map((item) => String(item || '').toLowerCase()).includes(person));
+      }
       return true;
-    });
-    if (discoverSort === 'popularity.desc') return [...filtered].sort((a, b) => Number(b.popularity || 0) - Number(a.popularity || 0));
-    if (discoverSort === 'vote_average.desc') return [...filtered].sort((a, b) => Number(b.tmdb_rating || 0) - Number(a.tmdb_rating || 0));
-    if (discoverSort === 'vote_count.desc') return [...filtered].sort((a, b) => Number(b.tmdb_vote_count || 0) - Number(a.tmdb_vote_count || 0));
-    if (discoverSort === 'primary_release_date.desc') return [...filtered].sort((a, b) => String(b.release_date || '').localeCompare(String(a.release_date || '')));
-    if (discoverSort === 'title.asc') return [...filtered].sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+    };
+    const filtered = (results || []).filter((movie) => activeQuery.groups.every((group) => {
+      const matches = group.values.map((value) => valueMatches(movie, group.type, value));
+      return group.join === 'and' ? matches.every(Boolean) : matches.some(Boolean);
+    }));
+    const sort = activeQuery.sort.key;
+    if (sort === 'popularity.desc') return [...filtered].sort((a, b) => Number(b.popularity || 0) - Number(a.popularity || 0));
+    if (sort === 'vote_average.desc') return [...filtered].sort((a, b) => Number(b.tmdb_rating || 0) - Number(a.tmdb_rating || 0));
+    if (sort === 'vote_count.desc') return [...filtered].sort((a, b) => Number(b.tmdb_vote_count || 0) - Number(a.tmdb_vote_count || 0));
+    if (sort === 'primary_release_date.desc') return [...filtered].sort((a, b) => String(b.release_date || '').localeCompare(String(a.release_date || '')));
+    if (sort === 'title.asc') return [...filtered].sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
     return filtered;
   }
 
@@ -751,10 +964,17 @@ export default function DiscoverWorkspace({
     if (!personId) return;
     const labelRole = role === 'writer' ? 'Writer' : role === 'director' ? 'Director' : 'Actor';
     const prefix = labelPrefix || movie?.title || 'Movie';
+    const query = relationshipQuery('person', { id: String(personId), label: person.name, role });
+    const hasRefinements = query.groups.some((group) => group.type !== 'person')
+      || discoverSort !== 'auto'
+      || (discoverSearchKind === 'advanced' && query.sort.key !== 'auto');
     return {
       type: 'person',
+      owner: hasRefinements ? 'advanced' : 'person-credits',
       label: `${prefix} > ${labelRole}: ${person.name}`,
       baseUrl: `/api/tmdb/person_movies?person_id=${encodeURIComponent(personId)}&role=${encodeURIComponent(role)}`,
+      query,
+      relationshipValue: { id: String(personId), label: person.name, role },
       emptyText: `No TMDB movies found for ${person.name}.`
     };
   }
@@ -789,10 +1009,17 @@ export default function DiscoverWorkspace({
     const keywordId = keyword?.tmdb_id || keyword?.id;
     const keywordName = String(keyword?.name || '').trim();
     if (!keywordId) return;
+    const query = relationshipQuery('keyword', { id: String(keywordId), label: keywordName || String(keywordId) });
+    const hasRefinements = query.groups.some((group) => group.type !== 'keyword')
+      || discoverSort !== 'auto'
+      || (discoverSearchKind === 'advanced' && query.sort.key !== 'auto');
     return {
       type: 'keyword',
+      owner: hasRefinements ? 'advanced' : 'keyword-provider',
       label: `Keyword: ${keywordName || keywordId}`,
       baseUrl: `/api/tmdb/discover?list=catalog&keyword_id=${encodeURIComponent(keywordId)}&keyword_name=${encodeURIComponent(keywordName)}`,
+      query,
+      relationshipValue: { id: String(keywordId), label: keywordName || String(keywordId) },
       emptyText: `No TMDB movies found for ${keywordName || 'that keyword'}.`
     };
   }
@@ -951,7 +1178,7 @@ export default function DiscoverWorkspace({
         setPickResults(results);
         setPickContext(context);
       } else {
-        const filteredResults = filterDiscoverContextResults(results);
+        const filteredResults = filterFiniteDiscoverResults(results);
         setDiscoverHistory((history) => [...history, snapshot]);
         setDiscoverResults(filteredResults);
         setDiscoverContextSourceResults(results);
@@ -1003,7 +1230,7 @@ export default function DiscoverWorkspace({
         setPickResults(results);
         setPickContext(context);
       } else {
-        const filteredResults = filterDiscoverContextResults(results);
+        const filteredResults = filterFiniteDiscoverResults(results);
         setDiscoverHistory((history) => [...history, snapshot]);
         setDiscoverResults(filteredResults);
         setDiscoverContextSourceResults(results);
@@ -1244,9 +1471,23 @@ export default function DiscoverWorkspace({
   }
 
   useEffect(() => {
-    if (isNavigatingDiscoverContext || discoverContext) return;
+    if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext) return;
     loadDiscover({ append: false, search: tmdbQuery });
-  }, [discoverList, discoverGenre, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverMoviePageSize, isNavigatingDiscoverContext]);
+  }, [discoverList, discoverGenre, discoverLanguage, discoverCountry, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverOwnershipFilter, discoverMoviePageSize, discoverSearchKind, isNavigatingDiscoverContext]);
+
+  useEffect(() => {
+    if (discoverSearchKind !== 'advanced' || isNavigatingDiscoverContext || discoverContext) return undefined;
+    const timer = window.setTimeout(() => {
+      setExecutedAdvancedQuery(advancedQuery);
+      setDiscoverPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [advancedQuery, discoverSearchKind, discoverContext, isNavigatingDiscoverContext]);
+
+  useEffect(() => {
+    if (discoverSearchKind !== 'advanced' || isNavigatingDiscoverContext || discoverContext) return;
+    loadDiscover({ append: false, search: '', page: 1 });
+  }, [discoverSearchKind, executedAdvancedQuery, discoverMoviePageSize, isNavigatingDiscoverContext]);
 
   useEffect(() => {
     if (discoverContext?.baseUrl) {
@@ -1276,19 +1517,32 @@ export default function DiscoverWorkspace({
     if (!discoverContext) return;
     const criteriaKey = discoverCriteriaKey();
     if (discoverContext.criteriaKey === criteriaKey) return;
-    if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl) {
-      loadContextPage('explore', discoverContext, { page: 1 });
+    if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl && discoverContext.relationshipValue) {
+      const query = relationshipQuery(discoverContext.type, discoverContext.relationshipValue);
+      const hasRefinements = query.groups.some((group) => group.type !== discoverContext.type)
+        || discoverSort !== 'auto'
+        || (discoverSearchKind === 'advanced' && query.sort.key !== 'auto');
+      const nextContext = {
+        ...discoverContext,
+        owner: hasRefinements
+          ? 'advanced'
+          : discoverContext.type === 'person' ? 'person-credits' : 'keyword-provider',
+        query,
+        criteriaKey
+      };
+      loadContextPage('explore', nextContext, { page: 1 });
       return;
     }
     if (discoverContextSourceResults.length) {
-      const filteredResults = filterDiscoverContextResults(discoverContextSourceResults);
+      const filteredResults = filterFiniteDiscoverResults(discoverContextSourceResults);
       setDiscoverResults(filteredResults);
+      setDiscoverLocalPage(1);
       setDiscoverPage(1);
       setDiscoverTotalPages(1);
       setDiscoverTotalResults(filteredResults.length);
       setDiscoverContext((context) => context ? { ...context, criteriaKey } : context);
     }
-  }, [discoverContext, discoverContextSourceResults, discoverGenre, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort]);
+  }, [discoverContext, discoverContextSourceResults, discoverGenre, discoverLanguage, discoverLanguageOptions, discoverCountry, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverOwnershipFilter, discoverSearchKind, executedAdvancedQuery]);
 
   useEffect(() => {
     if (!searchRequest) return;
@@ -1339,12 +1593,8 @@ export default function DiscoverWorkspace({
   }, [browseRows, browseResolution, browseIndexer, browseSort, selectedBrowseIndexerName]);
 
   const filteredDiscoverResults = useMemo(() => {
-    if (discoverOwnershipFilter === 'all') return discoverResults;
-    return discoverResults.filter((movie) => {
-      const isOwned = Boolean(ownedMovieFor(movie, ownership));
-      return discoverOwnershipFilter === 'owned' ? isOwned : !isOwned;
-    });
-  }, [discoverOwnershipFilter, discoverResults, ownership]);
+    return discoverResults;
+  }, [discoverResults]);
   const localDiscoverContext = Boolean(discoverContext && !discoverContext.baseUrl);
   const discoverLocalTotalPages = Math.max(1, Math.ceil(filteredDiscoverResults.length / discoverMoviePageSize));
   const safeDiscoverLocalPage = Math.min(discoverLocalPage, discoverLocalTotalPages);
@@ -1374,12 +1624,14 @@ export default function DiscoverWorkspace({
           ariaLabel: 'TMDB movie pagination',
           page: discoverPage,
           totalPages: discoverTotalPages,
-          total: discoverTotalResults || discoverResults.length,
+          total: discoverTotalResults,
+          hasPrevious: discoverHasPrevious,
+          hasNext: discoverHasNext,
           pageStart: (discoverPage - 1) * discoverMoviePageSize,
           pageEnd: (discoverPage - 1) * discoverMoviePageSize + discoverResults.length,
-          summary: isRefinedTitleSearch()
+          summary: discoverTotalLabel || (isRefinedTitleSearch()
             ? `${formatCount(filteredDiscoverResults.length)} matching result${filteredDiscoverResults.length === 1 ? '' : 's'} on this TMDB search page`
-            : '',
+            : ''),
           onPageChange: (nextPage) => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '', page: nextPage })
         }
       : discoverContext?.baseUrl
@@ -1387,7 +1639,9 @@ export default function DiscoverWorkspace({
             ariaLabel: 'TMDB relationship pagination',
             page: discoverPage,
             totalPages: discoverTotalPages,
-            total: discoverTotalResults || discoverResults.length,
+            total: discoverTotalResults,
+            hasPrevious: discoverHasPrevious,
+            hasNext: discoverHasNext,
             pageStart: (discoverPage - 1) * discoverMoviePageSize,
             pageEnd: (discoverPage - 1) * discoverMoviePageSize + discoverResults.length,
             summary: discoverOwnershipFilter !== 'all'
@@ -1445,8 +1699,6 @@ export default function DiscoverWorkspace({
     }
     return [
       'explore',
-      discoverSearchKind,
-      discoverMode,
       tmdbQuery.trim(),
       discoverList,
       discoverOwnershipFilter,
@@ -1465,16 +1717,18 @@ export default function DiscoverWorkspace({
     discoverContext?.baseUrl,
     discoverContext?.label,
     discoverContext?.type,
+    discoverCountry,
     discoverGenre,
+    discoverLanguage,
     discoverList,
     discoverMinRating,
     discoverMinVotes,
-    discoverMode,
     discoverOwnershipFilter,
     discoverSearchKind,
     discoverSort,
     discoverYearFrom,
     discoverYearTo,
+    executedAdvancedQuery,
     pickContext,
     pickResults,
     tmdbQuery
@@ -1605,11 +1859,80 @@ export default function DiscoverWorkspace({
       searchDiscoverKeywords({ page: 1, reset: true });
       return;
     }
+    if (discoverSearchKind === 'advanced') {
+      if (querySignature(executedAdvancedQuery) === querySignature(advancedQuery)) {
+        loadDiscover({ append: false, search: '', page: 1, force: true });
+      } else {
+        setExecutedAdvancedQuery(advancedQuery);
+        setDiscoverPage(1);
+      }
+      return;
+    }
     setDiscoverPeopleResults([]);
     setDiscoverPeopleError('');
     setDiscoverKeywordResults([]);
     setDiscoverKeywordError('');
     loadDiscover({ append: false, search: tmdbQuery, page: 1 });
+  }
+
+  function resetDiscoverAdvanced() {
+    const empty = createEmptyQuery('discover');
+    advancedImportedRef.current = false;
+    discoverResultIdentityRef.current = '';
+    setAdvancedQuery(empty);
+    setExecutedAdvancedQuery(empty);
+    setDiscoverSearchKind('movies');
+    setTmdbQuery('');
+    setDiscoverContext(null);
+    setDiscoverContextSourceResults([]);
+    setDiscoverHistory([]);
+    setDiscoverList('trending_week');
+    setDiscoverGenre('');
+    setDiscoverLanguage('');
+    setDiscoverCountry('');
+    setDiscoverMinVotes('0');
+    setDiscoverYearFrom('');
+    setDiscoverYearTo('');
+    setDiscoverMinRating('0');
+    setDiscoverSort('auto');
+    setDiscoverOwnershipFilter('all');
+    setDiscoverPage(1);
+    setExpandedMovieKey('');
+  }
+
+  function enterDiscoverSearchMode(nextSearchKind) {
+    const previousKind = discoverSearchKind;
+    if (nextSearchKind === previousKind) return;
+    if (nextSearchKind === 'advanced') {
+      if (!advancedImportedRef.current) {
+        const imported = normalizeAdvancedQuery({ ...simpleDiscoverQuery, mode: 'advanced' }, 'discover');
+        setAdvancedQuery(imported);
+        setExecutedAdvancedQuery(imported);
+        advancedImportedRef.current = true;
+      }
+      if (discoverContext) {
+        setDiscoverContext(null);
+        setDiscoverContextSourceResults([]);
+      }
+    }
+    if (['people', 'keywords'].includes(nextSearchKind)) {
+      discoverAbortRef.current?.abort();
+      discoverRequestSeq.current += 1;
+      setDiscoverLoading(false);
+    }
+    setDiscoverError('');
+    setDiscoverSearchKind(nextSearchKind);
+    setDiscoverPeopleLoading(false);
+    setDiscoverKeywordLoading(false);
+  }
+
+  async function searchDiscoverAdvancedIdentities(type, text, _scope, signal) {
+    const endpoint = type === 'person' ? 'people' : 'keywords';
+    const data = await fetchJson(`/api/tmdb/${endpoint}/search?q=${encodeURIComponent(text)}&page=1&page_size=20`, { signal });
+    return (data.results || []).map((item) => ({
+      id: String(item.id || item.tmdb_id),
+      label: item.name || item.label
+    })).filter((item) => item.id && item.label);
   }
 
   return (
@@ -1644,7 +1967,25 @@ export default function DiscoverWorkspace({
 
       {activeTab !== 'pick' && (
         <form className="discover-search-panel" onSubmit={runDiscoverSearch}>
-          <label className="library-search discover-main-search">
+          {activeTab === 'explore' && discoverSearchKind === 'advanced' ? <AdvancedSearchBuilder
+            scope="discover"
+            query={advancedQuery}
+            onChange={setAdvancedQuery}
+            onRun={() => {
+              if (querySignature(executedAdvancedQuery) === querySignature(advancedQuery)) loadDiscover({ append: false, search: '', page: 1, force: true });
+              else setExecutedAdvancedQuery(advancedQuery);
+            }}
+            onReset={resetDiscoverAdvanced}
+            loading={discoverLoading}
+            error={discoverError}
+            searchIdentities={searchDiscoverAdvancedIdentities}
+            options={{
+              genre: discoverGenres.filter((item) => item.value).map((item) => ({ id: item.value, label: item.label })),
+              language: discoverLanguageOptions.filter((item) => item.value).map((item) => ({ id: item.value, label: item.label })),
+              country: discoverCountryOptions.filter((item) => item.value).map((item) => ({ id: item.value, label: item.label })),
+              movie_list: userLists.filter((list) => !list.system_type).map((list) => ({ id: String(list.id), label: list.name }))
+            }}
+          /> : <label className="library-search discover-main-search">
             <Search size={17} />
             <input
               value={activeTab === 'browse' ? browseQuery : tmdbQuery}
@@ -1664,37 +2005,26 @@ export default function DiscoverWorkspace({
                     ? 'Search TMDB keywords'
                     : 'Search TMDB movies'}
             />
-          </label>
+          </label>}
           {activeTab === 'explore' && (
             <select
               value={discoverSearchKind}
-              onChange={(event) => {
-                discoverAbortRef.current?.abort();
-                discoverRequestSeq.current += 1;
-                setDiscoverLoading(false);
-                setDiscoverPeopleLoading(false);
-                setDiscoverKeywordLoading(false);
-                setDiscoverSearchKind(event.target.value);
-                setDiscoverPeopleResults([]);
-                setDiscoverPeoplePage(1);
-                setDiscoverPeopleTotalPages(1);
-                setDiscoverPeopleTotalResults(0);
-                setDiscoverPeopleError('');
-                setDiscoverKeywordResults([]);
-                setDiscoverKeywordPage(1);
-                setDiscoverKeywordTotalPages(1);
-                setDiscoverKeywordTotalResults(0);
-                setDiscoverKeywordError('');
-              }}
+              onChange={(event) => enterDiscoverSearchMode(event.target.value)}
               aria-label="TMDB search type"
             >
               <option value="movies">Movies</option>
               <option value="people">People</option>
               <option value="keywords">Keywords</option>
+              <option value="advanced">Advanced</option>
             </select>
           )}
-          <button type="submit" className="btn btn-primary discover-search-submit" disabled={activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading}>
-            {(activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading) ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Search
+          <button
+            type="submit"
+            className={cx('btn btn-primary discover-search-submit', activeTab === 'explore' && discoverSearchKind === 'advanced' && 'advanced-search-submit')}
+            disabled={activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading}
+          >
+            {(activeTab === 'browse' ? browseLoading : discoverLoading || discoverPeopleLoading || discoverKeywordLoading) ? <Loader2 size={15} className="spin" /> : <Search size={15} />}
+            Search
           </button>
         </form>
       )}
@@ -1711,7 +2041,7 @@ export default function DiscoverWorkspace({
             onCrumb={jumpDiscoverPath}
           />
           {discoverSearchKind === 'movies' && <div className="discover-toolbar">
-            <select value={discoverList} onChange={(event) => selectDiscoverList(event.target.value)}>
+            <select aria-label="Discover feed" value={discoverList} onChange={(event) => selectDiscoverList(event.target.value)}>
               {discoverLists.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
             <select aria-label="Library ownership" value={discoverOwnershipFilter} onChange={(event) => setDiscoverOwnershipFilter(event.target.value)}>
@@ -1719,10 +2049,16 @@ export default function DiscoverWorkspace({
               <option value="owned">Owned</option>
               <option value="unowned">Not owned</option>
             </select>
-            <select value={discoverGenre} onChange={(event) => setDiscoverCriterion(setDiscoverGenre, event.target.value, '')}>
+            <select aria-label="Genre" value={discoverGenre} onChange={(event) => setDiscoverCriterion(setDiscoverGenre, event.target.value, '')}>
               {discoverGenres.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
-            <select value={discoverMinVotes} onChange={(event) => setDiscoverCriterion(setDiscoverMinVotes, event.target.value, '0')}>
+            <select aria-label="Original language" value={discoverLanguage} onChange={(event) => setDiscoverCriterion(setDiscoverLanguage, event.target.value, '')}>
+              {discoverLanguageOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <select aria-label="Production country" value={discoverCountry} onChange={(event) => setDiscoverCriterion(setDiscoverCountry, event.target.value, '')}>
+              {discoverCountryOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+            <select aria-label="Minimum votes" value={discoverMinVotes} onChange={(event) => setDiscoverCriterion(setDiscoverMinVotes, event.target.value, '0')}>
               <option value="0">Any votes</option>
               <option value="500">500+ votes</option>
               <option value="1000">1,000+ votes</option>
@@ -1731,14 +2067,14 @@ export default function DiscoverWorkspace({
             </select>
             <input className="library-mini-input" value={discoverYearFrom} onChange={(event) => setDiscoverCriterion(setDiscoverYearFrom, event.target.value, '')} placeholder="Year from" inputMode="numeric" />
             <input className="library-mini-input" value={discoverYearTo} onChange={(event) => setDiscoverCriterion(setDiscoverYearTo, event.target.value, '')} placeholder="Year to" inputMode="numeric" />
-            <select value={discoverMinRating} onChange={(event) => setDiscoverCriterion(setDiscoverMinRating, event.target.value, '0')}>
+            <select aria-label="Minimum rating" value={discoverMinRating} onChange={(event) => setDiscoverCriterion(setDiscoverMinRating, event.target.value, '0')}>
               <option value="0">Any rating</option>
               <option value="6">6+</option>
               <option value="7">7+</option>
               <option value="8">8+</option>
               <option value="8.5">8.5+</option>
             </select>
-            <select value={discoverSort} onChange={(event) => setDiscoverCriterion(setDiscoverSort, event.target.value, 'auto')}>
+            <select aria-label="Sort Discover results" value={discoverSort} onChange={(event) => setDiscoverCriterion(setDiscoverSort, event.target.value, 'auto')}>
               <option value="auto">Default order</option>
               <option value="popularity.desc">Popularity</option>
               <option value="vote_average.desc">Rating</option>
@@ -1746,29 +2082,21 @@ export default function DiscoverWorkspace({
               <option value="primary_release_date.desc">Release date</option>
               <option value="title.asc">Title A-Z</option>
             </select>
-            <button type="button" className="btn btn-secondary" onClick={() => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '' })} disabled={discoverLoading}>
-              <RefreshCcw size={15} /> Refresh
+            <button type="button" className="btn btn-secondary discover-toolbar-icon-button" onClick={() => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '' })} disabled={discoverLoading} aria-label="Refresh Discover results" title="Refresh">
+              <RefreshCcw size={17} />
             </button>
             {hasAdvancedDiscoverCriteria() && (
-              <button type="button" className="btn btn-secondary" onClick={resetDiscoverCriteria} disabled={discoverLoading}>
-                <X size={15} /> Reset filters
+              <button type="button" className="btn btn-secondary discover-toolbar-icon-button" onClick={resetDiscoverCriteria} disabled={discoverLoading} aria-label="Reset Discover filters" title="Reset filters">
+                <X size={17} />
               </button>
             )}
             {discoverMode === 'search' && (
-              <button type="button" className="btn btn-secondary" onClick={() => { setTmdbQuery(''); loadDiscover({ append: false, search: '', page: 1 }); }}>
-                <X size={15} /> Clear search
+              <button type="button" className="btn btn-secondary discover-toolbar-icon-button" onClick={() => { setTmdbQuery(''); loadDiscover({ append: false, search: '', page: 1 }); }} aria-label="Clear Discover search" title="Clear search">
+                <X size={17} />
               </button>
             )}
-            <span className="discover-count">
-              <span className="discover-filter-label">{discoverResultContextLabel()}</span>
-              {discoverOwnershipFilter !== 'all'
-                ? `${formatCount(filteredDiscoverResults.length)} of ${formatCount(discoverResults.length)} titles on this TMDB page`
-                : isRefinedTitleSearch()
-                ? `${formatCount(discoverResults.length)} matches on this TMDB search page`
-                : `${formatCount(discoverTotalResults || discoverResults.length)} titles`}
-            </span>
           </div>}
-          {discoverSearchKind === 'movies' && filteredDiscoverResults.length > 0 && (
+          {['movies', 'advanced'].includes(discoverSearchKind) && filteredDiscoverResults.length > 0 && (
             <div className="bulk-selection-bar discover-bulk-selection">
               <SelectionCheckbox
                 className="discover-selection-master"
@@ -1826,7 +2154,7 @@ export default function DiscoverWorkspace({
             </PaginatedDiscoverResults>
           ) : <PaginatedDiscoverResults pagination={exploreMoviePagination}>
           <DiscoverResultGrid
-            error={discoverError}
+            error={discoverResults.length ? '' : discoverError}
             loading={discoverLoading && !discoverResults.length}
             gridRef={discoverMovieGridRef}
             emptyText={discoverOwnershipFilter === 'owned'

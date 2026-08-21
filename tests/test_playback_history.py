@@ -157,6 +157,49 @@ class PlaybackHistoryTests(unittest.TestCase):
         self.service.handle_event(session, {"type": "playback.state", "state": "ended"})
         self.assertEqual(len(self.curation.calls), 1)
 
+    def test_completed_movie_rewatch_starts_fresh_then_resumes_without_unwatching(self):
+        completed_context = self.service.begin_session(self.media_payload)
+        completed_session = Session(completed_context)
+        self.service.handle_event(completed_session, {
+            "type": "tracks.changed",
+            "tracks": [{
+                "type": "audio",
+                "fingerprint": "audio|eng|eac3|6|English",
+                "selected": True,
+            }],
+        })
+        self.service.handle_event(completed_session, {
+            "type": "progress",
+            "position_ms": 9500,
+            "duration_ms": 10000,
+            "paused": True,
+        })
+        self.assertIsNotNone(self.history.get(self.path_key)["completed_at"])
+        self.assertTrue(self.curation.watched)
+
+        rewatch_context = self.service.begin_session(self.media_payload)
+        self.assertEqual(rewatch_context["start_position_ms"], 0)
+        self.assertFalse(rewatch_context["resume_choice_pending"])
+        self.assertIsNone(self.history.get(self.path_key)["completed_at"])
+        self.assertTrue(self.curation.watched)
+        self.assertEqual(
+            rewatch_context["audio_track_fingerprint"],
+            "audio|eng|eac3|6|English",
+        )
+
+        rewatch_session = Session(rewatch_context)
+        self.service.handle_event(rewatch_session, {
+            "type": "progress",
+            "position_ms": 3500,
+            "duration_ms": 10000,
+            "paused": True,
+        })
+        resumed_context = self.service.begin_session(self.media_payload)
+        self.assertTrue(resumed_context["resume_choice_pending"])
+        self.assertEqual(resumed_context["start_position_ms"], 3500)
+        self.assertTrue(self.curation.watched)
+        self.assertEqual(len(self.service.continue_watching()), 1)
+
     def test_resume_prompt_restart_choice_clears_only_progress(self):
         row = self.history.begin_session(self.path_key, "tmdb:348")
         self.history.save(
@@ -210,7 +253,7 @@ class PlaybackHistoryTests(unittest.TestCase):
         self.assertEqual(restored["subtitle_track_fingerprint"], "sub|spa|ass||Spanish")
         self.assertEqual(restored["subtitle_delay_ms"], -250)
 
-    def test_continue_watching_uses_canonical_presentation_and_watched_filter(self):
+    def test_continue_watching_uses_canonical_presentation_for_watched_replays(self):
         row = self.history.begin_session(self.path_key, "stale:key")
         self.history.save(
             self.path_key,
@@ -227,7 +270,9 @@ class PlaybackHistoryTests(unittest.TestCase):
         self.assertEqual(items[0]["path_key"], self.path_key)
 
         self.curation.watched = True
-        self.assertEqual(self.service.continue_watching(), [])
+        watched_replay_items = self.service.continue_watching()
+        self.assertEqual(len(watched_replay_items), 1)
+        self.assertEqual(watched_replay_items[0]["movie_key"], "tmdb:348")
 
 
 if __name__ == "__main__":

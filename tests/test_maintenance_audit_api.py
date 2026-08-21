@@ -5,6 +5,40 @@ import app
 
 
 class MaintenanceAuditApiTest(unittest.TestCase):
+    def test_delete_preview_and_execution_require_audio_language_loss_acknowledgement(self):
+        path = r"E:\Movies\Alien.1979.720p.multi.mkv"
+        maintenance = {
+            "storage": {"groups": [{
+                "files": [{
+                    "path": path,
+                    "filename": "Alien.1979.720p.multi.mkv",
+                    "recommendation": "review",
+                    "comparison_peer": "Alien.1979.1080p.mkv",
+                    "audio_language_losses": ["French"],
+                }],
+            }]},
+        }
+        plan = {"actions": [], "file_count": 1}
+        deleted = {"deleted_paths": [path], "folder_count": 0, "catalog_generation": 9}
+
+        with patch.object(app, "_maintenance_audit_from_catalog", return_value=maintenance), \
+                patch.object(app, "_plan_library_file_deletions", return_value=dict(plan)), \
+                patch.object(app, "_delete_library_files", return_value=deleted) as delete_many:
+            client = app.app.test_client()
+            preview = client.post("/api/delete", json={"paths": [path], "preview": True})
+            blocked = client.post("/api/delete", json={"paths": [path]})
+            confirmed = client.post("/api/delete", json={
+                "paths": [path],
+                "confirmed_audio_language_losses": [{"path": path, "languages": ["French"]}],
+            })
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.get_json()["audio_language_losses"][0]["languages"], ["French"])
+        self.assertEqual(blocked.status_code, 409)
+        self.assertEqual(blocked.get_json()["confirmation_required"], "audio_language_loss")
+        self.assertEqual(confirmed.status_code, 200)
+        delete_many.assert_called_once()
+
     def test_workspace_contract_exposes_only_unmatched_and_authoritative_review_rows(self):
         maintenance = {
             "source": "catalog",

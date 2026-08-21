@@ -7,18 +7,25 @@ export default function Pagination({
   pageStart,
   pageEnd,
   summary = '',
+  hasPrevious,
+  hasNext,
   ariaLabel = 'Library pagination',
   onPageChange
 }) {
-  if (totalPages <= 1 || total <= 0) return null;
+  const knownTotal = Number.isFinite(Number(totalPages)) && totalPages != null;
+  const canPrevious = hasPrevious ?? page > 1;
+  const canNext = hasNext ?? (knownTotal && page < totalPages);
+  if (!canPrevious && !canNext && (!knownTotal || totalPages <= 1)) return null;
   return (
     <nav className="library-pagination" aria-label={ariaLabel}>
-      <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>Previous</button>
+      <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page - 1)} disabled={!canPrevious}>Previous</button>
       <div className="library-page-status">
-        <strong>Page {formatCount(page)} of {formatCount(totalPages)}</strong>
-        <span>{summary || `Showing ${formatCount(pageStart + 1)}-${formatCount(pageEnd)} of ${formatCount(total)}`}</span>
+        <strong>{knownTotal ? `Page ${formatCount(page)} of ${formatCount(totalPages)}` : `Page ${formatCount(page)}`}</strong>
+        <span>{summary || (total == null
+          ? `Showing ${formatCount(pageStart + 1)}-${formatCount(pageEnd)}`
+          : `Showing ${formatCount(pageStart + 1)}-${formatCount(pageEnd)} of ${formatCount(total)}`)}</span>
       </div>
-      <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>Next</button>
+      <button type="button" className="btn btn-secondary" onClick={() => onPageChange(page + 1)} disabled={!canNext}>Next</button>
     </nav>
   );
 }

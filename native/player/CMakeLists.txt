@@ -76,8 +76,10 @@ set(CP_PLAYER_CONTROL_ICONS
     resources/icons/pause.svg
     resources/icons/play.svg
     resources/icons/rewind-10.svg
+    resources/icons/search.svg
     resources/icons/speed.svg
     resources/icons/subtitles.svg
+    resources/icons/download.svg
     resources/icons/volume-high.svg
     resources/icons/volume-muted.svg
     resources/icons/window-close.svg

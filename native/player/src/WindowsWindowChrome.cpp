@@ -147,6 +147,14 @@ bool WindowsWindowChrome::nativeEventFilter(
         return false;
     }
 
+    if (nativeMessage->message == WM_APPCOMMAND
+        && GET_APPCOMMAND_LPARAM(nativeMessage->lParam)
+               == APPCOMMAND_MEDIA_PLAY_PAUSE) {
+        emit mediaPlayPauseRequested();
+        *result = 1;
+        return true;
+    }
+
     if (nativeMessage->message == WM_NCCALCSIZE && nativeMessage->wParam) {
         *result = 0;
         return true;

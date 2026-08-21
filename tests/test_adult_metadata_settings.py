@@ -125,17 +125,17 @@ class AdultMetadataSettingsTest(unittest.TestCase):
                 "total_pages": 1,
                 "total_results": 5,
                 "results": [
-                    {"id": 1, "title": "Tom Cartoon", "genre_ids": [16], "release_date": "1997-01-01", "vote_average": 7.2, "vote_count": 200, "popularity": 3},
-                    {"id": 2, "title": "Tom Cartoon Returns", "genre_ids": [16], "release_date": "1999-01-01", "vote_average": 8.5, "vote_count": 400, "popularity": 2},
-                    {"id": 3, "title": "Tom Drama", "genre_ids": [18], "release_date": "1999-01-01", "vote_average": 9.0, "vote_count": 500, "popularity": 4},
-                    {"id": 4, "title": "Old Tom Cartoon", "genre_ids": [16], "release_date": "1980-01-01", "vote_average": 9.0, "vote_count": 500, "popularity": 4},
-                    {"id": 5, "title": "Low Rated Tom Cartoon", "genre_ids": [16], "release_date": "1998-01-01", "vote_average": 6.0, "vote_count": 500, "popularity": 4},
+                    {"id": 1, "title": "Tom Cartoon", "genre_ids": [16], "release_date": "1997-01-01", "vote_average": 7.2, "vote_count": 200, "popularity": 3, "original_language": "en", "origin_country": ["GB"]},
+                    {"id": 2, "title": "Tom Cartoon Returns", "genre_ids": [16], "release_date": "1999-01-01", "vote_average": 8.5, "vote_count": 400, "popularity": 2, "original_language": "en", "origin_country": ["GB"]},
+                    {"id": 3, "title": "Tom Drama", "genre_ids": [18], "release_date": "1999-01-01", "vote_average": 9.0, "vote_count": 500, "popularity": 4, "original_language": "en", "origin_country": ["GB"]},
+                    {"id": 4, "title": "Old Tom Cartoon", "genre_ids": [16], "release_date": "1980-01-01", "vote_average": 9.0, "vote_count": 500, "popularity": 4, "original_language": "en", "origin_country": ["GB"]},
+                    {"id": 5, "title": "Low Rated Tom Cartoon", "genre_ids": [16], "release_date": "1998-01-01", "vote_average": 6.0, "vote_count": 500, "popularity": 4, "original_language": "en", "origin_country": ["GB"]},
                 ],
             })
 
         with patch.object(app, "_ensure_tmdb_genres"), patch.object(app.urllib.request, "urlopen", side_effect=fake_urlopen):
             response = self.client.get(
-                "/api/tmdb/search?q=tom&genre=16&year_from=1990&year_to=2000&min_rating=7&min_votes=100&sort=vote_average.desc"
+                "/api/tmdb/search?q=tom&genre=16&language=en&country=GB&year_from=1990&year_to=2000&min_rating=7&min_votes=100&sort=vote_average.desc"
             )
 
         self.assertEqual(response.status_code, 200)

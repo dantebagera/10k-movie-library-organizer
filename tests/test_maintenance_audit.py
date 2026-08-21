@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from services.media_file_facts import FILE_FACTS_VERSION, QUALITY_CLASSIFIER_VERSION
@@ -36,6 +37,7 @@ def candidate(path, **record):
         "audio_codec": "AAC",
         "audio_channels": 2,
         "audio_bitrate": 192_000,
+        "audio_tracks_json": "[]",
         "filename_quality_claim": resolution,
         "quality_class": resolution,
         "quality_source": "measured",
@@ -307,7 +309,7 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertIn("2.27× fewer pixels", group["files"][1]["reason"])
         self.assertIn("framing differs by 0.77% (minor crop)", group["files"][1]["reason"])
 
-    def test_vamps_pal_speed_conversion_supports_content_equivalence_not_quality(self):
+    def test_vamps_frame_rate_timing_normalization_supports_content_equivalence_not_quality(self):
         bluray = candidate(
             "E:/Movies/Vamps.2012.1080p.BRrip.x264.YIFY.mp4",
             identity_title="Vamps",
@@ -355,10 +357,10 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertEqual(group["files"][1]["verdict"], "recommended_removal")
         self.assertTrue(group["files"][1]["comparison_uses_frame_rate"])
         self.assertIn("9.49× fewer pixels", group["files"][1]["reason"])
-        self.assertIn("23.976 to 25 fps speed conversion detected", group["files"][1]["reason"])
+        self.assertIn("23.976 and 25 fps timing normalization", group["files"][1]["reason"])
         self.assertIn("estimated frame count matches within 0.01%", group["files"][1]["reason"])
 
-    def test_clear_quality_winner_still_requires_cut_review_when_runtime_does_not_align(self):
+    def test_shorter_keeper_requires_review_when_deletion_candidate_is_longer(self):
         high = candidate("E:/Movies/Alien.1979.1080p.mkv")
         low = candidate(
             "E:/Movies/Alien.1979.720p.different.mkv",
@@ -372,7 +374,7 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertEqual(group["recommended_count"], 0)
         self.assertEqual(group["files"][0]["verdict"], "quality_winner_verify_cut")
         self.assertEqual(group["files"][1]["verdict"], "lower_quality_verify_cut")
-        self.assertIn("runtime differs", group["files"][1]["reason"])
+        self.assertIn("deletion candidate is 20.0s longer", group["files"][1]["reason"])
 
     def test_better_video_does_not_auto_delete_superior_primary_audio(self):
         high = candidate("E:/Movies/Alien.1979.1080p.stereo.mkv")
@@ -388,12 +390,236 @@ class MaintenanceAuditTest(unittest.TestCase):
         group = audit["storage"]["groups"][0]
         self.assertEqual(group["recommended_count"], 0)
         self.assertEqual(group["files"][0]["verdict"], "quality_winner_verify_cut")
-        self.assertEqual(group["files"][1]["verdict"], "unique_features")
-        self.assertIn("2 audio channels versus 6", group["files"][1]["reason"])
+        self.assertEqual(group["files"][1]["verdict"], "quality_tradeoff")
+        self.assertIn("better primary audio", group["files"][1]["reason"])
         self.assertTrue(any(
-            "2 audio channels versus 6" in blocker
+            "better primary audio" in blocker
             for blocker in group["files"][1]["decision_blockers"]
         ))
+
+    def test_decisive_video_can_trade_lossy_surround_for_stereo_with_warning(self):
+        high = candidate("E:/Movies/Alien.1979.1080p.stereo.mkv")
+        low = candidate(
+            "E:/Movies/Alien.1979.480p.5.1.mkv",
+            resolution="480p",
+            audio_codec="AC-3",
+            audio_channels=6,
+            audio_bitrate=448_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["verdict"], "recommended_removal")
+        self.assertEqual(removal["decision_blockers"], [])
+        self.assertTrue(any(
+            "4x-or-greater pixel advantage" in warning
+            for warning in removal["decision_warnings"]
+        ))
+
+    def test_four_times_video_overrides_lossless_surround_audio_with_warning(self):
+        high = candidate("E:/Movies/Alien.1979.1080p.stereo.mkv")
+        low = candidate(
+            "E:/Movies/Alien.1979.480p.lossless.5.1.mkv",
+            resolution="480p",
+            audio_codec="FLAC",
+            audio_channels=6,
+            audio_bitrate=1_500_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertTrue(any(
+            "4x-or-greater pixel advantage" in warning
+            for warning in removal["decision_warnings"]
+        ))
+
+    def test_equivalent_video_selects_the_better_primary_audio(self):
+        stereo = candidate("E:/Movies/Alien.1979.1080p.stereo.mkv")
+        surround = candidate(
+            "E:/Movies/Alien.1979.1080p.surround.mkv",
+            audio_channels=6,
+            audio_bitrate=640_000,
+        )
+
+        audit = build_maintenance_audit([stereo, surround])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["filename"].endswith("stereo.mkv"))
+        keeper = next(row for row in group["files"] if row["filename"].endswith("surround.mkv"))
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["verdict"], "recommended_removal")
+        self.assertEqual(keeper["verdict"], "recommended_keep")
+        self.assertIn("equivalent video quality", removal["reason"])
+
+    def test_audio_language_loss_warns_but_does_not_cancel_quality_selection(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.mkv",
+            audio_tracks_json=json.dumps([
+                {"language": "eng", "codec": "AAC", "channels": 2},
+            ]),
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.720p.multi.mkv",
+            resolution="720p",
+            audio_tracks_json=json.dumps([
+                {"language": "eng", "codec": "AAC", "channels": 2},
+                {"language": "fra", "codec": "AAC", "channels": 2},
+            ]),
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "720p")
+        keeper = next(row for row in group["files"] if row["resolution"] == "1080p")
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertEqual(removal["audio_language_losses"], ["French"])
+        self.assertTrue(any("loses audio language" in warning.lower() for warning in removal["decision_warnings"]))
+        self.assertEqual(keeper["audio_language_losses"], [])
+        self.assertFalse(any("loses audio language" in warning.lower() for warning in keeper["decision_warnings"]))
+
+    def test_frame_rate_does_not_outvote_resolution(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.23fps.mkv",
+            video_frame_rate=23.976,
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.720p.60fps.mkv",
+            resolution="720p",
+            video_frame_rate=60,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "720p")
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertFalse(removal["comparison_uses_frame_rate"])
+
+    def test_decisive_video_accepts_framing_difference_up_to_three_percent(self):
+        high = candidate(
+            "E:/Movies/The.Bay.2012.1080p.mkv",
+            identity_title="The Bay",
+            identity_year="2012",
+            tmdb_id="33266",
+            video_width=1920,
+            video_height=1008,
+        )
+        low = candidate(
+            "E:/Movies/The.Bay.2012.480p.avi",
+            identity_title="The Bay",
+            identity_year="2012",
+            tmdb_id="33266",
+            resolution="480p",
+            video_width=720,
+            video_height=368,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["verdict"], "recommended_removal")
+        self.assertIn("framing differs by 2.65%", removal["reason"])
+
+    def test_decisive_video_still_blocks_framing_difference_over_three_percent(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.mkv",
+            video_width=1920,
+            video_height=1080,
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.480p.cropped.mkv",
+            resolution="480p",
+            video_width=720,
+            video_height=360,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 0)
+        self.assertEqual(removal["recommendation"], "review")
+        self.assertTrue(any(
+            "automatic selection allows up to 3.00%" in blocker
+            for blocker in removal["decision_blockers"]
+        ))
+
+    def test_decisive_video_accepts_runtime_difference_within_point_seven_five_percent(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.mkv",
+            duration_ms=5_723_135,
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.480p.mkv",
+            resolution="480p",
+            duration_ms=5_692_542,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["verdict"], "recommended_removal")
+        self.assertIn("keeper is 30.6s longer", removal["reason"])
+
+    def test_longer_keeper_is_safe_without_a_symmetric_sixty_second_cap(self):
+        high = candidate(
+            "E:/Movies/Alien.1979.1080p.mkv",
+            duration_ms=10_800_000,
+        )
+        low = candidate(
+            "E:/Movies/Alien.1979.480p.long-cut.mkv",
+            resolution="480p",
+            duration_ms=10_739_000,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "480p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertIn("keeper is 61.0s longer", removal["reason"])
+
+    def test_longer_keeper_is_safe_even_below_four_times_pixels_when_audio_is_not_worse(self):
+        high = candidate(
+            "E:/Movies/The.Cured.2017.1080p.mkv",
+            identity_title="The Cured",
+            identity_year="2017",
+            tmdb_id="469721",
+            video_width=1920,
+            video_height=800,
+            duration_ms=5_723_135,
+        )
+        low = candidate(
+            "E:/Movies/The.Cured.2017.720p.mkv",
+            identity_title="The Cured",
+            identity_year="2017",
+            tmdb_id="469721",
+            resolution="720p",
+            video_width=1280,
+            video_height=528,
+            duration_ms=5_692_542,
+        )
+
+        audit = build_maintenance_audit([high, low])
+
+        group = audit["storage"]["groups"][0]
+        removal = next(row for row in group["files"] if row["resolution"] == "720p")
+        self.assertEqual(group["recommended_count"], 1)
+        self.assertEqual(removal["recommendation"], "recommended")
+        self.assertIn("keeper is 30.6s longer", removal["reason"])
 
     def test_hollow_man_missing_bitrates_and_dc_marker_warn_without_blocking(self):
         high = candidate(
@@ -444,7 +670,7 @@ class MaintenanceAuditTest(unittest.TestCase):
         self.assertTrue(any("runtime" in passed for passed in removal["decision_passed"]))
         self.assertTrue(any("2.25x" in passed for passed in removal["decision_passed"]))
 
-    def test_resolution_does_not_erase_source_or_bit_depth_tradeoffs(self):
+    def test_resolution_hierarchy_is_not_overturned_by_filename_source_or_bit_depth(self):
         cases = {
             "source": {
                 "high": {"rip_source": "WEBRip"},
@@ -472,10 +698,9 @@ class MaintenanceAuditTest(unittest.TestCase):
                 audit = build_maintenance_audit([high, low])
 
                 group = audit["storage"]["groups"][0]
-                self.assertEqual(group["recommended_count"], 0)
+                self.assertEqual(group["recommended_count"], 1)
                 candidate_row = next(row for row in group["files"] if row["resolution"] == "720p")
-                self.assertEqual(candidate_row["verdict"], "quality_tradeoff")
-                self.assertIn(values["reason"], candidate_row["reason"])
+                self.assertEqual(candidate_row["verdict"], "recommended_removal")
 
     def test_multi_file_group_uses_pairwise_dominance_instead_of_one_reference(self):
         high = candidate("E:/Movies/Alien.1979.4K.mkv", resolution="4K", video_bitrate=12_000_000)
@@ -500,8 +725,6 @@ class MaintenanceAuditTest(unittest.TestCase):
             "bit_depth": {"video_bit_depth": 10},
             "duration": {"duration_ms": 120_000},
             "audio_codec": {"audio_codec": "DTS"},
-            "audio_channels": {"audio_channels": 6},
-            "audio_bitrate": {"audio_bitrate": 384_000},
             "aspect": {"video_width": 1440, "video_height": 1080},
             "edition": {"filename": "Alien.1979.Extended.1080p.mkv"},
         }

@@ -82,9 +82,13 @@ class PlaybackHistoryStore:
                 (path_key,),
             ).fetchone()
             revision = int(row["revision"] if row else 0) + 1
-            position_ms = 0 if restart else int(row["position_ms"] if row else 0)
+            # A completed row belongs to the previous viewing. Opening it again is
+            # a rewatch, so it must start a new unfinished session. Watched is
+            # owned separately by curation and is intentionally not affected.
+            rewatch = bool(row and row["completed_at"] is not None)
+            position_ms = 0 if restart or rewatch else int(row["position_ms"] if row else 0)
             duration_ms = int(row["duration_ms"] if row else 0)
-            completed_at = None if restart else (row["completed_at"] if row else None)
+            completed_at = None if restart or rewatch else (row["completed_at"] if row else None)
             connection.execute("""
                 INSERT INTO playback_history(
                     path_key, movie_key, position_ms, duration_ms, last_played_at,
@@ -406,7 +410,6 @@ class PlaybackHistoryService:
         minimum_ms = int(config["minimum_resume_seconds"]) * 1000
         threshold = float(config["completion_threshold"])
         grouped = {}
-        curation = self.curation_store_provider()
         for row in self.history_store.rows_for_presentation(limit=200):
             duration = row["duration_ms"]
             position = row["position_ms"]
@@ -446,8 +449,6 @@ class PlaybackHistoryService:
                     canonical.get("poster_url") or canonical.get("poster_path") or ""
                 ),
             }
-            if curation.system_states_for_movie(movie)["watched"]:
-                continue
             identity = movie_key or f"path:{row['path_key']}"
             if identity in grouped:
                 continue

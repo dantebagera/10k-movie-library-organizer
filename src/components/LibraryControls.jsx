@@ -20,12 +20,28 @@ export function LibraryRenameModal({ item, onClose, onSubmit }) {
   </div>;
 }
 
-export function ConfirmDialog({ title, body, confirmLabel, danger, onCancel, onConfirm }) {
+export function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  acknowledgementLabel = '',
+  acknowledged = false,
+  onAcknowledgementChange,
+  onCancel,
+  onConfirm,
+}) {
   return <div className="modal-backdrop" role="presentation" onClick={onCancel}>
     <section className="small-dialog" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <div className="dialog-header"><div><p className="screen-kicker">Confirm action</p><h2>{title}</h2></div><button type="button" className="inspector-close" onClick={onCancel} aria-label="Close dialog"><X size={18} /></button></div>
       <p className="dialog-body-path">{body}</p>
-      <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button type="button" className={cx('btn', danger ? 'btn-danger' : 'btn-primary')} onClick={onConfirm}>{confirmLabel}</button></div>
+      {acknowledgementLabel && (
+        <label className="dialog-confirmation-check">
+          <input type="checkbox" checked={acknowledged} onChange={(event) => onAcknowledgementChange?.(event.target.checked)} />
+          <span>{acknowledgementLabel}</span>
+        </label>
+      )}
+      <div className="dialog-actions"><button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button><button type="button" className={cx('btn', danger ? 'btn-danger' : 'btn-primary')} disabled={Boolean(acknowledgementLabel) && !acknowledged} onClick={onConfirm}>{confirmLabel}</button></div>
     </section>
   </div>;
 }

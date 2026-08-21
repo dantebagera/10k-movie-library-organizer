@@ -28,7 +28,7 @@ from services.movie_identity import (
     same_public_identity as _same_public_identity,
 )
 from services.catalog_repository import CatalogRepository, catalog_database_path
-from services.catalog_writer_lease import CatalogWriterLease
+from services.catalog_writer_lease import CatalogWriterLease, CatalogWriterLeaseError
 from services.canonical_catalog import (
     CANONICAL_CONTRACT_VERSION,
     WRITER_JOBS,
@@ -109,6 +109,16 @@ from services.media_file_facts import (
     quality_display,
 )
 from services.youtube_playlist import YouTubePlaylistError, YouTubeService
+from services.advanced_search import (
+    AdvancedSearchValidationError,
+    MAX_PAGE_SIZE as ADVANCED_SEARCH_MAX_PAGE_SIZE,
+    normalize_query as normalize_advanced_search_query,
+    query_signature as advanced_search_signature,
+)
+from services.tmdb_advanced_search import (
+    build_discover_plan,
+    movie_matches_summary,
+)
 
 app = Flask(__name__)
 _process_started_at = time.perf_counter()
@@ -546,6 +556,8 @@ def _norm(path):
 _plex_section_ids = [] # movie section keys — used for triggering rescans
 _metadata_cache  = {}  # "{title}_{year}" -> {poster_url, genres, plot, tmdb_rating} — memory-only
 _tmdb_genres     = {}  # genre_id -> genre_name, lazy-loaded once from TMDB
+_tmdb_filter_options_cache = None
+_tmdb_filter_options_lock = threading.Lock()
 _TMDB_CACHE_DIR = _tmdb_cache_dir
 _TMDB_LIBRARY_CACHE_FILE = os.path.join(_TMDB_CACHE_DIR, 'tmdb_library_cache.json')
 _TMDB_COLLECTION_CACHE_FILE = os.path.join(_TMDB_CACHE_DIR, 'tmdb_collection_cache.json')
@@ -1893,6 +1905,47 @@ def _delete_library_file(path, *, use_trash=True):
 
 def _plan_library_file_deletions(paths):
     return _library_mutation_service().plan_deletions(paths, whole_movie_folders=True)
+
+
+def _duplicate_audio_language_losses(paths):
+    selected = {_norm(os.path.abspath(str(path))) for path in paths}
+    losses = []
+    for group in _maintenance_audit_from_catalog().get('storage', {}).get('groups', []):
+        for item in group.get('files', []):
+            languages = [str(language) for language in item.get('audio_language_losses', []) if str(language)]
+            if (
+                _norm(os.path.abspath(str(item.get('path') or ''))) in selected
+                and languages
+            ):
+                losses.append({
+                    'path': os.path.abspath(str(item.get('path') or '')),
+                    'filename': str(item.get('filename') or os.path.basename(str(item.get('path') or ''))),
+                    'languages': languages,
+                    'keeper': str(item.get('comparison_peer') or ''),
+                })
+    return losses
+
+
+def _require_audio_language_loss_confirmation(paths, confirmations):
+    losses = _duplicate_audio_language_losses(paths)
+    confirmed = {}
+    for confirmation in confirmations or []:
+        if not isinstance(confirmation, dict) or not str(confirmation.get('path') or '').strip():
+            continue
+        confirmed[_norm(os.path.abspath(str(confirmation['path'])))] = sorted(
+            str(language) for language in confirmation.get('languages', []) if str(language)
+        )
+    missing = [
+        loss for loss in losses
+        if confirmed.get(_norm(loss['path'])) != sorted(loss['languages'])
+    ]
+    if missing:
+        return {
+            'error': 'Explicit confirmation is required because deletion loses an audio language track.',
+            'confirmation_required': 'audio_language_loss',
+            'audio_language_losses': missing,
+        }
+    return None
 
 
 def _delete_library_files(paths, *, use_trash=True, allowed_folder_targets=None):
@@ -5341,7 +5394,15 @@ def delete_file():
             if len(abs_paths) != len(paths):
                 return jsonify({'error': 'Every deletion path must be non-empty'}), 400
             if data.get('preview'):
-                return jsonify(_plan_library_file_deletions(abs_paths))
+                plan = _plan_library_file_deletions(abs_paths)
+                plan['audio_language_losses'] = _duplicate_audio_language_losses(abs_paths)
+                return jsonify(plan)
+            confirmation_error = _require_audio_language_loss_confirmation(
+                abs_paths,
+                data.get('confirmed_audio_language_losses', []),
+            )
+            if confirmation_error:
+                return jsonify(confirmation_error), 409
             folder_targets = data.get('folder_targets', [])
             if not isinstance(folder_targets, list) or len(folder_targets) > 200:
                 return jsonify({'error': 'Folder targets must be a list containing at most 200 folders'}), 400
@@ -5356,6 +5417,12 @@ def delete_file():
 
         path = data['path']
         abs_path = os.path.abspath(path)
+        confirmation_error = _require_audio_language_loss_confirmation(
+            [abs_path],
+            data.get('confirmed_audio_language_losses', []),
+        )
+        if confirmation_error:
+            return jsonify(confirmation_error), 409
         return jsonify(_delete_library_file(abs_path, use_trash=use_trash))
     except LibraryMutationError as error:
         return jsonify({'error': str(error)}), 403
@@ -5749,13 +5816,8 @@ def _library_query_filters(values=None):
     }
 
 
-def _paged_library_cards(store, *, reconcile_result=None, force_scan=False, force_plex=False):
-    filters = _library_query_filters()
+def _library_cards_payload(store, result, *, reconcile_result=None, force_scan=False, force_plex=False, query_signature=''):
     upgrade_paths = _maintenance_upgrade_path_keys()
-    filters['upgrade_path_keys'] = list(upgrade_paths)
-    page = request.args.get('page', 1, type=int)
-    page_size = request.args.get('page_size', 40, type=int)
-    result = store.catalog.library_page(filters, page=page, page_size=page_size)
     items = [
         _library_card_item(
             _catalog_library_item(candidate, store, None),
@@ -5778,7 +5840,72 @@ def _paged_library_cards(store, *, reconcile_result=None, force_scan=False, forc
         'metadata_pending': int(reconcile_result.get('pending', 0) or 0),
         'metadata_review': int(reconcile_result.get('review', 0) or 0),
         'catalog_generation': store.catalog.generation('media'),
+        **({'query_signature': query_signature} if query_signature else {}),
     })
+
+
+def _paged_library_cards(store, *, reconcile_result=None, force_scan=False, force_plex=False):
+    filters = _library_query_filters()
+    upgrade_paths = _maintenance_upgrade_path_keys()
+    filters['upgrade_path_keys'] = list(upgrade_paths)
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 40, type=int)
+    result = store.catalog.library_page(filters, page=page, page_size=page_size)
+    return _library_cards_payload(
+        store,
+        result,
+        reconcile_result=reconcile_result,
+        force_scan=force_scan,
+        force_plex=force_plex,
+    )
+
+
+@app.route('/api/library/search/advanced', methods=['POST'])
+def advanced_library_search():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Advanced Library request must be a JSON object'}), 400
+    unknown = set(body) - {'query', 'page', 'page_size'}
+    if unknown:
+        return jsonify({'error': f"Unknown request fields: {', '.join(sorted(unknown))}"}), 400
+    try:
+        normalized = normalize_advanced_search_query(body.get('query'), 'library')
+        page = _validated_page_value(body.get('page', 1), 'Page')
+        page_size = _validated_page_value(
+            body.get('page_size', 40),
+            'Page size',
+            maximum=ADVANCED_SEARCH_MAX_PAGE_SIZE,
+        )
+        store = _metadata_store()
+        upgrade_paths = _maintenance_upgrade_path_keys()
+        result = store.catalog.library_page(
+            query=normalized,
+            page=page,
+            page_size=page_size,
+            upgrade_path_keys=upgrade_paths,
+        )
+        return _library_cards_payload(
+            store,
+            result,
+            query_signature=advanced_search_signature(normalized, 'library'),
+        )
+    except (AdvancedSearchValidationError, TypeError, ValueError) as error:
+        return jsonify({'error': str(error)}), 400
+
+
+@app.route('/api/library/search/identities')
+def library_search_identities():
+    identity_type = request.args.get('type', '').strip().lower()
+    if identity_type != 'person':
+        return jsonify({'error': 'Identity type must be person'}), 400
+    query = request.args.get('q', '').strip()
+    try:
+        limit = int(request.args.get('limit', 20))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Identity limit must be an integer'}), 400
+    if limit < 1 or limit > 20:
+        return jsonify({'error': 'Identity limit must be between 1 and 20'}), 400
+    return jsonify(_metadata_store().catalog.library_people_identities(query, limit=limit))
 
 
 @app.route('/api/library')
@@ -6002,6 +6129,22 @@ def library_check():
 @app.route('/api/library/selection', methods=['POST'])
 def library_selection():
     body = request.get_json(silent=True) or {}
+    if 'query' in body:
+        try:
+            normalized = normalize_advanced_search_query(body.get('query'), 'library')
+            upgrade_paths = _maintenance_upgrade_path_keys()
+            paths = _catalog_repository().library_selection_paths(
+                query=normalized,
+                upgrade_path_keys=upgrade_paths,
+            )
+            return jsonify({
+                'paths': paths,
+                'count': len(paths),
+                'query_signature': advanced_search_signature(normalized, 'library'),
+                'catalog_generation': _catalog_repository().generation('media'),
+            })
+        except AdvancedSearchValidationError as error:
+            return jsonify({'error': str(error)}), 400
     filters = _library_query_filters(body.get('filters') or body)
     filters['upgrade_path_keys'] = list(_maintenance_upgrade_path_keys())
     paths = _catalog_repository().library_selection_paths(filters)
@@ -6860,6 +7003,50 @@ def _ensure_tmdb_genres():
         pass
 
 
+def _load_tmdb_filter_options():
+    global _tmdb_filter_options_cache
+    if _tmdb_filter_options_cache is not None:
+        return _tmdb_filter_options_cache
+    if not _tmdb_key:
+        return {'languages': [], 'countries': []}
+    with _tmdb_filter_options_lock:
+        if _tmdb_filter_options_cache is not None:
+            return _tmdb_filter_options_cache
+
+        def fetch_configuration(resource):
+            language_parameter = '&language=en-US' if resource == 'countries' else ''
+            url = (
+                f"https://api.themoviedb.org/3/configuration/{resource}"
+                f"?api_key={urllib.parse.quote(_tmdb_key)}{language_parameter}"
+            )
+            request = urllib.request.Request(url, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = _json.loads(response.read().decode())
+            return payload if isinstance(payload, list) else []
+
+        languages = [
+            {
+                'value': str(item.get('iso_639_1', '') or '').strip().lower(),
+                'label': str(item.get('english_name') or item.get('name') or item.get('iso_639_1') or '').strip(),
+            }
+            for item in fetch_configuration('languages')
+            if str(item.get('iso_639_1', '') or '').strip()
+        ]
+        countries = [
+            {
+                'value': str(item.get('iso_3166_1', '') or '').strip().upper(),
+                'label': str(item.get('english_name') or item.get('native_name') or item.get('iso_3166_1') or '').strip(),
+            }
+            for item in fetch_configuration('countries')
+            if str(item.get('iso_3166_1', '') or '').strip()
+        ]
+        _tmdb_filter_options_cache = {
+            'languages': sorted(languages, key=lambda item: (item['label'].casefold(), item['value'])),
+            'countries': sorted(countries, key=lambda item: (item['label'].casefold(), item['value'])),
+        }
+        return _tmdb_filter_options_cache
+
+
 def _tmdb_include_adult_value(value=None):
     return 'true' if _coerce_bool(value, _tmdb_include_adult) else 'false'
 
@@ -6869,8 +7056,39 @@ TMDB_PROVIDER_PAGE_SIZE = 20
 TMDB_LOGICAL_PAGE_SIZE_LIMIT = 100
 TMDB_PAGE_WINDOW_CACHE_TTL_SECONDS = 60
 TMDB_PAGE_WINDOW_CACHE_LIMIT = 256
+TMDB_DENSE_SCAN_PAGE_BUDGET = 10
+TMDB_DENSE_WINDOW_CACHE_TTL_SECONDS = 120
+TMDB_DENSE_WINDOW_CACHE_LIMIT = 64
 _tmdb_page_window_cache = {}
 _tmdb_page_window_cache_lock = threading.Lock()
+_tmdb_dense_window_cache = {}
+_tmdb_dense_window_cache_lock = threading.Lock()
+
+
+def _validated_page_value(value, label, maximum=None):
+    if isinstance(value, bool):
+        raise ValueError(f'{label} must be an integer')
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r'\d+', value.strip()):
+        parsed = int(value.strip())
+    else:
+        raise ValueError(f'{label} must be an integer')
+    if parsed < 1:
+        raise ValueError(f'{label} must be at least 1')
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f'{label} must be between 1 and {maximum}')
+    return parsed
+
+
+def _advanced_tmdb_page_contract(page_value, page_size_value=20):
+    page = _validated_page_value(page_value, 'Page')
+    page_size = _validated_page_value(
+        page_size_value,
+        'Page size',
+        maximum=TMDB_LOGICAL_PAGE_SIZE_LIMIT,
+    )
+    return _tmdb_page_contract(page, page_size)
 
 
 def _tmdb_requested_page(value):
@@ -6970,6 +7188,328 @@ def _tmdb_fetch_page_window(first_url, provider_pages):
             data['total_results'] = page_data.get('total_results', 0)
         data['results'].extend(page_data.get('results', []))
     return data
+
+
+def _tmdb_person_credit_ids(person_id, role):
+    """Return one role-specific TMDB movie-id set without movie detail calls."""
+    safe_id = urllib.parse.quote(str(person_id))
+    url = (f"https://api.themoviedb.org/3/person/{safe_id}/movie_credits"
+           f"?api_key={urllib.parse.quote(_tmdb_key)}&language=en-US")
+    raw = _tmdb_fetch_provider_page(url)
+    if role == 'director':
+        credits = [item for item in (raw.get('crew', []) or []) if item.get('job') == 'Director']
+    elif role == 'writer':
+        credits = [item for item in (raw.get('crew', []) or []) if item.get('job') in WRITER_JOBS]
+    else:
+        credits = raw.get('cast', []) or []
+    return {
+        str(item.get('id')) for item in credits
+        if str(item.get('id', '') or '').strip()
+    }, credits
+
+
+def _tmdb_people_match_ids(people, join):
+    sets = []
+    for person in people:
+        movie_ids, _credits = _tmdb_person_credit_ids(person['id'], person['role'])
+        sets.append(movie_ids)
+    if not sets:
+        return None
+    if join == 'and':
+        return set.intersection(*sets)
+    return set.union(*sets)
+
+
+def _tmdb_movie_id(movie):
+    return str((movie or {}).get('id') or (movie or {}).get('tmdb_id') or '').strip()
+
+
+def _tmdb_sort_summaries(movies, sort_key):
+    movies = list(movies or [])
+    if sort_key == 'vote_average.desc':
+        movies.sort(key=lambda movie: (float(movie.get('vote_average') or movie.get('tmdb_rating') or 0), _tmdb_movie_id(movie)), reverse=True)
+    elif sort_key == 'vote_count.desc':
+        movies.sort(key=lambda movie: (int(movie.get('vote_count') or movie.get('tmdb_vote_count') or 0), _tmdb_movie_id(movie)), reverse=True)
+    elif sort_key == 'primary_release_date.desc':
+        movies.sort(key=lambda movie: (str(movie.get('release_date') or ''), _tmdb_movie_id(movie)), reverse=True)
+    elif sort_key == 'title.asc':
+        movies.sort(key=lambda movie: (str(movie.get('title') or movie.get('original_title') or '').casefold(), _tmdb_movie_id(movie)))
+    elif sort_key == 'popularity.desc':
+        movies.sort(key=lambda movie: (float(movie.get('popularity') or 0), _tmdb_movie_id(movie)), reverse=True)
+    return movies
+
+
+def _tmdb_filter_local_movies(movies, local_groups):
+    """Apply local ownership/list facts before logical paging, in one bounded batch."""
+    movies = list(movies or [])
+    local_groups = list(local_groups or [])
+    if not movies or not local_groups:
+        return movies
+    normalized = [_normalize_tmdb_movie_summary(movie) for movie in movies]
+    owned = _find_owned_curation_movies(normalized)
+    needs_lists = any(group['type'] in {'viewing_status', 'movie_list'} for group in local_groups)
+    curation = _curation_store() if needs_lists else None
+    kept = []
+    for index, movie in enumerate(movies):
+        is_owned = bool(owned[index]) if index < len(owned) else False
+        memberships = curation.lists_for_movie(normalized[index]) if curation else []
+        membership_ids = {str(item.get('id') or '') for item in memberships}
+        system_types = {str(item.get('system_type') or '') for item in memberships}
+        matched = True
+        for group in local_groups:
+            criterion = group['type']
+            if criterion == 'availability':
+                matched = is_owned if group['values'][0]['id'] == 'owned' else not is_owned
+            elif criterion == 'viewing_status':
+                state = group['values'][0]['id']
+                matched = ('watched' not in system_types) if state == 'unwatched' else state in system_types
+            elif criterion == 'movie_list':
+                wanted = {str(value['id']) for value in group['values']}
+                found = wanted & membership_ids
+                matched = found == wanted if group.get('join') == 'and' else bool(found)
+            if not matched:
+                break
+        if matched:
+            kept.append(movie)
+    return kept
+
+
+def _tmdb_person_seed_movies(plan):
+    people_group = next((group for group in plan.query['groups'] if group['type'] == 'person'), None)
+    if not people_group:
+        return None
+    credit_sets = []
+    ordered_credits = []
+    for person in plan.people:
+        movie_ids, credits = _tmdb_person_credit_ids(person['id'], person['role'])
+        credit_sets.append(movie_ids)
+        ordered_credits.extend(credits)
+    matching_ids = (
+        set.intersection(*credit_sets)
+        if people_group.get('join') == 'and'
+        else set.union(*credit_sets)
+    ) if credit_sets else set()
+    title = plan.title.casefold()
+    seen = set()
+    movies = []
+    for movie in ordered_credits:
+        movie_id = _tmdb_movie_id(movie)
+        if not movie_id or movie_id in seen or movie_id not in matching_ids:
+            continue
+        if title and title not in str(movie.get('title') or movie.get('original_title') or '').casefold():
+            continue
+        if plan.summary_groups and not movie_matches_summary(movie, plan.summary_groups, _LANG_COUNTRY):
+            continue
+        seen.add(movie_id)
+        movies.append(movie)
+    movies = _tmdb_filter_local_movies(movies, plan.local_groups)
+    return _tmdb_sort_summaries(movies, plan.query['sort']['key'])
+
+
+def _tmdb_dense_cache_entry(cache_key):
+    now = time.monotonic()
+    with _tmdb_dense_window_cache_lock:
+        entry = _tmdb_dense_window_cache.get(cache_key)
+        if entry and now - entry['touched_at'] < TMDB_DENSE_WINDOW_CACHE_TTL_SECONDS:
+            entry['touched_at'] = now
+            return entry
+        if entry:
+            _tmdb_dense_window_cache.pop(cache_key, None)
+        while len(_tmdb_dense_window_cache) >= TMDB_DENSE_WINDOW_CACHE_LIMIT:
+            oldest = min(_tmdb_dense_window_cache, key=lambda key: _tmdb_dense_window_cache[key]['touched_at'])
+            _tmdb_dense_window_cache.pop(oldest, None)
+        entry = {
+            'matches': [],
+            'seen': set(),
+            'next_provider_page': 1,
+            'provider_total_pages': None,
+            'provider_total_results': None,
+            'provider_exhausted': False,
+            'touched_at': now,
+        }
+        _tmdb_dense_window_cache[cache_key] = entry
+        return entry
+
+
+def _tmdb_dense_window(plan, page, page_size, people_ids=None):
+    cache_key = f"{advanced_search_signature(plan.query, 'discover')}|adult={_tmdb_include_adult_value()}"
+    entry = _tmdb_dense_cache_entry(cache_key)
+    required_end = page * page_size
+    fetched_this_request = 0
+    while (
+        len(entry['matches']) <= required_end
+        and not entry['provider_exhausted']
+        and fetched_this_request < TMDB_DENSE_SCAN_PAGE_BUDGET
+    ):
+        provider_page = entry['next_provider_page']
+        data = _tmdb_fetch_provider_page(_tmdb_advanced_url(plan, provider_page))
+        fetched_this_request += 1
+        entry['provider_total_pages'] = max(1, int(data.get('total_pages', 1) or 1))
+        entry['provider_total_results'] = max(0, int(data.get('total_results', 0) or 0))
+        batch = list(data.get('results', []) or [])
+        if plan.strategy == 'title' and plan.summary_groups:
+            batch = [movie for movie in batch if movie_matches_summary(movie, plan.summary_groups, _LANG_COUNTRY)]
+        if people_ids is not None:
+            batch = [movie for movie in batch if _tmdb_movie_id(movie) in people_ids]
+        batch = _tmdb_filter_local_movies(batch, plan.local_groups)
+        for movie in batch:
+            movie_id = _tmdb_movie_id(movie)
+            if not movie_id or movie_id in entry['seen']:
+                continue
+            entry['seen'].add(movie_id)
+            entry['matches'].append(movie)
+        entry['next_provider_page'] = provider_page + 1
+        if not data.get('results') or provider_page >= entry['provider_total_pages']:
+            entry['provider_exhausted'] = True
+    entry['touched_at'] = time.monotonic()
+    ordered = _tmdb_sort_summaries(entry['matches'], plan.query['sort']['key'])
+    start = (page - 1) * page_size
+    end = start + page_size
+    exhausted = entry['provider_exhausted']
+    total_results = len(ordered) if exhausted else None
+    total_pages = max(1, (len(ordered) + page_size - 1) // page_size) if exhausted else None
+    budget_exhausted = not exhausted and fetched_this_request >= TMDB_DENSE_SCAN_PAGE_BUDGET and len(ordered) < end
+    return {
+        'results': ordered[start:end],
+        'page': page,
+        'page_size': page_size,
+        'total_scope': 'exact' if exhausted else 'bounded',
+        'total_results': total_results,
+        'total_pages': total_pages,
+        'has_previous': page > 1,
+        'has_next': len(ordered) > end or not exhausted,
+        'provider_exhausted': exhausted,
+        'provider_total_pages': entry['provider_total_pages'],
+        'provider_total_results': entry['provider_total_results'],
+        'provider_pages_fetched': fetched_this_request,
+        'budget_exhausted': budget_exhausted,
+        'retryable': budget_exhausted,
+        'total_label': (
+            f'{len(ordered)} matches collected from TMDB'
+            if not exhausted else f'{len(ordered)} TMDB matches'
+        ),
+    }
+
+
+def _tmdb_advanced_url(plan, provider_page):
+    params = {
+        'api_key': _tmdb_key,
+        'language': 'en-US',
+        'page': provider_page,
+    }
+    if plan.strategy == 'title':
+        params.update({
+            'query': plan.title,
+            'include_adult': _tmdb_include_adult_value(),
+        })
+    elif plan.endpoint == '/discover/movie':
+        params.update(plan.provider_params)
+    return f"https://api.themoviedb.org/3{plan.endpoint}?{urllib.parse.urlencode(params)}"
+
+
+@app.route('/api/tmdb/discover/advanced', methods=['POST'])
+def advanced_tmdb_discover():
+    if not _tmdb_key:
+        return jsonify({'error': 'TMDB key not configured — add it in ⚙ Settings.'}), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Advanced Discover request must be a JSON object'}), 400
+    unknown = set(body) - {'query', 'page', 'page_size'}
+    if unknown:
+        return jsonify({'error': f"Unknown request fields: {', '.join(sorted(unknown))}"}), 400
+    try:
+        plan = build_discover_plan(body.get('query'))
+        page, page_size, provider_pages, provider_offset = _advanced_tmdb_page_contract(
+            body.get('page', 1),
+            body.get('page_size', 20),
+        )
+        _ensure_tmdb_genres()
+        people_group = next(
+            (group for group in plan.query['groups'] if group['type'] == 'person'),
+            None,
+        )
+        person_requires_provider_stream = bool(
+            people_group
+            and any(group['type'] in {'keyword', 'runtime'} for group in plan.query['groups'])
+        )
+        if people_group and not person_requires_provider_stream:
+            person_movies = _tmdb_person_seed_movies(plan)
+            total_results = len(person_movies)
+            total_pages = max(1, (total_results + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            start = (page - 1) * page_size
+            movies = [_normalize_tmdb_movie_summary(movie) for movie in person_movies[start:start + page_size]]
+            return jsonify({
+                'results': movies,
+                'page': page,
+                'page_size': page_size,
+                'total_pages': total_pages,
+                'total_results': total_results,
+                'has_previous': page > 1,
+                'has_next': page < total_pages,
+                'provider_exhausted': True,
+                'total_scope': 'exact',
+                'total_label': f'{total_results} role-specific TMDB credits',
+                'local_criteria': list(plan.local_groups),
+                'query_signature': advanced_search_signature(plan.query, 'discover'),
+                'strategy': 'person_credits',
+            })
+
+        if plan.strategy == 'title' or plan.local_groups or person_requires_provider_stream:
+            people_ids = (
+                _tmdb_people_match_ids(plan.people, people_group.get('join', 'or'))
+                if person_requires_provider_stream else None
+            )
+            dense = _tmdb_dense_window(plan, page, page_size, people_ids=people_ids)
+            return jsonify({
+                **dense,
+                'results': [_normalize_tmdb_movie_summary(movie) for movie in dense['results']],
+                'local_criteria': list(plan.local_groups),
+                'query_signature': advanced_search_signature(plan.query, 'discover'),
+                'strategy': 'dense_window',
+            })
+
+        data = _tmdb_fetch_page_window(
+            _tmdb_advanced_url(plan, provider_pages[0]),
+            provider_pages,
+        )
+        provider_window = (data.get('results', []) or [])[provider_offset:provider_offset + page_size]
+        movies = [_normalize_tmdb_movie_summary(movie) for movie in provider_window]
+
+        metadata = _tmdb_page_metadata(
+            data.get('total_pages', 1),
+            page_size,
+            data.get('total_results'),
+        )
+        return jsonify({
+            'results': movies,
+            'page': page,
+            'page_size': page_size,
+            'total_pages': metadata['total_pages'],
+            'provider_total_pages': metadata['provider_total_pages'],
+            'provider_page_limit': metadata['provider_page_limit'],
+            'provider_total_results': data.get('total_results', 0),
+            'total_results': data.get('total_results', len(movies)),
+            'page_match_count': len(movies),
+            'total_scope': 'provider',
+            'total_label': 'TMDB results',
+            'has_previous': page > 1,
+            'has_next': page < metadata['total_pages'],
+            'provider_exhausted': page >= metadata['total_pages'],
+            'local_criteria': list(plan.local_groups),
+            'query_signature': advanced_search_signature(plan.query, 'discover'),
+            'strategy': plan.strategy,
+        })
+    except AdvancedSearchValidationError as error:
+        return jsonify({'error': str(error)}), 400
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    except urllib.error.HTTPError as error:
+        if error.code == 401:
+            return jsonify({'error': 'Invalid TMDB API key — check Settings.'}), 401
+        return jsonify({'error': f'TMDB returned HTTP {error.code}'}), 502
+    except Exception:
+        return jsonify({'error': 'TMDB request failed'}), 502
 
 
 @app.route('/api/metadata')
@@ -7169,6 +7709,8 @@ def tmdb_discover():
         return jsonify({'error': 'TMDB key not configured — add it in ⚙ Settings.'}), 400
     list_name = request.args.get('list', 'trending_week')
     genre_id  = request.args.get('genre', '').strip()
+    original_language = request.args.get('language', '').strip().lower()
+    origin_country = request.args.get('country', '').strip().upper()
     min_votes = request.args.get('min_votes', '').strip()
     year_from = request.args.get('year_from', '').strip()
     year_to = request.args.get('year_to', '').strip()
@@ -7200,6 +7742,8 @@ def tmdb_discover():
         advanced_discover = bool(
             list_name == 'catalog'
             or genre_id
+            or original_language
+            or origin_country
             or year_from
             or year_to
             or min_rating
@@ -7217,6 +7761,10 @@ def tmdb_discover():
             })
             if genre_id:
                 params += '&with_genres=' + urllib.parse.quote(genre_id)
+            if original_language:
+                params += '&with_original_language=' + urllib.parse.quote(original_language)
+            if origin_country:
+                params += '&with_origin_country=' + urllib.parse.quote(origin_country)
             if keyword_id:
                 params += '&with_keywords=' + urllib.parse.quote(keyword_id)
             if min_votes:
@@ -7310,6 +7858,20 @@ def tmdb_discover():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/tmdb/filter-options')
+def tmdb_filter_options():
+    if not _tmdb_key:
+        return jsonify({'error': 'TMDB key not configured — add it in ⚙ Settings.'}), 400
+    try:
+        return jsonify(_load_tmdb_filter_options())
+    except urllib.error.HTTPError as error:
+        if error.code == 401:
+            return jsonify({'error': 'Invalid TMDB API key — check Settings.'}), 401
+        return jsonify({'error': f'TMDB returned HTTP {error.code}'}), 502
+    except Exception as error:
+        return jsonify({'error': str(error)}), 500
+
+
 @app.route('/api/explore/search')
 def explore_search():
     title = request.args.get('title', '').strip()
@@ -7378,6 +7940,8 @@ def tmdb_search():
         return jsonify({'error': 'q (query) parameter required'}), 400
     year = request.args.get('year', '').strip()
     genre_id = request.args.get('genre', '').strip()
+    original_language = request.args.get('language', '').strip().lower()
+    origin_country = request.args.get('country', '').strip().upper()
     min_votes_raw = request.args.get('min_votes', '').strip()
     year_from = request.args.get('year_from', '').strip()
     year_to = request.args.get('year_to', '').strip()
@@ -7419,6 +7983,14 @@ def tmdb_search():
             genre_ids = m.get('genre_ids', [])
             if genre_id and genre_id not in {str(value) for value in genre_ids}:
                 continue
+            language_code = str(m.get('original_language', '') or '').strip().lower()
+            if original_language and language_code != original_language:
+                continue
+            country_codes = [str(value).strip().upper() for value in (m.get('origin_country') or []) if str(value).strip()]
+            if not country_codes and language_code:
+                country_codes = [_LANG_COUNTRY.get(language_code, '')]
+            if origin_country and origin_country not in country_codes:
+                continue
             release = m.get('release_date', '') or ''
             release_year = release[:4]
             if year_from and (not release_year or release_year < year_from):
@@ -7431,8 +8003,8 @@ def tmdb_search():
             poster_path = m.get('poster_path', '')
             movie_year = release[:4] if release else ''
             genres  = [_tmdb_genres[gid] for gid in genre_ids if gid in _tmdb_genres][:3]
-            lang    = m.get('original_language', '')
-            country_code = _LANG_COUNTRY.get(lang, '')
+            lang    = language_code
+            country_code = country_codes[0] if country_codes else ''
             movies.append({
                 'tmdb_id':    m.get('id'),
                 'title':      m.get('title', ''),
@@ -7462,7 +8034,7 @@ def tmdb_search():
             'results': movies,
             'page': page,
             'total_results': data.get('total_results', 0),
-            'criteria_applied': bool(genre_id or min_votes or year_from or year_to or min_rating or sort_override),
+            'criteria_applied': bool(genre_id or original_language or origin_country or min_votes or year_from or year_to or min_rating or sort_override),
             **_tmdb_page_metadata(
                 data.get('total_pages', 1),
                 page_size,
@@ -11086,6 +11658,8 @@ def tmdb_person_movies():
     if not person_id or not _tmdb_key:
         return jsonify({'error': 'person_id and TMDB key required'}), 400
     genre_id = request.args.get('genre', '').strip()
+    original_language = request.args.get('language', '').strip().lower()
+    origin_country = request.args.get('country', '').strip().upper()
     min_votes_raw = request.args.get('min_votes', '').strip()
     year_from = request.args.get('year_from', '').strip()
     year_to = request.args.get('year_to', '').strip()
@@ -11103,24 +11677,7 @@ def tmdb_person_movies():
     page_size = _tmdb_requested_page_size(request.args.get('page_size', '20'))
     _ensure_tmdb_genres()
     try:
-        safe_id = urllib.parse.quote(str(person_id))
-        url = (f"https://api.themoviedb.org/3/person/{safe_id}/movie_credits"
-               f"?api_key={urllib.parse.quote(_tmdb_key)}&language=en-US")
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw = _json.loads(resp.read().decode())
-
-        credits = raw.get('cast', []) or []
-        if role == 'director':
-            credits = [
-                item for item in (raw.get('crew', []) or [])
-                if item.get('job') == 'Director'
-            ]
-        elif role == 'writer':
-            credits = [
-                item for item in (raw.get('crew', []) or [])
-                if item.get('job') in WRITER_JOBS
-            ]
+        _movie_ids, credits = _tmdb_person_credit_ids(person_id, role)
 
         movies = []
         seen = set()
@@ -11141,6 +11698,13 @@ def tmdb_person_movies():
         def matches_criteria(movie):
             release_year = str(movie.get('release_date') or movie.get('year') or '')[:4]
             if genre_id and (not genre_name or genre_name not in (movie.get('genres') or [])):
+                return False
+            movie_language = str(movie.get('original_language') or movie.get('language') or '').strip().lower()
+            language_name = str(_LANG_NAMES.get(original_language, '') or '').strip().lower()
+            if original_language and movie_language not in (original_language, language_name):
+                return False
+            movie_countries = movie.get('origin_country') or [movie.get('country'), movie.get('country_code')]
+            if origin_country and not any(str(country or '').strip().upper() == origin_country for country in movie_countries):
                 return False
             if min_votes and int(movie.get('tmdb_vote_count') or 0) < min_votes:
                 return False

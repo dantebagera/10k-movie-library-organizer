@@ -27,8 +27,8 @@ class WatchedWatchlistUiTest(unittest.TestCase):
 
     def test_system_lists_are_protected_in_manager(self):
         self.assertIn("selectedList?.system_type", APP)
-        self.assertIn("System list", APP)
-        self.assertIn("Search TMDB to add to Watchlist", APP)
+        self.assertIn("disabled={!selectedList || selectedListIsSystem}", APP)
+        self.assertIn("Search TMDB to add a movie", APP)
 
     def test_overlay_css_keeps_active_and_touch_controls_visible(self):
         self.assertIn(".poster-state-control", STYLES)

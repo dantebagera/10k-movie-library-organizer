@@ -168,6 +168,19 @@ def click_window_fraction(window, x_fraction, y_fraction):
         user32.SendMessageW(window, 0x0202, 0, packed)
 
 
+def send_media_play_pause(window):
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    # APPCOMMAND_MEDIA_PLAY_PAUSE (14) occupies the high word of lParam.
+    user32.SendMessageW(window, 0x0319, 0, 14 << 16)
+
+
 def move_window_fraction(window, x_fraction, y_fraction):
     user32, screen, _ = window_client_fraction_point(
         window,
@@ -505,6 +518,7 @@ def main():
     parser.add_argument("--allow-no-audio", action="store_true")
     parser.add_argument("--require-subtitle", action="store_true")
     parser.add_argument("--exercise-controls", action="store_true")
+    parser.add_argument("--exercise-media-play-pause", action="store_true")
     parser.add_argument("--exercise-timeline", action="store_true")
     parser.add_argument("--exercise-speed-control", action="store_true")
     parser.add_argument("--exercise-window-chrome", action="store_true")
@@ -697,6 +711,7 @@ def main():
 
             exercise_ui = (
                 args.exercise_controls
+                or args.exercise_media_play_pause
                 or args.exercise_timeline
                 or args.exercise_speed_control
                 or args.exercise_window_chrome
@@ -763,6 +778,25 @@ def main():
                     and event.get("state") == "paused",
                     3,
                 )
+                if args.exercise_media_play_pause:
+                    send_media_play_pause(window)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "playback.state"
+                        and event.get("state") == "playing",
+                        3,
+                    )
+                    send_media_play_pause(window)
+                    receive_until(
+                        transport,
+                        process,
+                        events,
+                        lambda event: event["type"] == "playback.state"
+                        and event.get("state") == "paused",
+                        3,
+                    )
                 if args.exercise_window_chrome:
                     user32 = ctypes.WinDLL("user32", use_last_error=True)
                     user32.IsIconic.argtypes = [wintypes.HWND]
@@ -1325,6 +1359,7 @@ def main():
             or args.exercise_speed_control
             or args.exercise_window_chrome
         ),
+        "media_play_pause_exercised": bool(args.exercise_media_play_pause),
         "timeline_exercised": bool(args.exercise_timeline),
         "timeline_click_position_ms": timeline_click_position_ms,
         "timeline_drag_position_ms": timeline_drag_position_ms,

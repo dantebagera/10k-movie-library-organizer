@@ -31,8 +31,10 @@ ApplicationWindow {
     component CpButton: Button {
         id: control
         property bool compact: false
+        property url rightIconSource: ""
         leftPadding: compact ? 10 : 14
-        rightPadding: compact ? 10 : 14
+        rightPadding: (compact ? 10 : 14)
+                      + (rightIconSource.toString().length > 0 ? 22 : 0)
         topPadding: compact ? 7 : 9
         bottomPadding: compact ? 7 : 9
         contentItem: Text {
@@ -50,6 +52,20 @@ ApplicationWindow {
                                 : control.hovered ? "#ff26282d" : PlayerTheme.panelBlack
             border.color: control.highlighted ? PlayerTheme.projectorGold
                                               : PlayerTheme.borderStrong
+
+            Image {
+                visible: control.rightIconSource.toString().length > 0
+                anchors.right: parent.right
+                anchors.rightMargin: control.compact ? 10 : 14
+                anchors.verticalCenter: parent.verticalCenter
+                width: control.compact ? 16 : 18
+                height: width
+                source: control.rightIconSource
+                fillMode: Image.PreserveAspectFit
+                opacity: control.enabled
+                         ? PlayerTheme.playerGoldRestOpacity
+                         : PlayerTheme.playerGoldDisabledOpacity
+            }
         }
     }
 
@@ -1031,7 +1047,8 @@ ApplicationWindow {
                         CpButton {
                             compact: true
                             width: parent.width
-                            text: "Search online subtitles"
+                            text: "Find subs"
+                            rightIconSource: "qrc:/icons/search.svg"
                             highlighted: true
                             onClicked: root.showSubtitleSearch()
                         }
@@ -1047,7 +1064,8 @@ ApplicationWindow {
                                   ? "Saving subtitle..."
                                   : playerBridge.subtitleSaveStatus === "saved"
                                     ? "Saved beside movie"
-                                    : "Save selected subtitle beside movie"
+                                    : "Save subs"
+                            rightIconSource: "qrc:/icons/download.svg"
                             onClicked: playerBridge.requestSaveSelectedSubtitle()
                         }
                         Text {

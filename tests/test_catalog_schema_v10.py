@@ -7,14 +7,15 @@ from unittest.mock import patch
 
 from services.catalog_store import (
     CATALOG_SCHEMA_VERSION,
+    MEDIA_FILE_V9_COLUMNS,
     PLAYBACK_HISTORY_COLUMNS,
     CatalogStore,
 )
 from tests.catalog_schema_fixtures import downgrade_catalog_to_v9
 
 
-def table_digest(connection, table):
-    columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+def table_digest(connection, table, columns=None):
+    columns = columns or [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
     digest = hashlib.sha256()
     count = 0
     for row in connection.execute(
@@ -66,8 +67,8 @@ class CatalogSchemaV10Tests(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(CATALOG_SCHEMA_VERSION, 10)
-        self.assertEqual(version, 10)
+        self.assertEqual(CATALOG_SCHEMA_VERSION, 11)
+        self.assertEqual(version, 11)
         self.assertEqual(columns, PLAYBACK_HISTORY_COLUMNS)
         self.assertIn("idx_playback_history_movie", indexes)
         self.assertIn("idx_playback_history_recent", indexes)
@@ -79,7 +80,7 @@ class CatalogSchemaV10Tests(unittest.TestCase):
             downgrade_catalog_to_v9(store)
             connection = store.connect()
             try:
-                before = table_digest(connection, "media_files")
+                before = table_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
             finally:
                 connection.close()
 
@@ -87,7 +88,7 @@ class CatalogSchemaV10Tests(unittest.TestCase):
 
             connection = store.connect()
             try:
-                after = table_digest(connection, "media_files")
+                after = table_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
                 history_count = connection.execute(
                     "SELECT COUNT(*) FROM playback_history"
                 ).fetchone()[0]
@@ -101,7 +102,7 @@ class CatalogSchemaV10Tests(unittest.TestCase):
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])
         self.assertEqual(store.last_migration_report["from_version"], 9)
-        self.assertEqual(store.last_migration_report["to_version"], 10)
+        self.assertEqual(store.last_migration_report["to_version"], 11)
 
     def test_every_v10_failure_checkpoint_rolls_back_table_version_and_data(self):
         checkpoints = (
@@ -149,6 +150,65 @@ class CatalogSchemaV10Tests(unittest.TestCase):
                 store.initialize()
         migration.assert_not_called()
         self.assertIsNone(store.last_migration_report)
+
+    def test_version_10_upgrade_adds_audio_inventory_without_changing_existing_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = self.store_with_movie(root)
+            with store.transaction() as connection:
+                connection.execute("ALTER TABLE media_files DROP COLUMN audio_tracks_json")
+                connection.execute("UPDATE catalog_meta SET value='10' WHERE key='schema_version'")
+                before = table_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+
+            store.initialize()
+
+            connection = store.connect()
+            try:
+                after = table_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+                row = connection.execute(
+                    "SELECT audio_tracks_json FROM media_files"
+                ).fetchone()
+                version = store._catalog_schema_version(connection)
+            finally:
+                connection.close()
+
+        self.assertEqual(before, after)
+        self.assertEqual(row[0], "[]")
+        self.assertEqual(version, 11)
+        self.assertEqual(store.last_migration_report["from_version"], 10)
+        self.assertEqual(store.last_migration_report["to_version"], 11)
+
+    def test_every_v11_failure_checkpoint_rolls_back_column_version_and_data(self):
+        checkpoints = (
+            "before_v11_audio_inventory",
+            "before_v11_schema_version_update",
+            "during_v11_final_validation",
+        )
+        for checkpoint in checkpoints:
+            with self.subTest(checkpoint=checkpoint), tempfile.TemporaryDirectory() as root:
+                store = self.store_with_movie(root)
+                with store.transaction() as connection:
+                    connection.execute("ALTER TABLE media_files DROP COLUMN audio_tracks_json")
+                    connection.execute("UPDATE catalog_meta SET value='10' WHERE key='schema_version'")
+                    before = table_digest(connection, "media_files")
+
+                def fail_at(name):
+                    if name == checkpoint:
+                        raise RuntimeError(f"injected:{name}")
+
+                with patch.object(store, "_migration_checkpoint", side_effect=fail_at):
+                    with self.assertRaisesRegex(RuntimeError, f"injected:{checkpoint}"):
+                        store.initialize()
+
+                connection = store.connect()
+                try:
+                    version = store._catalog_schema_version(connection)
+                    columns = store._table_columns(connection, "media_files")
+                    after = table_digest(connection, "media_files")
+                finally:
+                    connection.close()
+                self.assertEqual(version, 10)
+                self.assertNotIn("audio_tracks_json", columns)
+                self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

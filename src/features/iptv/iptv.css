@@ -1944,6 +1944,7 @@
 .iptv-workspace .iptv-progress-track .is-unmatched { background: #64748b; }
 .iptv-workspace .is-failed { color: #ff8a8a; }
 .iptv-workspace .iptv-progress-track .is-failed { background: #d84c4c; }
+.iptv-workspace .iptv-progress-track .is-live { background: #22b8d8; opacity: .85; }
 .iptv-workspace .iptv-progress-legend, .iptv-workspace .iptv-progress-facts { flex-wrap: wrap; font-size: 13px; }
 .iptv-workspace .iptv-progress-facts { color: var(--text-muted); }
 .iptv-workspace .iptv-progress-facts span { padding-right: 14px; border-right: 1px solid rgba(255,255,255,.08); }
@@ -1974,3 +1975,256 @@
 .iptv-workspace .iptv-tmdb-link:hover,
 .iptv-workspace .iptv-tmdb-link:focus-visible { border-color: #01b4e4; color: #fff; outline: none; box-shadow: 0 0 0 3px #01b4e424; }
 .iptv-workspace .iptv-match-results article.is-low-relevance { opacity: .72; }
+
+.iptv-workspace .iptv-movie-view-switch,
+.iptv-workspace .iptv-movie-category-row,
+.iptv-workspace .iptv-review-filters,
+.iptv-workspace .iptv-selection-toolbar,
+.iptv-workspace .iptv-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.iptv-workspace .iptv-movie-view-switch button,
+.iptv-workspace .iptv-movie-category-row button {
+  min-height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: #111318;
+  color: var(--text-muted);
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.iptv-workspace .iptv-movie-view-switch button.is-active,
+.iptv-workspace .iptv-movie-category-row button.is-active {
+  border-color: #d4a84f99;
+  background: #d4a84f1f;
+  color: var(--projector-gold);
+}
+
+.iptv-workspace .iptv-movie-category-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: #111215;
+  padding: 9px 12px;
+}
+
+.iptv-workspace .iptv-movie-category-row small {
+  margin-left: 5px;
+  color: var(--text-faint);
+}
+
+.iptv-workspace .iptv-provider-view-note {
+  margin: 0;
+  border-left: 3px solid #d4a84f66;
+  color: var(--text-muted);
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.iptv-workspace .iptv-provider-view-actions {
+  justify-content: flex-end;
+}
+
+.iptv-workspace .iptv-review-workspace,
+.iptv-workspace .iptv-proposal-panel,
+.iptv-workspace .iptv-rebuild-controls,
+.iptv-workspace .iptv-rebuild-preview {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 14px;
+  background: rgba(8, 12, 20, .62);
+  padding: 14px;
+}
+
+.iptv-workspace .iptv-review-filters .iptv-search {
+  min-width: 300px;
+  flex: 1 1 420px;
+}
+
+.iptv-workspace .iptv-review-filters input,
+.iptv-workspace .iptv-review-filters select {
+  min-height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: #181a1e;
+  color: var(--text-strong);
+  padding: 0 10px;
+}
+
+.iptv-workspace .iptv-selection-toolbar,
+.iptv-workspace .iptv-bulk-actions {
+  border-top: 1px solid rgba(255,255,255,.08);
+  padding-top: 10px;
+}
+
+.iptv-workspace .iptv-selection-toolbar > strong,
+.iptv-workspace .iptv-bulk-actions > span {
+  margin-right: auto;
+  color: var(--text-soft);
+}
+
+.iptv-workspace .iptv-review-card-grid {
+  margin-top: 4px;
+}
+
+.iptv-workspace .iptv-card-selection {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #ffffff25;
+  border-radius: 999px;
+  background: #08090ad9;
+  color: var(--projector-gold);
+  cursor: pointer;
+  place-items: center;
+}
+
+.iptv-workspace .iptv-card-selection input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.iptv-workspace .iptv-card-selection:has(input:checked) {
+  border-color: #d4a84f;
+  background: #d4a84f;
+  color: #101114;
+}
+
+.iptv-workspace .iptv-proposal-panel > header,
+.iptv-workspace .iptv-proposal-panel > footer,
+.iptv-workspace .iptv-rebuild-preview > header,
+.iptv-workspace .iptv-rebuild-preview > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.iptv-workspace .iptv-proposal-panel > header h3,
+.iptv-workspace .iptv-proposal-panel > header p {
+  margin: 0;
+}
+
+.iptv-workspace .iptv-proposal-panel > header > button,
+.iptv-workspace .iptv-rebuild-preview > header > button {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.iptv-workspace .iptv-classification-proposals,
+.iptv-workspace .iptv-match-proposals {
+  display: grid;
+  gap: 8px;
+  max-height: 540px;
+  overflow: auto;
+}
+
+.iptv-workspace .iptv-classification-proposals > label,
+.iptv-workspace .iptv-match-proposals > article {
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 10px;
+  background: #11151d;
+  padding: 11px 12px;
+}
+
+.iptv-workspace .iptv-classification-proposals > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.iptv-workspace .iptv-classification-proposals > label > span {
+  display: grid;
+  gap: 3px;
+}
+
+.iptv-workspace .iptv-classification-proposals small,
+.iptv-workspace .iptv-classification-proposals em,
+.iptv-workspace .iptv-match-proposals span,
+.iptv-workspace .iptv-match-proposals p,
+.iptv-workspace .iptv-match-proposals em {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.iptv-workspace .iptv-classification-proposals .is-locked {
+  opacity: .6;
+}
+
+.iptv-workspace .iptv-match-proposals > article {
+  display: grid;
+  gap: 8px;
+}
+
+.iptv-workspace .iptv-match-proposals > article > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--projector-gold);
+  text-transform: capitalize;
+}
+
+.iptv-workspace .iptv-proposal-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.iptv-workspace .iptv-proposal-comparison > div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: 8px;
+  background: rgba(255,255,255,.025);
+  padding: 10px;
+}
+
+.iptv-workspace .iptv-proposal-comparison small,
+.iptv-workspace .iptv-rebuild-controls > p,
+.iptv-workspace .iptv-rebuild-preview > p {
+  color: var(--text-muted);
+}
+
+.iptv-workspace .iptv-rebuild-controls > summary {
+  color: var(--text-soft);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.iptv-workspace .iptv-rebuild-preview > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.iptv-workspace .iptv-rebuild-preview > div > span {
+  display: grid;
+  gap: 4px;
+  border-radius: 8px;
+  background: rgba(255,255,255,.04);
+  color: var(--text-muted);
+  padding: 10px;
+  text-transform: capitalize;
+}
+
+.iptv-workspace .iptv-rebuild-preview > footer > strong {
+  color: #ffd166;
+  font-size: 12px;
+}
+
+.iptv-workspace .iptv-ollama-panel {
+  grid-template-columns: minmax(280px, 1.3fr) auto minmax(260px, .8fr) minmax(180px, .6fr) auto;
+}
+
+.iptv-workspace .iptv-reopen-job {
+  justify-self: start;
+}

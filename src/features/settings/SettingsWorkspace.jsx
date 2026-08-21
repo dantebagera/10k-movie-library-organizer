@@ -94,7 +94,7 @@ const emptySettingsState = {
     prefer_forced_subtitles: false,
     prefer_hearing_impaired_subtitles: false,
     resume_enabled: true,
-    minimum_resume_seconds: 120,
+    minimum_resume_seconds: 30,
     completion_threshold: 0.92,
     auto_mark_completed_watched: true,
     hardware_decoding: 'safe_auto',

@@ -7,15 +7,19 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 
 TMDB_API_ROOT = "https://api.themoviedb.org/3"
 TMDB_IMAGE_ROOT = "https://image.tmdb.org/t/p"
-PARSER_VERSION = 2
-MATCHER_VERSION = 2
+PARSER_VERSION = 3
+MATCHER_VERSION = 3
 MAX_QUERY_VARIANTS = 6
 MAX_MERGED_CANDIDATES = 20
+MAX_RESULTS_PER_ALIAS = 5
+MAX_HYDRATED_CANDIDATES = 8
+MAX_LOCALIZED_HYDRATIONS = 3
 
 
 class IPTVTMDBError(RuntimeError):
@@ -40,11 +44,10 @@ _year = extract_year
 
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2}|21\d{2})\b")
 _ARABIC_RE = re.compile(r"[\u0600-\u06ff]")
-_LATIN_RE = re.compile(r"[A-Za-z]")
 _NOISE_RE = re.compile(
     r"(?i)(?:\b(?:2160p|1080p|720p|4k|uhd|fhd|hdcam|camrip|cam|web[- .]?dl|webrip|"
     r"bluray|brrip|hdrip|x26[45]|hevc|multi|dubbed|subbed|subtitle(?:d|s)?|translated|"
-    r"eng(?:lish)?\s+audio|arabic\s+audio|dual\s+audio)\b|"
+    r"eng(?:lish)?\s+(?:audio|sub(?:title)?s?)|arabic\s+audio|dual\s+audio)\b|"
     r"(?:مدبلج|مترجم|ترجمة|دبلجة\s*(?:إنجليزي(?:ة)?|انجليزي(?:ة)?)?|صوت\s*(?:إنجليزي|انجليزي|عربي)))"
 )
 
@@ -56,36 +59,85 @@ def _clean_alias(value):
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+def _release_year(value):
+    year = extract_year(value)
+    if not year:
+        return 0
+    # Far-future numbers in titles (for example Blade Runner 2049) are title
+    # identity, not plausible current release metadata.
+    return year if year <= datetime.now(timezone.utc).year + 5 else 0
+
+
+def _remove_context_tokens(value):
+    text = _text(value)
+    without_pure = re.sub(r"(?i)\bpure\b", " ", text)
+    if any(character.isalpha() for character in without_pure):
+        text = without_pure
+    return text
+
+
+def _script_runs(value):
+    """Split Arabic and all non-Arabic alphabetic scripts without ASCII bias."""
+
+    runs = []
+    current = []
+    current_script = ""
+    leading = []
+    for character in value:
+        if _ARABIC_RE.search(character):
+            script = "arabic"
+        elif character.isalpha():
+            script = "latin"
+        else:
+            script = ""
+        if script:
+            if current_script and script != current_script:
+                runs.append((current_script, "".join(current)))
+                current = []
+            elif not current_script and leading:
+                current.extend(leading)
+                leading = []
+            current_script = script
+            current.append(character)
+        elif current_script:
+            current.append(character)
+        else:
+            leading.append(character)
+    if current_script:
+        runs.append((current_script, "".join(current)))
+    return runs
+
+
 def parse_provider_title(value, explicit_year=0):
     raw = unicodedata.normalize("NFKC", _text(value))
-    year = extract_year(explicit_year)
+    explicit = _release_year(explicit_year)
     parenthesized = re.findall(r"\(\s*(19\d{2}|20\d{2}|21\d{2})\s*\)", raw)
-    if not year and parenthesized:
-        year = int(parenthesized[-1])
-    if not year:
-        year = extract_year(raw)
+    parenthesized_year = _release_year(parenthesized[-1]) if parenthesized else 0
+    year = explicit or parenthesized_year
+    year_source = "explicit" if explicit else "parenthesized-title" if parenthesized_year else ""
     text = re.sub(r"\[[^\]]*\]", " ", raw)
     text = re.sub(r"\(\s*(?:19\d{2}|20\d{2}|21\d{2})\s*\)", " ", text)
     text = re.sub(r"\(\s*(?:مدبلج|مترجم|dubbed|subbed|translated)\s*\)", " ", text, flags=re.I)
     if year:
-        text = re.sub(rf"(?:[-–—|:]\s*)?\b{year}\b\s*$", " ", text)
+        # Remove the known release year wherever technical suffixes placed it,
+        # but leave other year-bearing title tokens untouched.
+        text = re.sub(rf"\b{year}\b", " ", text)
     text = _NOISE_RE.sub(" ", text)
+    text = _remove_context_tokens(text)
     text = re.sub(r"\s+[-–—|]\s*$", " ", text)
 
     latin_aliases = []
     arabic_aliases = []
-    # Script transitions are identity evidence. Keep punctuation and digits with
-    # the surrounding run, but never flatten two languages into one TMDB query.
-    runs = re.findall(r"[A-Za-z0-9][A-Za-z0-9\s'&:.,!?\-]*|[\u0600-\u06ff0-9][\u0600-\u06ff0-9\s'&:.,!?\-]*", text)
-    for run in runs:
+    runs = _script_runs(text)
+    for script, run in runs:
         alias = _clean_alias(run)
-        if len(alias) < 2:
+        if not alias:
             continue
-        if _ARABIC_RE.search(run):
+        if len(alias) == 1 and not any(character.isalpha() for character in run):
+            continue
+        if script == "arabic":
             arabic_aliases.append(alias)
-        elif _LATIN_RE.search(run):
-            latin_aliases.append(alias)
-        elif alias.isdigit():
+        elif script == "latin":
             latin_aliases.append(alias)
     if not runs:
         alias = _clean_alias(text)
@@ -101,12 +153,49 @@ def parse_provider_title(value, explicit_year=0):
         "arabic_aliases": arabic_aliases,
         "aliases": aliases,
         "primary_alias": (latin_aliases or arabic_aliases or [""])[0],
+        "explicit_year": explicit,
+        "title_years": [int(item) for item in parenthesized],
+        "year_source": year_source,
         "parser_version": PARSER_VERSION,
     }
 
 
 def clean_provider_title(value, explicit_year=0):
     return parse_provider_title(value, explicit_year).get("primary_alias", "")
+
+
+def combine_provider_title_evidence(raw_title, raw_year=0, detail_title="", detail_year=0):
+    """Combine distinct raw/detail facts while preferring an explicit raw year."""
+
+    raw = parse_provider_title(raw_title, raw_year)
+    detail = parse_provider_title(detail_title, detail_year)
+    year = (
+        _release_year(raw_year)
+        or int(raw.get("year") or 0)
+        or _release_year(detail_year)
+        or int(detail.get("year") or 0)
+    )
+    latin_aliases = list(dict.fromkeys([*(raw.get("latin_aliases") or []), *(detail.get("latin_aliases") or [])]))
+    arabic_aliases = list(dict.fromkeys([*(raw.get("arabic_aliases") or []), *(detail.get("arabic_aliases") or [])]))
+    return {
+        "raw_title": raw.get("raw_title") or _text(raw_title),
+        "detail_title": detail.get("raw_title") or _text(detail_title),
+        "year": year,
+        "year_source": (
+            "raw-explicit" if _release_year(raw_year)
+            else "raw-title" if raw.get("year")
+            else "detail-explicit" if _release_year(detail_year)
+            else "detail-title" if detail.get("year")
+            else ""
+        ),
+        "latin_aliases": latin_aliases,
+        "arabic_aliases": arabic_aliases,
+        "aliases": list(dict.fromkeys([*latin_aliases, *arabic_aliases])),
+        "primary_alias": (latin_aliases or arabic_aliases or [""])[0],
+        "raw_evidence": raw,
+        "detail_evidence": detail,
+        "parser_version": PARSER_VERSION,
+    }
 
 
 def _candidate_names(candidate):
@@ -117,6 +206,10 @@ def _candidate_names(candidate):
         else []
     )
     values = [candidate.get("title"), candidate.get("original_title")]
+    localized_titles = candidate.get("localized_titles") or []
+    if isinstance(localized_titles, dict):
+        localized_titles = list(localized_titles.values())
+    values.extend(localized_titles if isinstance(localized_titles, list) else [])
     values.extend(
         row.get("title")
         for row in alternative_rows
@@ -134,11 +227,18 @@ def score_candidate(provider_title, provider_year, candidate):
     names = _candidate_names(candidate)
     if not targets or not names:
         return 0.0
-    similarity = max(SequenceMatcher(None, target, name).ratio() for target in targets for name in names)
+    best_target, best_name, similarity = max(
+        (
+            (target, name, SequenceMatcher(None, target, name).ratio())
+            for target in targets
+            for name in names
+        ),
+        key=lambda row: (row[2], len(row[0]), len(row[1])),
+    )
     score = similarity * 80.0
     if any(target in names for target in targets):
         score = 85.0
-    expected_year = _year(provider_year) or int(parsed.get("year") or 0)
+    expected_year = _release_year(provider_year) or int(parsed.get("year") or 0)
     candidate_year = _year(candidate.get("release_date") or candidate.get("year"))
     if expected_year and candidate_year:
         difference = abs(expected_year - candidate_year)
@@ -153,8 +253,8 @@ def score_candidate(provider_title, provider_year, candidate):
     # Shared franchise prefixes are weak evidence; missing distinctive sequel
     # tokens are a strong negative signal.
     stop = {"the", "and", "movie", "film", "part", "episode", "a", "an", "of", "to", "in"}
-    target_tokens = set(max(targets, key=len).split()) - stop
-    candidate_tokens = set(max(names, key=len).split()) - stop
+    target_tokens = set(best_target.split()) - stop
+    candidate_tokens = set(best_name.split()) - stop
     missing = {token for token in target_tokens - candidate_tokens if len(token) >= 5}
     conflicting = {token for token in candidate_tokens - target_tokens if len(token) >= 6}
     if missing and candidate_tokens:
@@ -162,6 +262,32 @@ def score_candidate(provider_title, provider_year, candidate):
     if missing and conflicting:
         score -= min(12.0, len(conflicting) * 4.0)
     return round(max(0.0, min(100.0, score)), 3)
+
+
+def _candidate_year(candidate):
+    return _release_year(candidate.get("release_date") or candidate.get("year"))
+
+
+def _candidate_facts(parsed, provider_year, candidate):
+    targets = [target for target in (parsed.get("aliases") or []) if target]
+    names = _candidate_names(candidate)
+    exact_title = bool(set(targets) & set(names))
+    expected_year = _release_year(provider_year) or int(parsed.get("year") or 0)
+    actual_year = _candidate_year(candidate)
+    year_difference = abs(expected_year - actual_year) if expected_year and actual_year else 0
+    corroborations = set(candidate.get("search_aliases") or [])
+    if candidate.get("provider_id_corroborated"):
+        corroborations.add("provider-id")
+    if candidate.get("sibling_corroborated"):
+        corroborations.add("sibling")
+    return {
+        "exact_title": exact_title,
+        "expected_year": expected_year,
+        "candidate_year": actual_year,
+        "year_difference": year_difference,
+        "material_year_conflict": bool(expected_year and actual_year and year_difference > 1),
+        "corroboration_count": len(corroborations),
+    }
 
 
 def choose_automatic_match(provider_title, provider_year, candidates):
@@ -178,14 +304,21 @@ def choose_automatic_match(provider_title, provider_year, candidates):
         return {"state": "unmatched", "accepted": None, "candidates": []}
     best = scored[0]
     second = scored[1] if len(scored) > 1 else None
+    facts = _candidate_facts(parsed, provider_year, best)
     credible_rival = bool(
         second
-        and second["match_score"] >= 84.0
+        and second["match_score"] >= 78.0
         and best["match_score"] - second["match_score"] < 8.0
     )
-    if best["match_score"] >= 94.0 and not credible_rival:
+    independently_strong = bool(
+        facts["exact_title"]
+        and not facts["material_year_conflict"]
+        and (not facts["expected_year"] or not facts["candidate_year"] or facts["year_difference"] <= 1)
+    )
+    corroborated = facts["corroboration_count"] >= 2 and not facts["material_year_conflict"]
+    if best["match_score"] >= 94.0 and not credible_rival and (independently_strong or corroborated):
         return {"state": "matched-auto", "accepted": best, "candidates": scored[:8]}
-    if best["match_score"] >= 78.0:
+    if best["match_score"] >= 78.0 or facts["material_year_conflict"]:
         return {"state": "ambiguous", "accepted": None, "candidates": scored[:8]}
     return {"state": "unmatched", "accepted": None, "candidates": scored[:8]}
 
@@ -193,10 +326,64 @@ def choose_automatic_match(provider_title, provider_year, candidates):
 def provider_id_matches(provider_title, provider_year, movie):
     parsed = provider_title if isinstance(provider_title, dict) else parse_provider_title(provider_title, provider_year)
     score = score_candidate(parsed, provider_year, movie)
-    expected_year = _year(provider_year) or int(parsed.get("year") or 0)
-    actual_year = _year(movie.get("release_date") or movie.get("year"))
+    facts = _candidate_facts(parsed, provider_year, movie)
+    expected_year = facts["expected_year"]
+    actual_year = facts["candidate_year"]
     year_ok = not expected_year or not actual_year or abs(expected_year - actual_year) <= 1
-    return score >= 90.0 and year_ok, score
+    # Provider IDs corroborate an identity; they cannot rescue a fuzzy or
+    # conflicting title by themselves.
+    return score >= 94.0 and facts["exact_title"] and year_ok, score
+
+
+def _merge_candidate(merged, row, alias, phase):
+    tmdb_id = int(row["id"])
+    current = merged.get(tmdb_id, {})
+    aliases = list(dict.fromkeys([*(current.get("search_aliases") or []), alias]))
+    phases = list(dict.fromkeys([*(current.get("search_phases") or []), phase]))
+    merged[tmdb_id] = {
+        **current,
+        **row,
+        "search_alias": current.get("search_alias") or alias,
+        "search_phase": current.get("search_phase") or phase,
+        "search_aliases": aliases,
+        "search_phases": phases,
+    }
+
+
+def _hydrate_candidates(client, parsed, merged):
+    ordered = sorted(
+        merged.values(),
+        key=lambda row: (-score_candidate(parsed, parsed.get("year"), row), int(row.get("id") or 0)),
+    )[:MAX_HYDRATED_CANDIDATES]
+    wants_localized = bool(parsed.get("arabic_aliases"))
+    localized_remaining = MAX_LOCALIZED_HYDRATIONS
+    for row in ordered:
+        if row.get("candidate_hydrated"):
+            continue
+        try:
+            detail = client.movie(int(row["id"]))
+        except (KeyError, TypeError, ValueError, AttributeError):
+            detail = {}
+        if isinstance(detail, dict):
+            provenance = {
+                key: row.get(key)
+                for key in ("search_alias", "search_phase", "search_aliases", "search_phases")
+            }
+            row.update(detail)
+            row.update(provenance)
+        row["candidate_hydrated"] = bool(detail)
+        if wants_localized and localized_remaining > 0:
+            try:
+                localized = client.movie(int(row["id"]), language="ar-SA")
+            except (KeyError, TypeError, ValueError, AttributeError):
+                localized = {}
+            if isinstance(localized, dict):
+                row["localized_titles"] = list(dict.fromkeys(
+                    _text(value)
+                    for value in (localized.get("title"), localized.get("original_title"))
+                    if _text(value)
+                ))
+            localized_remaining -= 1
 
 
 def bounded_search_candidates(client, parsed):
@@ -206,23 +393,22 @@ def bounded_search_candidates(client, parsed):
     year = int(parsed.get("year") or 0)
     merged = {}
     attempts = []
-    for phase, use_year in (("year", year), ("no-year", 0)):
-        phase_found = False
+    phases = (("year", year), ("no-year", 0)) if year else (("no-year", 0),)
+    for phase, use_year in phases:
         for alias in aliases:
             rows = client.search_movies(alias, use_year)
             attempts.append({"phase": phase, "alias": alias, "year": int(use_year or 0), "results": len(rows)})
-            for row in rows:
+            for row in rows[:MAX_RESULTS_PER_ALIAS]:
                 if not isinstance(row, dict) or not row.get("id"):
                     continue
-                tmdb_id = int(row["id"])
-                current = merged.get(tmdb_id, {})
-                merged[tmdb_id] = {**current, **row, "search_alias": alias, "search_phase": phase}
-                phase_found = True
+                _merge_candidate(merged, row, alias, phase)
                 if len(merged) >= MAX_MERGED_CANDIDATES:
                     break
             if len(merged) >= MAX_MERGED_CANDIDATES:
                 break
-        if phase_found or not year or len(merged) >= MAX_MERGED_CANDIDATES:
+        _hydrate_candidates(client, parsed, merged)
+        decision = choose_automatic_match(parsed, year, list(merged.values()))
+        if decision["accepted"] or not year or len(merged) >= MAX_MERGED_CANDIDATES:
             break
     return list(merged.values()), attempts
 

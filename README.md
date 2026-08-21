@@ -6,7 +6,7 @@ Cinema Paradiso is a self-hosted movie library manager for people with hundreds 
 
 Your library catalog, settings, and operational state stay on your machine. Optional services such as Plex, TMDB, Prowlarr, streaming providers, and Ollama cloud models are contacted only when configured for their corresponding features.
 
-**Current release: v2.8.4** - August 2026
+**Current release: v2.8.5** - August 2026
 
 ---
 
@@ -55,6 +55,20 @@ Your library catalog, settings, and operational state stay on your machine. Opti
 ### Native Player Settings
 
 ![Cinema Paradiso Settings](screenshots/react-settings-desktop.png)
+
+---
+
+## What Changed in v2.8.5
+
+Cinema Paradiso v2.8.5 adds one shared advanced-search language across the local Library and TMDB Discover, expands IPTV movie review and classification, and tightens native playback and catalogue behavior.
+
+- **Advanced search:** Library and Discover now share a criterion builder for compound title, identity, range, language, country, and catalogue-state queries while keeping their existing data owners.
+- **Complete result handling:** advanced Library selection remains SQL-backed, and Discover preserves bounded provider paging, honest result limits, ownership state, and existing movie-card actions.
+- **IPTV review workflow:** provider-local movie catalogues gain richer metadata review, deterministic and optional local-AI classification previews, explicit apply actions, manual matches, and expanded filters.
+- **Catalogue facts:** media facts retain the complete normalized audio-track inventory for Maintenance decisions without treating subtitles as audio.
+- **Playback continuity:** replaying a completed movie starts a new resumable session without clearing its independent Watched state.
+- **Native player:** player `0.1.25` adds subtitle action icons and Windows media play/pause integration, with an updated 2.8.5 compatibility manifest.
+- **Version display:** the sidebar footer and future portable package derive from the authoritative `2.8.5` package version.
 
 ---
 
@@ -266,7 +280,7 @@ User lists, Watched and Watchlist states, edited collections, followed releases,
 
 For normal use, download the `Cinema-Paradiso-2.8.4-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent, FFmpeg, and native-player runtimes.
 
-The GitHub Source ZIP remains developer-oriented. If you download the source ZIP or clone the repository, double-click `run.bat`.
+The GitHub Source ZIP remains developer-oriented. If you download the source ZIP or clone the repository, double-click `run.bat`. It runs in a normal console window so you can see progress and any errors.
 
 The launcher creates `.venv`, installs Python dependencies, installs frontend dependencies, builds the React app when `dist/` is missing, starts Flask, and opens [http://localhost:5000](http://localhost:5000).
 

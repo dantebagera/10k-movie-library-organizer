@@ -9,6 +9,7 @@ from services.catalog_store import (
     CATALOG_SCHEMA_VERSION,
     MEDIA_FILE_V8_COLUMNS,
     MEDIA_FILE_V9_COLUMNS,
+    MEDIA_FILE_V11_COLUMNS,
     CatalogError,
     CatalogStore,
 )
@@ -118,9 +119,9 @@ class CatalogSchemaV9Test(unittest.TestCase):
                 }
             finally:
                 connection.close()
-        self.assertEqual(CATALOG_SCHEMA_VERSION, 10)
-        self.assertEqual(version, 10)
-        self.assertEqual(columns, MEDIA_FILE_V9_COLUMNS)
+        self.assertEqual(CATALOG_SCHEMA_VERSION, 11)
+        self.assertEqual(version, 11)
+        self.assertEqual(columns, MEDIA_FILE_V11_COLUMNS)
         self.assertIn("idx_media_files_facts_stale", indexes)
 
     def test_valid_v8_migration_is_data_shape_only_and_preserves_every_table(self):
@@ -155,7 +156,7 @@ class CatalogSchemaV9Test(unittest.TestCase):
         self.assertEqual(integrity, "ok")
         self.assertEqual(foreign_keys, [])
         self.assertEqual(store.last_migration_report["from_version"], 8)
-        self.assertEqual(store.last_migration_report["to_version"], 10)
+        self.assertEqual(store.last_migration_report["to_version"], 11)
 
     def test_each_v9_failure_checkpoint_rolls_back_schema_and_all_data(self):
         checkpoints = (

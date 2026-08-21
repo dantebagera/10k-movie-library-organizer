@@ -32,9 +32,10 @@ class FullRowCardGridUiTests(unittest.TestCase):
         self.assertIn('className="coming-soon-grid" ref={gridRef}', self.home)
 
     def test_library_uses_measured_full_row_page_size(self):
-        self.assertIn("useCardGridMetrics({ target: 40, max: 200, bias: 'lower' })", self.library)
+        self.assertIn("useCardGridMetrics({ target: 40, max: 100, bias: 'lower' })", self.library)
         self.assertIn("ref={mode === 'movie' ? libraryMovieGridRef : undefined}", self.library)
-        self.assertIn("[currentPage, notify, pageSize, serverFilters]", self.library)
+        self.assertIn("activeLibraryQueryRef.current = activeLibraryQuery", self.library)
+        self.assertIn("[currentPage, notify, pageSize]", self.library)
 
     def test_ai_control_uses_measured_client_page_size(self):
         self.assertIn("useCardGridMetrics({ target: targetPageSize, max: 200, bias: 'lower' })", self.ai_control)
@@ -61,7 +62,7 @@ class FullRowCardGridUiTests(unittest.TestCase):
         self.assertNotIn(".iptv-movie-grid", iptv_css)
 
     def test_discover_uses_measured_counts_for_every_remote_card_grid(self):
-        self.assertIn("page_size: String(discoverMoviePageSize)", self.discover)
+        self.assertIn("page_size: discoverMoviePageSize", self.discover)
         self.assertIn("page_size=${discoverPeoplePageSize}", self.discover)
         self.assertIn("page_size=${discoverKeywordPageSize}", self.discover)
         self.assertIn("gridRef={discoverMovieGridRef}", self.discover)

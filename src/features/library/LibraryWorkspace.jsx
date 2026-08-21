@@ -16,6 +16,10 @@ import PersonSearchCard from '../../components/PersonSearchCard.jsx';
 import KeywordSearchCard from '../../components/KeywordSearchCard.jsx';
 import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
+import AdvancedSearchBuilder from '../search/AdvancedSearchBuilder.jsx';
+import {
+  compileLibrarySimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature
+} from '../search/advancedSearchModel.js';
 
 async function preloadFinalPosters(items) {
   const urls = [...new Set((items || []).map((item) => item?.poster_url || item?.canonical_metadata?.poster_url || '')
@@ -154,36 +158,6 @@ function LibraryBulkSelectionBar({
   );
 }
 
-function libraryFilterQuery(filters, page, pageSize, forceScan = false) {
-  const params = new URLSearchParams({
-    view: 'cards',
-    page: String(page),
-    page_size: String(pageSize),
-    q: filters.query,
-    resolution: filters.resolution,
-    source: filters.source,
-    genre: filters.genre,
-    language: filters.language,
-    country: filters.country,
-    year_from: filters.year_from,
-    year_to: filters.year_to,
-    min_rating: filters.min_rating,
-    sort: filters.sort,
-    viewing_state: filters.viewing_state,
-    role: filters.role,
-    person_id: filters.person_id,
-    person_name: filters.person_name,
-    keyword_id: filters.keyword_id,
-    keyword_name: filters.keyword_name,
-    keyword_query: filters.keyword_query,
-    collection_id: filters.collection_id,
-    collection_paths: JSON.stringify(filters.collection_paths || []),
-    list_id: filters.list_id
-  });
-  if (forceScan) params.set('force_scan', '1');
-  return `/api/library?${params.toString()}`;
-}
-
 export default function LibraryWorkspace({
   onPlay,
   onFindTorrent,
@@ -204,7 +178,7 @@ export default function LibraryWorkspace({
     gridRef: libraryMovieGridRef,
     measured: libraryGridMeasured,
     pageSize
-  } = useCardGridMetrics({ target: 40, max: 200, bias: 'lower' });
+  } = useCardGridMetrics({ target: 40, max: 100, bias: 'lower' });
   const [items, setItems] = useState([]);
   const [fileItems, setFileItems] = useState([]);
   const [fileItemsLoaded, setFileItemsLoaded] = useState(false);
@@ -242,6 +216,8 @@ export default function LibraryWorkspace({
   } = useMovieCollectionCache();
   const [userLists, setUserLists] = useState([]);
   const [librarySearchKind, setLibrarySearchKind] = useState('movies');
+  const [advancedQuery, setAdvancedQuery] = useState(() => createEmptyQuery('library'));
+  const [executedAdvancedQuery, setExecutedAdvancedQuery] = useState(() => createEmptyQuery('library'));
   const [roleFilter, setRoleFilter] = useState(null);
   const [keywordFilter, setKeywordFilter] = useState(null);
   const [listFilter, setListFilter] = useState(null);
@@ -282,6 +258,8 @@ export default function LibraryWorkspace({
   const libraryKeywordRequestSeq = useRef(0);
   const peopleLoadPromiseRef = useRef(null);
   const movieViewStateRef = useRef(null);
+  const advancedImportedRef = useRef(false);
+  const activeLibraryQueryRef = useRef(null);
 
   useEffect(() => {
     const clearDetailCaches = () => {
@@ -314,28 +292,34 @@ export default function LibraryWorkspace({
     onFileDetailsRequestConsumed?.(fileDetailsRequest.id);
   }, [fileDetailsRequest, onFileDetailsRequestConsumed]);
 
-  const serverFilters = useMemo(() => ({
+  const simpleLibraryQuery = useMemo(() => compileLibrarySimpleQuery({
     query,
     resolution: resolutionFilter,
     source: sourceFilter,
     genre: genreFilter,
     language: languageFilter,
     country: countryFilter,
-    year_from: yearFrom,
-    year_to: yearTo,
-    min_rating: minRating,
+    yearFrom,
+    yearTo,
+    minRating,
     sort: sortMode,
-    viewing_state: viewingStateFilter,
-    role: roleFilter?.role || '',
-    person_id: roleFilter?.id || '',
-    person_name: roleFilter?.name || '',
-    keyword_id: keywordFilter?.tmdb_id || '',
-    keyword_name: keywordFilter?.tmdb_id ? '' : keywordFilter?.name || '',
-    keyword_query: '',
-    collection_id: '',
-    collection_paths: [],
-    list_id: listFilter?.id || ''
+    viewingState: viewingStateFilter,
+    person: roleFilter,
+    keyword: keywordFilter,
+    movieList: listFilter
   }), [query, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
+
+  useEffect(() => {
+    if (librarySearchKind !== 'advanced') return undefined;
+    const timer = window.setTimeout(() => {
+      setExecutedAdvancedQuery(advancedQuery);
+      resetLibraryPage();
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [advancedQuery, librarySearchKind]);
+
+  const activeLibraryQuery = librarySearchKind === 'advanced' ? executedAdvancedQuery : simpleLibraryQuery;
+  activeLibraryQueryRef.current = activeLibraryQuery;
 
   const loadLibrary = useCallback(async (forceScan = false, options = {}) => {
     const background = Boolean(options.background);
@@ -352,7 +336,15 @@ export default function LibraryWorkspace({
     }
     try {
       const requestedPage = forceScan ? 1 : currentPage;
-      const data = await fetchJson(libraryFilterQuery(serverFilters, requestedPage, pageSize, forceScan));
+      const scanResult = forceScan
+        ? await fetchJson('/api/library?view=cards&force_scan=1&page=1&page_size=1')
+        : null;
+      const queryResult = await fetchJson('/api/library/search/advanced', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: activeLibraryQueryRef.current, page: requestedPage, page_size: pageSize })
+          });
+      const data = scanResult ? { ...queryResult, ...scanResult, items: queryResult.items, total: queryResult.total, page: queryResult.page, total_pages: queryResult.total_pages, page_start: queryResult.page_start, page_end: queryResult.page_end, facets: queryResult.facets, stats: queryResult.stats } : queryResult;
       if (requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)) return;
       if (background) await preloadFinalPosters(data.items || []);
       if (requestSeq !== (background ? backgroundRequestSeq.current : libraryRequestSeq.current)) return;
@@ -397,7 +389,7 @@ export default function LibraryWorkspace({
     } finally {
       if (!background && requestSeq === libraryRequestSeq.current) setLoading(false);
     }
-  }, [currentPage, notify, pageSize, serverFilters]);
+  }, [currentPage, notify, pageSize]);
 
   const refreshLibraryInBackground = useCallback(async () => {
     if (backgroundRefreshRef.current.running) {
@@ -431,11 +423,11 @@ export default function LibraryWorkspace({
 
   const libraryQuerySignature = useMemo(() => JSON.stringify({
     page: currentPage,
-    filters: serverFilters
-  }), [currentPage, serverFilters]);
+    query: querySignature(activeLibraryQuery)
+  }), [activeLibraryQuery, currentPage]);
 
   useEffect(() => {
-    if (mode !== 'movie' || librarySearchKind !== 'movies' || !libraryGridMeasured) return undefined;
+    if (mode !== 'movie' || !['movies', 'advanced'].includes(librarySearchKind) || !libraryGridMeasured) return undefined;
     let cancelled = false;
     const previous = libraryLoadSignatureRef.current;
     const pageSizeOnlyChange = Boolean(
@@ -466,7 +458,7 @@ export default function LibraryWorkspace({
 
     refresh();
     return () => { cancelled = true; };
-  }, [libraryGridMeasured, libraryQuerySignature, librarySearchKind, loadLibrary, mode, pageSize, refreshLibraryInBackground]);
+  }, [libraryGridMeasured, libraryQuerySignature, loadLibrary, mode, pageSize, refreshLibraryInBackground]);
 
   useEffect(() => {
     if (
@@ -771,7 +763,7 @@ export default function LibraryWorkspace({
       const data = await fetchJson('/api/library/selection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filters: serverFilters })
+        body: JSON.stringify({ query: activeLibraryQuery })
       });
       setSelectedLibraryKeys(new Set(data.paths || []));
     } catch (selectionError) {
@@ -882,6 +874,9 @@ export default function LibraryWorkspace({
 
   function resetAllLibraryFilters() {
     setLibrarySearchKind('movies');
+    setAdvancedQuery(createEmptyQuery('library'));
+    setExecutedAdvancedQuery(createEmptyQuery('library'));
+    advancedImportedRef.current = false;
     setQuery('');
     setIdentityFilter('all');
     setSortMode('added');
@@ -923,6 +918,11 @@ export default function LibraryWorkspace({
       sizeFilter,
       viewingStateFilter,
       librarySearchKind,
+      advancedQuery,
+      executedAdvancedQuery,
+      querySignature: querySignature(activeLibraryQuery),
+      items,
+      libraryResult,
       roleFilter,
       keywordFilter,
       listFilter,
@@ -947,12 +947,18 @@ export default function LibraryWorkspace({
     setSizeFilter(snapshot.sizeFilter || 'all');
     setViewingStateFilter(snapshot.viewingStateFilter || 'all');
     setLibrarySearchKind(snapshot.librarySearchKind || 'movies');
+    setAdvancedQuery(snapshot.advancedQuery || createEmptyQuery('library'));
+    setExecutedAdvancedQuery(snapshot.executedAdvancedQuery || snapshot.advancedQuery || createEmptyQuery('library'));
     setRoleFilter(snapshot.roleFilter || null);
     setKeywordFilter(snapshot.keywordFilter || null);
     setListFilter(snapshot.listFilter || null);
     setCurrentPage(snapshot.currentPage || 1);
     setExpandedPath(snapshot.expandedPath || '');
     setFocusedMovieItem(snapshot.focusedMovieItem || null);
+    if (snapshot.items && snapshot.libraryResult) {
+      setItems(snapshot.items);
+      setLibraryResult(snapshot.libraryResult);
+    }
     setFocusedFilePath('');
     setMode('movie');
   }
@@ -1046,6 +1052,26 @@ export default function LibraryWorkspace({
     setExpandedPath('');
   }
 
+  function resetLibraryAdvanced() {
+    resetAllLibraryFilters();
+  }
+
+  function enterLibrarySearchMode(nextSearchKind) {
+    if (nextSearchKind === librarySearchKind) return;
+    if (nextSearchKind === 'advanced' && !advancedImportedRef.current) {
+      const imported = normalizeAdvancedQuery({ ...simpleLibraryQuery, mode: 'advanced' }, 'library');
+      setAdvancedQuery(imported);
+      setExecutedAdvancedQuery(imported);
+      advancedImportedRef.current = true;
+    }
+    if (['people', 'keywords'].includes(nextSearchKind)) {
+      libraryRequestSeq.current += 1;
+      setLoading(false);
+    }
+    setError('');
+    setLibrarySearchKind(nextSearchKind);
+  }
+
   async function loadLibraryDetails(item) {
     const cacheKey = getTmdbCacheKey(item);
     let details = tmdbCache[cacheKey];
@@ -1079,6 +1105,7 @@ export default function LibraryWorkspace({
       return;
     }
     const roleLabel = role === 'writer' ? 'Writer' : role === 'director' ? 'Director' : 'Actor';
+    setLibrarySearchKind('movies');
     pushLibraryContext(`${roleLabel}: ${person.name}`, () => {
       setRoleFilter({
         role,
@@ -1112,6 +1139,7 @@ export default function LibraryWorkspace({
 
   function applyListFilter(list) {
     pushLibraryContext(`List: ${list.name}`, () => {
+      setLibrarySearchKind('movies');
       setRoleFilter(null);
       setKeywordFilter(null);
       setListFilter(list);
@@ -1285,6 +1313,18 @@ export default function LibraryWorkspace({
     setItems((current) => applyPosterOverrideToLibraryItems(current, item, posterUrl, override));
   }
 
+  async function searchLibraryAdvancedIdentities(type, text, _scope, signal) {
+    if (type === 'person') {
+      const data = await fetchJson(`/api/library/search/identities?type=person&q=${encodeURIComponent(text)}&limit=20`, { signal });
+      return data.items || [];
+    }
+    const data = await fetchJson(`/api/library?view=keywords&q=${encodeURIComponent(text)}&page=1&page_size=20`, { signal });
+    return (data.items || []).map((keyword) => ({
+      id: String(keyword.tmdb_id || keyword.keyword_key || keyword.normalized_name),
+      label: keyword.name || keyword.label || keyword.normalized_name
+    }));
+  }
+
   return (
     <section className="library-workspace">
       <div className="library-header">
@@ -1322,14 +1362,40 @@ export default function LibraryWorkspace({
         data-people-search={mode === 'movie' || undefined}
         onSubmit={(event) => {
           event.preventDefault();
-          if (mode === 'movie' && librarySearchKind === 'keywords') {
+          if (mode === 'movie' && librarySearchKind === 'advanced') {
+            if (querySignature(executedAdvancedQuery) === querySignature(advancedQuery)) {
+              loadLibrary(false, { quiet: true, silentSuccess: true });
+            } else {
+              setExecutedAdvancedQuery(advancedQuery);
+              resetLibraryPage();
+            }
+          } else if (mode === 'movie' && librarySearchKind === 'keywords') {
             loadKeywordProjection(query, 1);
           } else {
             resetLibraryPage();
           }
         }}
       >
-        <label className="library-search library-main-search">
+        {librarySearchKind === 'advanced' ? <AdvancedSearchBuilder
+          scope="library"
+          query={advancedQuery}
+          onChange={setAdvancedQuery}
+          onRun={() => {
+            if (querySignature(executedAdvancedQuery) === querySignature(advancedQuery)) loadLibrary(false, { quiet: true, silentSuccess: true });
+            else { setExecutedAdvancedQuery(advancedQuery); resetLibraryPage(); }
+          }}
+          onReset={resetLibraryAdvanced}
+          loading={loading}
+          error={error}
+          searchIdentities={searchLibraryAdvancedIdentities}
+          options={{
+            genre: optionSets.genres.map((value) => ({ id: value, label: value })),
+            language: optionSets.languages.map((value) => ({ id: value, label: value })),
+            country: optionSets.countries.map((value) => ({ id: value, label: value })),
+            library_source: optionSets.sources.map((value) => ({ id: value, label: value })),
+            movie_list: userLists.map((list) => ({ id: String(list.id), label: list.name }))
+          }}
+        /> : <label className="library-search library-main-search">
           <Search size={17} />
           <input
             value={query}
@@ -1349,29 +1415,26 @@ export default function LibraryWorkspace({
                   ? 'Search keywords in your library'
                   : 'Search your offline library'}
           />
-        </label>
+        </label>}
         {mode === 'movie' && (
           <select
             value={librarySearchKind}
-            onChange={(event) => {
-              const nextSearchKind = event.target.value;
-              if (nextSearchKind !== 'movies') {
-                libraryRequestSeq.current += 1;
-                setLoading(false);
-              }
-              setError('');
-              setLibrarySearchKind(nextSearchKind);
-              resetLibraryPage();
-            }}
+            onChange={(event) => enterLibrarySearchMode(event.target.value)}
             aria-label="Library search type"
           >
             <option value="movies">Movies</option>
             <option value="people">People</option>
             <option value="keywords">Keywords</option>
+            <option value="advanced">Advanced</option>
           </select>
         )}
-        <button type="submit" className="btn btn-primary library-search-submit">
-          <Search size={15} /> Search
+        <button
+          type="submit"
+          className={cx('btn btn-primary library-search-submit', librarySearchKind === 'advanced' && 'advanced-search-submit')}
+          disabled={librarySearchKind === 'advanced' && loading}
+        >
+          {librarySearchKind === 'advanced' && loading ? <Loader2 size={15} className="spin" /> : <Search size={15} />}
+          Search
         </button>
       </form>
 
@@ -1527,7 +1590,7 @@ export default function LibraryWorkspace({
         />
       )}
 
-      {!activeLoading && !error && (
+      {(!activeLoading || (mode === 'movie' && librarySearchKind === 'advanced' && visibleItems.length > 0)) && (
         librarySearchKind === 'people' && mode === 'movie' ? (
           <LibraryPeopleSearchResults
             people={libraryPeopleResults}

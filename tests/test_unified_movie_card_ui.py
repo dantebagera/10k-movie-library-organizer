@@ -339,11 +339,12 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         ]
 
         self.assertIn("const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext]", discover_source)
-        self.assertIn("if (isNavigatingDiscoverContext || discoverContext) return;", discover_source)
-        self.assertIn("function appendDiscoverCriteria(params)", discover_source)
-        self.assertIn("if (!isPick) appendDiscoverCriteria(params);", discover_source)
-        self.assertIn("function filterDiscoverContextResults(results)", discover_source)
-        self.assertIn("if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl)", discover_source)
+        self.assertIn("if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext) return;", discover_source)
+        self.assertIn("function relationshipQuery(type, value)", discover_source)
+        self.assertNotIn("context.query && !isPick", discover_source)
+        self.assertIn("context.owner === 'advanced'", discover_source)
+        self.assertIn("hasRefinements ? 'advanced' : 'person-credits'", discover_source)
+        self.assertIn("if (['person', 'keyword'].includes(discoverContext.type) && discoverContext.baseUrl && discoverContext.relationshipValue)", discover_source)
         self.assertIn("loadContextPage('explore', discoverContext, { page: 1 });", discover_source)
         self.assertIn("setDiscoverContextSourceResults(results);", discover_source)
 
@@ -351,7 +352,12 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         discover_source = (ROOT / "src" / "features" / "discover" / "DiscoverWorkspace.jsx").read_text(encoding="utf-8")
         result_grid_source = (ROOT / "src" / "components" / "DiscoverResultGrid.jsx").read_text(encoding="utf-8")
 
-        self.assertIn("if (!hasAdvancedDiscoverCriteria()) return [...(results || [])];", discover_source)
+        self.assertNotIn("function filterDiscoverContextResults(results)", discover_source)
+        self.assertIn("const activeQuery = discoverSearchKind === 'advanced' ? executedAdvancedQuery : simpleDiscoverQuery", discover_source)
+        self.assertIn("activeQuery.groups.every", discover_source)
+        self.assertIn("setDiscoverLocalPage(1);", discover_source)
+        self.assertIn("function boundedScanError(data)", discover_source)
+        self.assertGreaterEqual(discover_source.count("setDiscoverError(scanError);"), 2)
         self.assertIn("`/api/tmdb/collection?collection_id=${encodeURIComponent(collection.id)}`,", discover_source)
         self.assertIn("{ signal: controller.signal }", discover_source)
         self.assertIn("emptyHint={discoverContext?.type === 'collection'", discover_source)
@@ -404,7 +410,7 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("setPickResults(nextResults);", discover_source)
         context_loader = discover_source[
             discover_source.index("async function loadContextPage"):
-            discover_source.index("function filterDiscoverContextResults")
+            discover_source.index("function filterFiniteDiscoverResults")
         ]
         self.assertNotIn("append ? [...state, ...nextResults]", context_loader)
         self.assertNotIn("Load more", discover_source)
@@ -444,7 +450,8 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         self.assertIn("<Pagination", library_source)
         self.assertIn("total={result.total_results}", library_source)
         self.assertIn("totalPages={result.total_pages}", library_source)
-        self.assertIn("keyword_id: keywordFilter?.tmdb_id || ''", library_source)
+        self.assertIn("keyword: keywordFilter", library_source)
+        self.assertIn("compileLibrarySimpleQuery", library_source)
         self.assertIn("<KeywordSearchCard", library_source)
         self.assertIn('<option value="keywords">Keywords</option>', discover_source)
         self.assertIn("Search TMDB keywords...", discover_source)

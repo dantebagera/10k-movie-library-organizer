@@ -355,15 +355,27 @@ class CatalogRepository:
             ]
         return filters
 
-    def library_page(self, filters=None, *, page=1, page_size=40):
+    def library_page(self, filters=None, *, query=None, page=1, page_size=40, upgrade_path_keys=()):
+        normalized_upgrade_paths = self._normalize_filter_paths({
+            "upgrade_path_keys": upgrade_path_keys,
+        })["upgrade_path_keys"]
         return self.store.library_page(
             self._normalize_filter_paths(filters),
+            query=query,
             page=page,
             page_size=page_size,
+            upgrade_path_keys=normalized_upgrade_paths,
         )
 
-    def library_selection_paths(self, filters=None):
-        return self.store.library_selection_paths(self._normalize_filter_paths(filters))
+    def library_selection_paths(self, filters=None, *, query=None, upgrade_path_keys=()):
+        normalized_upgrade_paths = self._normalize_filter_paths({
+            "upgrade_path_keys": upgrade_path_keys,
+        })["upgrade_path_keys"]
+        return self.store.library_selection_paths(
+            self._normalize_filter_paths(filters),
+            query=query,
+            upgrade_path_keys=normalized_upgrade_paths,
+        )
 
     def library_keywords(self, query="", *, page=1, page_size=50):
         return self.store.library_keywords(query, page=page, page_size=page_size)

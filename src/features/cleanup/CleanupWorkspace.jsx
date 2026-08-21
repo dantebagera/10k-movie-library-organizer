@@ -301,13 +301,16 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paths: uniquePaths, trash: true, preview: true })
       });
+      const audioLanguageLosses = plan.audio_language_losses || [];
       setConfirmAction({
         type: 'delete',
         tab,
         paths: uniquePaths,
         title,
         plan,
-        body: deletionPlanSummary(plan)
+        body: deletionPlanSummary(plan),
+        audioLanguageLosses,
+        acknowledgedAudioLanguageLoss: audioLanguageLosses.length === 0,
       });
     } catch (previewError) {
       notify(`Delete preview failed: ${previewError.message}`, 'error');
@@ -325,6 +328,7 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
 
   async function runConfirmedAction() {
     if (!confirmAction) return;
+    if (confirmAction.audioLanguageLosses?.length && !confirmAction.acknowledgedAudioLanguageLoss) return;
     if (confirmAction.type === 'delete') {
       await deletePaths(confirmAction.tab, confirmAction.paths, confirmAction.plan);
     } else if (confirmAction.type === 'fix-path') {
@@ -341,7 +345,12 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
       const result = await fetchJson('/api/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ paths, trash: true, folder_targets: folderTargets })
+        body: JSON.stringify({
+          paths,
+          trash: true,
+          folder_targets: folderTargets,
+          confirmed_audio_language_losses: plan?.audio_language_losses || [],
+        })
       });
       const deletedPaths = result.deleted_paths || [];
       if (deletedPaths.length) {
@@ -772,6 +781,11 @@ export default function CleanupWorkspace({ notify, onPlay, initialTab = 'storage
           body={confirmAction.body}
           confirmLabel={confirmAction.type === 'delete' ? 'Move to Recycle Bin' : 'Move file'}
           danger={confirmAction.type === 'delete'}
+          acknowledgementLabel={confirmAction.audioLanguageLosses?.length
+            ? `I understand this deletion loses: ${confirmAction.audioLanguageLosses.map((loss) => `${loss.languages.join(', ')} audio from ${loss.filename}`).join('; ')}.`
+            : ''}
+          acknowledged={Boolean(confirmAction.acknowledgedAudioLanguageLoss)}
+          onAcknowledgementChange={(checked) => setConfirmAction((state) => ({ ...state, acknowledgedAudioLanguageLoss: checked }))}
           onCancel={() => setConfirmAction(null)}
           onConfirm={runConfirmedAction}
         />

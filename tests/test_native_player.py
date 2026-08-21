@@ -124,6 +124,23 @@ class NativePlayerSourceTests(unittest.TestCase):
             self.assertIn(shortcut, qml)
         self.assertIn("Generated from design/player-theme.json", generated_theme)
 
+    def test_windows_media_play_pause_command_uses_the_existing_player_toggle(self):
+        chrome_header = (PLAYER_ROOT / "src" / "WindowsWindowChrome.h").read_text(
+            encoding="utf-8"
+        )
+        chrome = (PLAYER_ROOT / "src" / "WindowsWindowChrome.cpp").read_text(
+            encoding="utf-8"
+        )
+        main = (PLAYER_ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("void mediaPlayPauseRequested();", chrome_header)
+        self.assertIn("WM_APPCOMMAND", chrome)
+        self.assertIn("APPCOMMAND_MEDIA_PLAY_PAUSE", chrome)
+        self.assertIn("emit mediaPlayPauseRequested();", chrome)
+        self.assertIn("&WindowsWindowChrome::mediaPlayPauseRequested", main)
+        self.assertIn("player->togglePause();", main)
+        self.assertIn('QMetaObject::invokeMethod(root, "showControls")', main)
+
     def test_subtitle_icon_owns_track_search_and_selected_download_save_actions(self):
         qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
         bridge = (PLAYER_ROOT / "src" / "PlayerBridge.cpp").read_text(encoding="utf-8")
@@ -134,8 +151,10 @@ class NativePlayerSourceTests(unittest.TestCase):
 
         self.assertIn("function showSubtitleSearch()", qml)
         self.assertIn('onActivated: root.showSubtitleSearch()', qml)
-        self.assertIn('text: "Search online subtitles"', qml)
-        self.assertIn('"Save selected subtitle beside movie"', qml)
+        self.assertIn('text: "Find subs"', qml)
+        self.assertIn('rightIconSource: "qrc:/icons/search.svg"', qml)
+        self.assertIn('"Save subs"', qml)
+        self.assertIn('rightIconSource: "qrc:/icons/download.svg"', qml)
         self.assertIn("playerBridge.requestSaveSelectedSubtitle()", qml)
         self.assertIn("selectedSubtitleCanSave", bridge_header)
         self.assertIn('QStringLiteral("subtitle.save")', bridge)
@@ -143,18 +162,24 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn('QByteArrayLiteral("external-filename")', mpv_item)
         self.assertIn("selectedSubtitleExternalPath", mpv_item)
 
+        cmake = (PLAYER_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIn("resources/icons/search.svg", cmake)
+        self.assertIn("resources/icons/download.svg", cmake)
+
     def test_player_control_strip_uses_scalable_gold_icons_without_button_tiles(self):
         qml = (PLAYER_ROOT / "qml" / "Main.qml").read_text(encoding="utf-8")
         cmake = (PLAYER_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         icons_root = PLAYER_ROOT / "resources" / "icons"
         icon_names = {
             "audio-tracks.svg",
+            "download.svg",
             "enter-fullscreen.svg",
             "exit-fullscreen.svg",
             "forward-10.svg",
             "pause.svg",
             "play.svg",
             "rewind-10.svg",
+            "search.svg",
             "speed.svg",
             "subtitles.svg",
             "volume-high.svg",
@@ -381,6 +406,18 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn("exercise_window_resize(window)", smoke)
         self.assertIn('"preset_clicked": "2.00x"', smoke)
         self.assertIn('"window_chrome_actions": window_chrome_actions', smoke)
+
+    def test_production_smoke_can_send_the_windows_media_play_pause_command(self):
+        smoke = (PLAYER_ROOT / "tools" / "smoke_player.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("def send_media_play_pause(window):", smoke)
+        self.assertIn("0x0319", smoke)
+        self.assertIn("14 << 16", smoke)
+        self.assertIn("--exercise-media-play-pause", smoke)
+        self.assertIn("send_media_play_pause(window)", smoke)
+        self.assertIn('"media_play_pause_exercised"', smoke)
 
     def test_runtime_staging_refreshes_the_owned_license_directory(self):
         build_script = (PLAYER_ROOT / "tools" / "build_player.ps1").read_text(

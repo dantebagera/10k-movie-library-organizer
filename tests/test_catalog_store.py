@@ -116,6 +116,8 @@ class CatalogStoreTest(unittest.TestCase):
                 "country": "France" if index % 2 == 0 else "United States",
                 "country_flag": "FR" if index % 2 == 0 else "US",
                 "tmdb_rating": str(5 + index % 5),
+                "tmdb_vote_count": 100 + index,
+                "runtime": [59, 60, 149, 150][index % 4],
                 "cast": [{"id": "shared-actor" if index % 5 == 0 else f"actor-{index}",
                           "name": "Shared Actor" if index % 5 == 0 else f"Actor {index}"}],
                 "directors": [{"id": f"director-{index}", "name": f"Director {index}"}],
@@ -421,6 +423,100 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual(len(expected), 85)
         self.assertEqual(actual, expected)
         self.assertEqual(len(actual), len(set(actual)))
+
+    def test_advanced_library_query_uses_one_predicate_for_cards_and_selection(self):
+        documents = self._paging_documents(20)
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+            query = {
+                "version": 1,
+                "scope": "library",
+                "mode": "advanced",
+                "groups": [
+                    {"type": "genre", "join": "or", "values": [
+                        {"id": "Action", "label": "Action"},
+                        {"id": "Drama", "label": "Drama"},
+                    ]},
+                    {"type": "year", "values": [{"operator": "between", "from": 1985, "to": 1995}]},
+                    {"type": "rating", "values": [{"operator": "at_least", "value": 6}]},
+                ],
+                "sort": {"key": "year-desc", "direction": "desc"},
+            }
+            page = store.library_page(query=query, page=1, page_size=5)
+            selection = store.library_selection_paths(query=query)
+
+        self.assertEqual(page["total"], len(selection))
+        self.assertEqual([row["path"] for row in page["candidates"]], selection[:5])
+        self.assertEqual(len(selection), len(set(selection)))
+
+    def test_advanced_library_repeatable_and_or_people_keywords_and_lists(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(self._paging_documents(12), {})
+
+            def query(group):
+                return {
+                    "version": 1, "scope": "library", "mode": "advanced",
+                    "groups": [group], "sort": {"key": "title", "direction": "asc"},
+                }
+
+            genre_or = store.library_selection_paths(query=query({
+                "type": "genre", "join": "or", "values": [
+                    {"id": "Action", "label": "Action"}, {"id": "Drama", "label": "Drama"},
+                ],
+            }))
+            genre_and = store.library_selection_paths(query=query({
+                "type": "genre", "join": "and", "values": [
+                    {"id": "Action", "label": "Action"}, {"id": "Drama", "label": "Drama"},
+                ],
+            }))
+            person_and = store.library_selection_paths(query=query({
+                "type": "person", "join": "and", "values": [
+                    {"id": "shared-actor", "label": "Shared Actor", "role": "actor"},
+                    {"id": "writer-5", "label": "Writer 5", "role": "writer"},
+                ],
+            }))
+            keyword_and = store.library_selection_paths(query=query({
+                "type": "keyword", "join": "and", "values": [
+                    {"id": "shared keyword", "label": "shared keyword"},
+                    {"id": "keyword 3", "label": "Keyword 3"},
+                ],
+            }))
+            listed = store.library_selection_paths(query=query({
+                "type": "movie_list", "join": "or", "values": [
+                    {"id": "golden-list", "label": "Golden List"},
+                ],
+            }))
+
+        self.assertEqual(len(genre_or), 12)
+        self.assertEqual(genre_and, [])
+        self.assertEqual([Path(path).name for path in person_and], ["005 - Movie's Test.mkv"])
+        self.assertEqual([Path(path).name for path in keyword_and], ["003 - Movie's Test.mkv"])
+        self.assertEqual(len(listed), 2)
+
+    def test_advanced_library_runtime_boundaries_exclude_unknown_facts(self):
+        documents = self._paging_documents(4)
+        documents["app_metadata/tmdb_metadata.json"]["movies"]["1000"]["runtime"] = None
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+
+            def paths(preset):
+                query = {
+                    "version": 1, "scope": "library", "mode": "advanced",
+                    "groups": [{"type": "runtime", "values": [{"preset": preset}]}],
+                    "sort": {"key": "title", "direction": "asc"},
+                }
+                return [Path(path).name for path in store.library_selection_paths(query=query)]
+
+            short = paths("short")
+            feature = paths("feature")
+            long = paths("long")
+
+        self.assertEqual(short, [])
+        self.assertEqual(feature, ["001 - Movie's Test.mkv", "002 - Movie's Test.mkv"])
+        self.assertEqual(long, ["003 - Movie's Test.mkv"])
 
     def test_movie_view_hides_new_pending_publications_but_preserves_legacy_rows(self):
         documents = self._paging_documents(2)

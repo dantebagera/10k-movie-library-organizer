@@ -53,7 +53,7 @@ class LibraryActionUxTest(unittest.TestCase):
         self.assertIn('className="btn btn-secondary library-rescan-button"', self.library_workspace_source)
         self.assertNotIn('className="library-action-row"', self.library_workspace_source)
         self.assertNotIn('onReviewUnmatched', self.library_workspace_source)
-        self.assertIn("params.set('force_scan', '1')", self.source)
+        self.assertIn("/api/library?view=cards&force_scan=1&page=1&page_size=1", self.library_workspace_source)
         self.assertIn("/api/library/reconcile", self.source)
         self.assertIn("cp-library-reconciled", self.source)
         self.assertNotIn("Fetch Metadata", self.source)
@@ -112,10 +112,31 @@ class LibraryActionUxTest(unittest.TestCase):
     def test_library_and_discover_search_type_selects_share_cp_styling(self):
         self.assertIn('aria-label="Library search type"', self.library_workspace_source)
         self.assertIn('aria-label="TMDB search type"', self.discover_source)
-        self.assertIn('.discover-search-panel select,', self.styles_source)
-        self.assertIn('.library-search-panel[data-people-search="true"] select {', self.styles_source)
+        self.assertIn('.discover-search-panel > select,', self.styles_source)
+        self.assertIn('.library-search-panel[data-people-search="true"] > select {', self.styles_source)
         self.assertIn('appearance: none;', self.styles_source)
         self.assertIn("stroke='%23d4af37'", self.styles_source)
+
+    def test_advanced_search_reuses_the_search_strip_without_a_second_panel(self):
+        advanced_source = (APP_JSX.parents[0] / "features" / "search" / "AdvancedSearchBuilder.jsx").read_text(encoding="utf-8")
+        self.assertIn('className="advanced-add-trigger"', advanced_source)
+        self.assertIn('This field is not a normal text search', advanced_source)
+        self.assertIn("{!groups.length && <span className=\"advanced-mode-warning\"", advanced_source)
+        self.assertIn('className="advanced-join-toggle"', advanced_source)
+        self.assertIn('className="advanced-add-popover"', advanced_source)
+        self.assertIn('className="advanced-builder-error"', advanced_source)
+        self.assertIn('onReset', advanced_source)
+        self.assertIn("retryIdentitySearch", advanced_source)
+        self.assertIn("position: absolute;", self.styles_source[self.styles_source.index(".advanced-add-popover {"):])
+        self.assertIn("librarySearchKind === 'advanced' ? <AdvancedSearchBuilder", self.library_workspace_source)
+        self.assertIn("discoverSearchKind === 'advanced' ? <AdvancedSearchBuilder", self.discover_source)
+        self.assertNotIn("\n      {mode === 'movie' && librarySearchKind === 'advanced' && <AdvancedSearchBuilder", self.library_workspace_source)
+        self.assertIn("\n          Search\n", self.library_workspace_source)
+        self.assertIn("\n            Search\n", self.discover_source)
+        self.assertNotIn("? 'Advanced search' : 'Search'", self.library_workspace_source)
+        self.assertNotIn("? 'Advanced search' : 'Search'", self.discover_source)
+        self.assertIn("type: 'language', label: 'Language'", (APP_JSX.parents[0] / "features" / "search" / "advancedSearchRegistry.js").read_text(encoding="utf-8"))
+        self.assertIn("type: 'country', label: 'Country'", (APP_JSX.parents[0] / "features" / "search" / "advancedSearchRegistry.js").read_text(encoding="utf-8"))
 
     def test_unmatched_shortcut_targets_maintenance_identity_tab(self):
         self.assertIn("reviewUnmatchedMetadata", self.source)
@@ -542,14 +563,34 @@ class LibraryActionUxTest(unittest.TestCase):
             self.source.index("function DiscoverWorkspace"):
             self.source.index("function DiscoverResultGrid")
         ]
-        self.assertIn("function buildDiscoverUrl(query, page)", discover_source)
-        self.assertIn("params.set('genre', discoverGenre)", discover_source)
-        self.assertIn("params.set('year_from', discoverYearFrom.trim())", discover_source)
-        self.assertIn("params.set('min_rating', discoverMinRating)", discover_source)
-        self.assertIn("return `/api/tmdb/${query ? 'search' : 'discover'}?${params.toString()}`", discover_source)
-        self.assertIn("fetchJson(buildDiscoverUrl(query, nextPage), { signal: controller.signal })", discover_source)
+        self.assertIn("compileDiscoverSimpleQuery", discover_source)
+        self.assertIn("<AdvancedSearchBuilder", discover_source)
+        self.assertIn("fetchJson('/api/tmdb/filter-options')", discover_source)
+        self.assertIn("setDiscoverLanguageOptions", discover_source)
+        self.assertIn("setDiscoverCountryOptions", discover_source)
+        self.assertIn("fetchJson('/api/tmdb/discover/advanced'", discover_source)
+        self.assertIn("body: JSON.stringify({ query: requestQuery", discover_source)
+        self.assertNotIn("function buildDiscoverUrl", discover_source)
+        self.assertNotIn("function appendDiscoverCriteria", discover_source)
         self.assertIn("{ value: 'catalog', label: 'TMDB Catalog' }", self.source)
-        self.assertIn("Search: ${tmdbQuery.trim()}${hasAdvancedDiscoverCriteria() ? ' / refined' : ''}", discover_source)
+        self.assertIn('aria-label="Original language"', discover_source)
+        self.assertIn('aria-label="Production country"', discover_source)
+        self.assertIn('aria-label="Refresh Discover results"', discover_source)
+        self.assertIn('aria-label="Reset Discover filters"', discover_source)
+        self.assertIn('aria-label="Clear Discover search"', discover_source)
+        self.assertIn("if (discoverMode === 'search' && tmdbQuery.trim()) return `Search: ${tmdbQuery.trim()}`", discover_source)
+
+    def test_discover_filter_toolbar_stays_on_one_desktop_row_without_a_duplicate_count(self):
+        styles = (APP_JSX.parents[0] / "styles.css").read_text(encoding="utf-8")
+        discover_source = self.discover_source
+        toolbar_source = discover_source[
+            discover_source.index('<div className="discover-toolbar">'):
+            discover_source.index("{['movies', 'advanced'].includes(discoverSearchKind) && filteredDiscoverResults.length > 0")
+        ]
+        self.assertIn("display: flex;", styles[styles.index(".discover-toolbar {"):styles.index(".discover-count {")])
+        self.assertIn("flex-wrap: nowrap;", styles[styles.index(".discover-toolbar {"):styles.index(".discover-count {")])
+        self.assertIn("discover-toolbar-icon-button", toolbar_source)
+        self.assertNotIn("discover-count", toolbar_source)
 
     def test_settings_prowlarr_exposes_trusted_release_indexers(self):
         self.assertIn("trusted_release_indexers", self.source)

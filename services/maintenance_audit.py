@@ -1,5 +1,6 @@
 """Catalog-backed maintenance projections for the local movie archive."""
 
+import json
 import os
 import re
 import time
@@ -21,9 +22,10 @@ RIP_RANK = {
 }
 _BULK_PLEX_GROUP_LIMIT = 4
 _DURATION_TOLERANCE_RATIO = 0.005
-_ASPECT_RATIO_TOLERANCE = 0.02
+_ASPECT_RATIO_TOLERANCE = 0.03
 _FRAME_COUNT_TOLERANCE_RATIO = 0.005
 _STRONG_PIXEL_ADVANTAGE = 1.5
+_DECISIVE_PIXEL_ADVANTAGE = 4.0
 _TIED_PIXEL_RATIO = 1.05
 _LOSSLESS_AUDIO_CODECS = {
     "alac",
@@ -114,6 +116,13 @@ def _item_from_candidate(candidate):
     )
     observations = verification.get("observations") or {}
     observed = observations.get("parsed") or observations.get("plex") or {}
+    audio_tracks_json = candidate.get("audio_tracks_json") or record.get("audio_tracks_json") or "[]"
+    try:
+        audio_tracks = json.loads(audio_tracks_json) if isinstance(audio_tracks_json, str) else list(audio_tracks_json)
+    except (TypeError, ValueError):
+        audio_tracks = []
+    if not isinstance(audio_tracks, list):
+        audio_tracks = []
     item = {
         "path": path,
         "filename": filename,
@@ -140,6 +149,7 @@ def _item_from_candidate(candidate):
         "audio_codec": _text(candidate.get("audio_codec") or record.get("audio_codec")),
         "audio_channels": float(candidate.get("audio_channels") or record.get("audio_channels") or 0),
         "audio_bitrate": int(candidate.get("audio_bitrate") or record.get("audio_bitrate") or 0),
+        "audio_tracks": [track for track in audio_tracks if isinstance(track, dict)],
         "filename_quality_claim": _text(candidate.get("filename_quality_claim") or record.get("filename_quality_claim")),
         "quality_class": _text(candidate.get("quality_class") or record.get("quality_class") or candidate.get("resolution") or record.get("resolution")) or "Unknown",
         "quality_source": _text(candidate.get("quality_source") or record.get("quality_source")),
@@ -204,9 +214,6 @@ def _content_fact_blockers(item):
         blockers.append(f"{filename}: measured file facts are outdated")
     if int(item.get("classifier_version") or 0) < QUALITY_CLASSIFIER_VERSION:
         blockers.append(f"{filename}: the resolution classification is outdated")
-    if item.get("quality_conflict"):
-        blockers.append(f"{filename}: measured quality conflicts with the stored quality")
-
     missing = []
     if int(item.get("video_width") or 0) <= 0 or int(item.get("video_height") or 0) <= 0:
         missing.append("video dimensions")
@@ -214,8 +221,6 @@ def _content_fact_blockers(item):
         missing.append("runtime")
     if not _text(item.get("video_codec")):
         missing.append("video codec")
-    if int(item.get("video_bit_depth") or 0) <= 0:
-        missing.append("video bit depth")
     if not _text(item.get("audio_codec")):
         missing.append("primary-audio codec")
     if float(item.get("audio_channels") or 0) <= 0:
@@ -229,6 +234,12 @@ def _optional_fact_warnings(*items):
     warnings = []
     for item in items:
         missing = []
+        if item.get("quality_conflict"):
+            warnings.append(
+                f"{item.get('filename') or 'copy'}: the filename claims "
+                f"{item.get('filename_quality_claim') or 'another resolution'}, but measured "
+                f"{item.get('video_width') or 0} x {item.get('video_height') or 0} is authoritative"
+            )
         if int(item.get("video_bitrate") or 0) <= 0:
             missing.append("video bitrate")
         if int(item.get("audio_bitrate") or 0) <= 0:
@@ -257,8 +268,8 @@ def _facts_complete(item):
     """Return whether the facts needed for content and feature safety are present.
 
     Bitrates are supporting evidence, not a prerequisite. Some containers do not
-    expose them reliably; a missing bitrate must not erase otherwise decisive
-    identity, runtime, framing, resolution, codec, depth, and channel evidence.
+    expose them reliably; a missing bitrate or bit-depth tag must not erase otherwise
+    decisive identity, runtime, framing, resolution, codec, and channel evidence.
     """
     return not _content_fact_blockers(item)
 
@@ -293,15 +304,23 @@ def _is_cinema_pal_pair(left_fps, right_fps):
     return (cinema(left_fps) and pal(right_fps)) or (pal(left_fps) and cinema(right_fps))
 
 
-def _duration_evidence(left, right):
-    left_duration = int(left.get("duration_ms") or 0)
-    right_duration = int(right.get("duration_ms") or 0)
-    delta_ratio = _relative_delta(left_duration, right_duration)
-    tolerance = max(2_000, int(max(left_duration, right_duration) * _DURATION_TOLERANCE_RATIO))
-    if abs(left_duration - right_duration) <= tolerance:
+def _duration_evidence(
+    keeper,
+    candidate,
+    *,
+    tolerance_ratio=_DURATION_TOLERANCE_RATIO,
+    tolerance_max_ms=None,
+):
+    keeper_duration = int(keeper.get("duration_ms") or 0)
+    candidate_duration = int(candidate.get("duration_ms") or 0)
+    delta_ratio = _relative_delta(keeper_duration, candidate_duration)
+    tolerance = max(2_000, int(max(keeper_duration, candidate_duration) * tolerance_ratio))
+    if tolerance_max_ms is not None:
+        tolerance = min(tolerance, int(tolerance_max_ms))
+    if abs(keeper_duration - candidate_duration) <= tolerance:
         reason = (
             "identical runtime"
-            if left_duration == right_duration
+            if keeper_duration == candidate_duration
             else f"runtime matches within {delta_ratio * 100:.2f}%"
         )
         return {
@@ -313,18 +332,18 @@ def _duration_evidence(left, right):
             "uses_frame_rate": False,
         }
 
-    left_fps = float(left.get("video_frame_rate") or 0)
-    right_fps = float(right.get("video_frame_rate") or 0)
-    if _is_cinema_pal_pair(left_fps, right_fps):
-        left_frames = (left_duration / 1000) * left_fps
-        right_frames = (right_duration / 1000) * right_fps
-        frame_delta_ratio = _relative_delta(left_frames, right_frames)
+    keeper_fps = float(keeper.get("video_frame_rate") or 0)
+    candidate_fps = float(candidate.get("video_frame_rate") or 0)
+    if _is_cinema_pal_pair(keeper_fps, candidate_fps):
+        keeper_frames = (keeper_duration / 1000) * keeper_fps
+        candidate_frames = (candidate_duration / 1000) * candidate_fps
+        frame_delta_ratio = _relative_delta(keeper_frames, candidate_frames)
         if frame_delta_ratio <= _FRAME_COUNT_TOLERANCE_RATIO:
             return {
                 "equivalent": True,
-                "kind": "speed_conversion",
+                "kind": "frame_rate_timing_normalization",
                 "reason": (
-                    f"{_display_fps(left_fps)} to {_display_fps(right_fps)} fps speed conversion detected; "
+                    f"{_display_fps(keeper_fps)} and {_display_fps(candidate_fps)} fps timing normalization; "
                     f"estimated frame count matches within {frame_delta_ratio * 100:.2f}%"
                 ),
                 "duration_delta_percent": round(delta_ratio * 100, 3),
@@ -332,13 +351,26 @@ def _duration_evidence(left, right):
                 "uses_frame_rate": True,
             }
 
+    if keeper_duration > candidate_duration:
+        return {
+            "equivalent": True,
+            "kind": "keeper_longer",
+            "reason": (
+                f"keeper is {(keeper_duration - candidate_duration) / 1000:.1f}s longer; "
+                "deleting the shorter copy does not discard runtime"
+            ),
+            "duration_delta_percent": round(delta_ratio * 100, 3),
+            "frame_count_delta_percent": None,
+            "uses_frame_rate": False,
+        }
+
     return {
         "equivalent": False,
-        "kind": "runtime_mismatch",
+        "kind": "candidate_longer",
         "reason": (
-            f"runtime differs by {delta_ratio * 100:.2f}% "
-            f"({abs(left_duration - right_duration) / 1000:.1f}s); automatic selection allows "
-            f"{tolerance / 1000:.1f}s, and no matching speed-conversion evidence was found"
+            f"deletion candidate is {(candidate_duration - keeper_duration) / 1000:.1f}s longer "
+            f"than the proposed keeper; deletion could lose runtime, and no matching "
+            "frame-rate timing normalization was found"
         ),
         "duration_delta_percent": round(delta_ratio * 100, 3),
         "frame_count_delta_percent": None,
@@ -346,9 +378,9 @@ def _duration_evidence(left, right):
     }
 
 
-def _aspect_evidence(left, right):
+def _aspect_evidence(left, right, *, tolerance=_ASPECT_RATIO_TOLERANCE):
     delta_ratio = _relative_delta(_aspect_ratio(left), _aspect_ratio(right))
-    equivalent = delta_ratio <= _ASPECT_RATIO_TOLERANCE
+    equivalent = delta_ratio <= tolerance
     if not delta_ratio:
         reason = "identical framing"
     elif equivalent:
@@ -356,7 +388,7 @@ def _aspect_evidence(left, right):
     else:
         reason = (
             f"framing differs by {delta_ratio * 100:.2f}%; automatic selection allows up to "
-            f"{_ASPECT_RATIO_TOLERANCE * 100:.2f}%"
+            f"{tolerance * 100:.2f}%"
         )
     return {
         "equivalent": equivalent,
@@ -404,22 +436,34 @@ def _edition_warning(left, right):
     )
 
 
-def _content_equivalence(left, right):
-    blockers = _content_fact_blockers(left) + _content_fact_blockers(right)
-    warnings = _optional_fact_warnings(left, right)
-    edition_warning = _edition_warning(left, right)
+def _content_equivalence(
+    keeper,
+    candidate,
+    *,
+    duration_tolerance_ratio=_DURATION_TOLERANCE_RATIO,
+    duration_tolerance_max_ms=None,
+    aspect_tolerance=_ASPECT_RATIO_TOLERANCE,
+):
+    blockers = _content_fact_blockers(keeper) + _content_fact_blockers(candidate)
+    warnings = _optional_fact_warnings(keeper, candidate)
+    edition_warning = _edition_warning(keeper, candidate)
     if edition_warning:
         warnings.append(edition_warning)
 
     duration = None
-    if int(left.get("duration_ms") or 0) > 0 and int(right.get("duration_ms") or 0) > 0:
-        duration = _duration_evidence(left, right)
+    if int(keeper.get("duration_ms") or 0) > 0 and int(candidate.get("duration_ms") or 0) > 0:
+        duration = _duration_evidence(
+            keeper,
+            candidate,
+            tolerance_ratio=duration_tolerance_ratio,
+            tolerance_max_ms=duration_tolerance_max_ms,
+        )
         if not duration["equivalent"]:
             blockers.append(duration["reason"])
 
     aspect = None
-    if _pixel_count(left) and _pixel_count(right):
-        aspect = _aspect_evidence(left, right)
+    if _pixel_count(keeper) and _pixel_count(candidate):
+        aspect = _aspect_evidence(keeper, candidate, tolerance=aspect_tolerance)
         if not aspect["equivalent"]:
             blockers.append(aspect["reason"])
 
@@ -465,6 +509,34 @@ def _resolution_rank(item):
     )
 
 
+def _primary_audio_comparison(left, right):
+    left_lossless = _is_lossless_audio(left.get("audio_codec"))
+    right_lossless = _is_lossless_audio(right.get("audio_codec"))
+    if left_lossless != right_lossless:
+        return {"winner": "left" if left_lossless else "right", "reason": "lossless primary audio"}
+    left_channels = float(left.get("audio_channels") or 0)
+    right_channels = float(right.get("audio_channels") or 0)
+    if left_channels != right_channels:
+        return {
+            "winner": "left" if left_channels > right_channels else "right",
+            "reason": f"{max(left_channels, right_channels):g} versus {min(left_channels, right_channels):g} primary-audio channels",
+        }
+    left_codec = _text(left.get("audio_codec")).lower()
+    right_codec = _text(right.get("audio_codec")).lower()
+    left_bitrate = int(left.get("audio_bitrate") or 0)
+    right_bitrate = int(right.get("audio_bitrate") or 0)
+    if left_codec == right_codec and left_bitrate and right_bitrate:
+        ratio = max(left_bitrate, right_bitrate) / min(left_bitrate, right_bitrate)
+        if ratio >= 1.2:
+            return {
+                "winner": "left" if left_bitrate > right_bitrate else "right",
+                "reason": f"{ratio:.2f}x primary-audio bitrate",
+            }
+    if left_codec != right_codec:
+        return {"winner": None, "reason": "different lossy primary-audio codecs"}
+    return {"winner": None, "reason": "equivalent primary audio"}
+
+
 def _visual_comparison(left, right):
     left_pixels = _pixel_count(left)
     right_pixels = _pixel_count(right)
@@ -498,10 +570,24 @@ def _visual_comparison(left, right):
 
     pixel_ratio = max(left_pixels, right_pixels) / min(left_pixels, right_pixels)
     if pixel_ratio <= _TIED_PIXEL_RATIO:
+        same_video = (
+            _text(left.get("video_codec")).lower() == _text(right.get("video_codec")).lower()
+            and int(left.get("video_bit_depth") or 0) == int(right.get("video_bit_depth") or 0)
+            and int(left.get("rip_rank", -3)) == int(right.get("rip_rank", -3))
+        )
+        audio = _primary_audio_comparison(left, right)
+        if same_video and audio["winner"]:
+            return {
+                "kind": "audio_advantage",
+                "winner": audio["winner"],
+                "pixel_ratio": pixel_ratio,
+                "audio_reason": audio["reason"],
+            }
         return {
             "kind": "encoding_tradeoff",
             "winner": None,
             "pixel_ratio": pixel_ratio,
+            "audio_reason": audio["reason"],
         }
     return {
         "kind": "uncertain_advantage",
@@ -510,72 +596,77 @@ def _visual_comparison(left, right):
     }
 
 
+def _has_decisive_visual_advantage(visual):
+    return bool(
+        visual.get("kind") == "strong_advantage"
+        and float(visual.get("pixel_ratio") or 0) >= _DECISIVE_PIXEL_ADVANTAGE
+    )
+
+
 def _is_lossless_audio(codec):
     normalized = _text(codec).lower()
     return normalized in _LOSSLESS_AUDIO_CODECS or "lossless" in normalized
 
 
-def _feature_regressions(winner, loser):
+def _feature_regressions(winner, loser, *, allow_audio_tradeoff=False):
     regressions = []
-    regression_kind = "unique_features"
-    winner_depth = int(winner.get("video_bit_depth") or 0)
-    loser_depth = int(loser.get("video_bit_depth") or 0)
-    if winner_depth < loser_depth:
-        regressions.append(
-            f"the proposed keeper is {winner_depth}-bit versus {loser_depth}-bit"
-        )
-        regression_kind = "quality_tradeoff"
-    if int(winner.get("rip_rank", -3)) < int(loser.get("rip_rank", -3)):
-        regressions.append(
-            f"the proposed keeper has a lower source tier ({winner.get('rip_source') or 'Unknown'} "
-            f"versus {loser.get('rip_source') or 'Unknown'})"
-        )
-        regression_kind = "quality_tradeoff"
-    winner_channels = float(winner.get("audio_channels") or 0)
-    loser_channels = float(loser.get("audio_channels") or 0)
-    if winner_channels < loser_channels:
-        regressions.append(
-            f"the proposed keeper has {winner_channels:g} audio channels versus {loser_channels:g}"
-        )
-    if _is_lossless_audio(loser.get("audio_codec")) and not _is_lossless_audio(winner.get("audio_codec")):
-        regressions.append("the proposed keeper replaces lossless primary audio with lossy audio")
-    same_audio = (
-        _text(winner.get("audio_codec")).lower() == _text(loser.get("audio_codec")).lower()
-        and winner_channels == loser_channels
-    )
-    winner_audio_bitrate = int(winner.get("audio_bitrate") or 0)
-    loser_audio_bitrate = int(loser.get("audio_bitrate") or 0)
-    if (
-        same_audio
-        and winner_audio_bitrate
-        and loser_audio_bitrate
-        and winner_audio_bitrate < loser_audio_bitrate * 0.8
-    ):
-        regressions.append("the proposed keeper has materially lower primary-audio bitrate")
-        regression_kind = "quality_tradeoff"
-    return regressions, regression_kind
+    warnings = []
+    regression_kind = "quality_tradeoff"
+    audio = _primary_audio_comparison(winner, loser)
+    if audio["winner"] == "right":
+        message = f"the deletion candidate has better primary audio ({audio['reason']})"
+        if allow_audio_tradeoff:
+            warnings.append(
+                f"Audio trade-off: {message}; the 4x-or-greater pixel advantage keeps the video recommendation"
+            )
+        else:
+            regressions.append(message)
+    elif audio["winner"] is None and audio["reason"] == "different lossy primary-audio codecs":
+        message = "primary-audio quality cannot be ordered across the two lossy codecs"
+        if allow_audio_tradeoff:
+            warnings.append(f"Audio trade-off: {message}; the 4x-or-greater pixel advantage keeps the video recommendation")
+        else:
+            regressions.append(message)
+    return regressions, regression_kind, warnings
 
 
 def _feature_passes(winner, loser):
     passed = []
-    winner_depth = int(winner.get("video_bit_depth") or 0)
-    loser_depth = int(loser.get("video_bit_depth") or 0)
-    if winner_depth >= loser_depth:
-        passed.append(f"Keeper bit depth is {winner_depth}-bit versus {loser_depth}-bit")
-    if int(winner.get("rip_rank", -3)) >= int(loser.get("rip_rank", -3)):
-        passed.append(
-            f"Keeper source tier is {winner.get('rip_source') or 'Unknown'} versus "
-            f"{loser.get('rip_source') or 'Unknown'}"
-        )
-    winner_channels = float(winner.get("audio_channels") or 0)
-    loser_channels = float(loser.get("audio_channels") or 0)
-    if winner_channels >= loser_channels:
-        passed.append(
-            f"Keeper primary audio has {winner_channels:g} channels versus {loser_channels:g}"
-        )
-    if _is_lossless_audio(loser.get("audio_codec")) and _is_lossless_audio(winner.get("audio_codec")):
-        passed.append("Keeper preserves lossless primary audio")
+    audio = _primary_audio_comparison(winner, loser)
+    if audio["winner"] == "left":
+        passed.append(f"Keeper has better primary audio ({audio['reason']})")
+    elif audio["winner"] is None and audio["reason"] == "equivalent primary audio":
+        passed.append("Keeper preserves equivalent primary audio")
     return passed
+
+
+def _audio_languages(item):
+    return {
+        _text(track.get("language")).lower()
+        for track in item.get("audio_tracks", [])
+        if _text(track.get("language"))
+    }
+
+
+_AUDIO_LANGUAGE_LABELS = {
+    "eng": "English",
+    "fra": "French",
+    "deu": "German",
+    "spa": "Spanish",
+    "ita": "Italian",
+    "jpn": "Japanese",
+    "kor": "Korean",
+    "zho": "Chinese",
+    "por": "Portuguese",
+    "rus": "Russian",
+    "ara": "Arabic",
+    "hin": "Hindi",
+}
+
+
+def _audio_language_losses(keeper, candidate):
+    losses = _audio_languages(candidate) - _audio_languages(keeper)
+    return sorted(_AUDIO_LANGUAGE_LABELS.get(language, language) for language in losses)
 
 
 def _size_evidence(left, right):
@@ -600,25 +691,50 @@ def _size_evidence(left, right):
 
 
 def _pair_comparison(left, right):
-    content = _content_equivalence(left, right)
     visual = _visual_comparison(left, right)
+    decisive = _has_decisive_visual_advantage(visual)
+    keeper = left if visual.get("winner") == "left" else right
+    candidate = right if keeper is left else left
+    content = _content_equivalence(
+        keeper,
+        candidate,
+        aspect_tolerance=_ASPECT_RATIO_TOLERANCE,
+    )
     storage = _size_evidence(left, right)
     regressions = []
+    feature_warnings = []
     feature_passed = []
     regression_kind = "unique_features"
+    audio_language_losses = []
     if visual["winner"] == "left":
-        regressions, regression_kind = _feature_regressions(left, right)
+        regressions, regression_kind, feature_warnings = _feature_regressions(
+            left,
+            right,
+            allow_audio_tradeoff=decisive,
+        )
         feature_passed = _feature_passes(left, right)
+        audio_language_losses = _audio_language_losses(left, right)
     elif visual["winner"] == "right":
-        regressions, regression_kind = _feature_regressions(right, left)
+        regressions, regression_kind, feature_warnings = _feature_regressions(
+            right,
+            left,
+            allow_audio_tradeoff=decisive,
+        )
         feature_passed = _feature_passes(right, left)
+        audio_language_losses = _audio_language_losses(right, left)
+    if audio_language_losses:
+        feature_warnings.append(
+            "Deletion loses audio language track(s): " + ", ".join(audio_language_losses)
+        )
     return {
         "content": content,
         "visual": visual,
         "storage": storage,
         "feature_regressions": regressions,
+        "feature_warnings": feature_warnings,
         "feature_passed": feature_passed,
         "regression_kind": regression_kind,
+        "audio_language_losses": audio_language_losses,
     }
 
 
@@ -633,6 +749,8 @@ def _comparison_fields(peer, pair):
         "comparison_uses_aspect_ratio": bool(pair["content"].get("uses_aspect_ratio")),
         "storage_delta_bytes": int(pair["storage"].get("bytes") or 0),
         "storage_delta_percent": round(float(pair["storage"].get("percent") or 0), 2),
+        "audio_language_losses": list(pair.get("audio_language_losses") or []),
+        "audio_language_loss_keeper": peer.get("filename") if pair.get("audio_language_losses") else "",
     }
 
 
@@ -667,6 +785,37 @@ def _visual_uncertainty_reason(winner, loser, visual):
     if _resolution_rank(winner) <= _resolution_rank(loser):
         return "The higher-pixel copy does not have a higher recognized resolution class"
     return "The higher-pixel copy is not at least as wide and as tall as the other copy"
+
+
+def _quality_advantage_reason(winner, loser, pair, *, candidate_view=False):
+    visual = pair["visual"]
+    if visual.get("kind") == "audio_advantage":
+        prefix = f"{winner['filename']} has" if candidate_view else "This copy has"
+        return f"{prefix} better primary audio ({visual.get('audio_reason')}) with equivalent video quality"
+    ratio = float(visual.get("pixel_ratio") or 0)
+    if candidate_view:
+        return f"{winner['filename']} has {ratio:.2f}x as many pixels and a higher resolution class"
+    return f"This copy has {ratio:.2f}x the pixels of {loser['filename']}"
+
+
+def _quality_reason_sentence(winner, loser, pair, *, removal):
+    visual = pair["visual"]
+    if visual.get("kind") == "audio_advantage":
+        if removal:
+            return (
+                f"equivalent video quality; {winner['filename']} has better primary audio "
+                f"({visual.get('audio_reason')})"
+            )
+        return (
+            f"equivalent video quality and better primary audio "
+            f"({visual.get('audio_reason')}) than {loser['filename']}"
+        )
+    ratio = float(visual.get("pixel_ratio") or 0)
+    return (
+        f"{ratio:.2f}× fewer pixels than {winner['filename']}"
+        if removal
+        else f"{ratio:.2f}× the pixels of {loser['filename']}"
+    )
 
 
 def _tradeoff_reason(left, right, pair):
@@ -727,11 +876,21 @@ def _duplicate_groups(items):
             other_side = "right" if current_side == "left" else "left"
             return pair, current_side, other_side
 
-        def pair_decision(pair, *, blockers=(), warnings=(), passed=()):
+        def pair_decision(pair, *, blockers=(), warnings=(), passed=(), include_language_loss=True):
             content = pair.get("content") or {}
+            feature_warnings = list(pair.get("feature_warnings", []))
+            if not include_language_loss:
+                feature_warnings = [
+                    warning for warning in feature_warnings
+                    if not warning.startswith("Deletion loses audio language track(s):")
+                ]
             return _decision_fields(
                 blockers=[*content.get("blockers", []), *blockers],
-                warnings=[*content.get("warnings", []), *warnings],
+                warnings=[
+                    *content.get("warnings", []),
+                    *feature_warnings,
+                    *warnings,
+                ],
                 passed=[
                     *identity_passed,
                     *content.get("passed", []),
@@ -789,14 +948,14 @@ def _duplicate_groups(items):
                     "verdict_label": "Recommended removal",
                     "verdict_tone": "danger",
                     "reason": (
-                        f"Recommended removal — {ratio:.2f}× fewer pixels than {peer['filename']}; "
+                        f"Recommended removal — {_quality_reason_sentence(peer, file, pair, removal=True)}; "
                         f"{pair['content']['reason'].rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
                     **pair_decision(
                         pair,
                         passed=[
-                            f"{peer['filename']} has {ratio:.2f}x as many pixels and a higher resolution class",
+                            _quality_advantage_reason(peer, file, pair, candidate_view=True),
                         ],
                     ),
                 })
@@ -845,17 +1004,20 @@ def _duplicate_groups(items):
                     "verdict_label": "Recommended keep",
                     "verdict_tone": "success",
                     "reason": (
-                        f"Recommended keep — {ratio:.2f}× the pixels of {peer['filename']}; "
+                        f"Recommended keep — {_quality_reason_sentence(file, peer, pair, removal=False)}; "
                         f"{pair['content']['reason'].rstrip('.')}."
                     ),
                     **_comparison_fields(peer, pair),
                     **pair_decision(
                         pair,
                         passed=[
-                            f"This copy has {ratio:.2f}x the pixels of {peer['filename']}",
+                            _quality_advantage_reason(file, peer, pair),
                             "CP recommends keeping this stronger copy",
                         ],
+                        include_language_loss=False,
                     ),
+                    "audio_language_losses": [],
+                    "audio_language_loss_keeper": "",
                 })
             elif uncertain_dominated:
                 peer, pair = max(uncertain_dominated, key=lambda entry: entry[1]["visual"]["pixel_ratio"])
@@ -883,7 +1045,10 @@ def _duplicate_groups(items):
                         pair,
                         blockers=decision_blockers,
                         passed=[f"This copy has {ratio:.2f}x the pixels of {peer['filename']}"],
+                        include_language_loss=False,
                     ),
+                    "audio_language_losses": [],
+                    "audio_language_loss_keeper": "",
                 })
             elif tradeoffs:
                 peer, pair = max(
@@ -969,7 +1134,7 @@ def _duplicate_groups(items):
                 file["recommendation"] == "recommended"
                 for file in output_files
             ),
-            "comparison_scope": "Measured video and primary audio",
+            "comparison_scope": "Measured video, runtime, framing, and audio; subtitles excluded",
         })
     return sorted(groups, key=lambda group: group["title"].lower())
 

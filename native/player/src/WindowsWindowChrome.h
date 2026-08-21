@@ -28,6 +28,9 @@ public:
     bool nativeEventFilter(const QByteArray &eventType, void *message,
                            qintptr *result) override;
 
+signals:
+    void mediaPlayPauseRequested();
+
 private:
     QPointer<QQuickWindow> m_window;
     quintptr m_nativeHandle = 0;

@@ -5,6 +5,16 @@ import path from 'node:path';
 const ingestionEvidenceDir = path.resolve(
   'docs/verification/online-library-ingestion/after'
 );
+const libraryCardsRoute = /\/api\/library(?:\?view=cards.*|\/search\/advanced)$/;
+
+function requestGroup(route, type) {
+  return route.request().postDataJSON()?.query?.groups?.find((group) => group.type === type);
+}
+
+async function captureAdvancedEvidence(page, name) {
+  const directory = process.env.CP_ADVANCED_EVIDENCE_DIR;
+  if (directory) await page.screenshot({ path: `${directory}/${name}.png`, fullPage: true });
+}
 
 const parityMovie = {
   tmdb_id: '42',
@@ -103,7 +113,7 @@ const parityCollectionParts = [
 ];
 
 async function mockCardParityApis(page, options = {}) {
-  await page.route('**/api/library?view=cards*', async (route) => {
+  await page.route(libraryCardsRoute, async (route) => {
     await route.fulfill({ json: { items: [parityLibraryItem], count: 1, catalog_generation: 1 } });
   });
   await page.route('**/api/library/check', async (route) => {
@@ -134,7 +144,8 @@ async function mockCardParityApis(page, options = {}) {
     await route.fulfill({ json: { lists: [{ id: 'render-parity', name: 'Render Parity', movies: [parityMovie] }], curation_generation: 1 } });
   });
   await page.route('**/api/tmdb/discover**', async (route) => {
-    await route.fulfill({ json: { results: [parityMovie], page: 1, total_pages: 1, total_results: 1 } });
+    const person = requestGroup(route, 'person');
+    await route.fulfill({ json: { results: person ? [parityCollectionParts[1]] : [parityMovie], page: 1, total_pages: 1, total_results: 1 } });
   });
   await page.route('**/api/library/collection/7001**', async (route) => {
     if (options.libraryCollectionGate) await options.libraryCollectionGate;
@@ -307,7 +318,7 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
   const pageContent = page.locator('.library-workspace');
   const brand = page.locator('.brand-lockup');
   const footer = page.locator('.sidebar-footer');
-  const libraryNavItem = page.getByRole('button', { name: 'Library' });
+  const libraryNavItem = page.getByRole('button', { name: 'Library', exact: true });
   const libraryNavIcon = libraryNavItem.locator('.nav-icon-wrap');
   const aiControlNavItem = page.getByRole('button', { name: /AI Control/ });
   const aiControlBadge = aiControlNavItem.locator('.ai-control-nav-badge');
@@ -430,7 +441,7 @@ test('desktop sidebar collapses persistently while workspace margins stay fixed'
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('complementary', { name: 'Primary navigation' })).toHaveCSS('width', '64px');
-  const reloadedLibraryNavItem = page.getByRole('button', { name: 'Library' });
+  const reloadedLibraryNavItem = page.getByRole('button', { name: 'Library', exact: true });
   await reloadedLibraryNavItem.hover();
   await expect(page.locator('.sidebar-tooltip')).toHaveAttribute('aria-hidden', 'false');
   await page.getByRole('button', { name: 'Expand sidebar' }).click();
@@ -652,7 +663,7 @@ test('Settings keeps OS playback default, redacts provider secrets, and verifies
     prefer_forced_subtitles: false,
     prefer_hearing_impaired_subtitles: false,
     resume_enabled: true,
-    minimum_resume_seconds: 120,
+    minimum_resume_seconds: 30,
     completion_threshold: 0.92,
     auto_mark_completed_watched: true,
     hardware_decoding: 'safe_auto',
@@ -748,6 +759,137 @@ test('Settings keeps OS playback default, redacts provider secrets, and verifies
     await playerCard.locator('.settings-action-grid').scrollIntoViewIfNeeded();
     await page.screenshot({ path: 'test-results/player-phase1-settings-card-bottom.png' });
   }
+});
+
+test('Advanced Search shares normalized Library and Discover execution without losing cards on error', async ({ page }) => {
+  const pageErrors = [];
+  const consoleErrors = [];
+  const libraryQueries = [];
+  const discoverQueries = [];
+  let failLibrary = false;
+  let holdDiscover = false;
+  let releaseDiscover;
+  let emptyDiscover = false;
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+
+  await page.route(libraryCardsRoute, async (route) => {
+    const body = route.request().postDataJSON() || {};
+    if (body.query) libraryQueries.push(body.query);
+    if (failLibrary) {
+      failLibrary = false;
+      return route.fulfill({ status: 503, json: { error: 'Deterministic advanced failure' } });
+    }
+    return route.fulfill({ json: {
+      items: [parityLibraryItem], count: 1, total: 1, page: 1, total_pages: 1,
+      page_start: 0, page_end: 1,
+      facets: { genres: ['Drama'], sources: ['Blu-ray'], languages: ['English'], countries: ['US'] },
+      stats: { total: 1, low: 0, matched: 1, pending: 0, unmatched: 0 },
+      catalog_generation: 1
+    } });
+  });
+  await page.route('**/api/config', (route) => route.fulfill({ json: { show_adult_movies: true } }));
+  await page.route('**/api/user/lists', (route) => route.fulfill({ json: { lists: [], curation_generation: 1 } }));
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: parityMovie.title, exact: true })).toBeVisible();
+  const simpleLibrarySearchHeight = await page.locator('.library-search-panel').evaluate((element) => element.getBoundingClientRect().height);
+  await page.getByRole('button', { name: 'Open filters' }).click();
+  await page.locator('.library-filter-toolbar select').filter({ has: page.locator('option', { hasText: 'All genres' }) }).selectOption('Drama');
+  await expect.poll(() => libraryQueries.at(-1)?.groups?.some((group) => group.type === 'genre')).toBe(true);
+  const libraryRequestsBeforeEquivalentModeSwitch = libraryQueries.length;
+  await page.getByLabel('Library search type').selectOption('advanced');
+  await expect(page.getByLabel('library advanced search')).toBeVisible();
+  await expect(page.getByText('This field is not a normal text search')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeVisible();
+  await expect(page.locator('.library-filter-toolbar')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: parityMovie.title, exact: true })).toBeVisible();
+  const advancedLibrarySearchHeight = await page.locator('.library-search-panel').evaluate((element) => element.getBoundingClientRect().height);
+  expect(advancedLibrarySearchHeight).toBeLessThanOrEqual(simpleLibrarySearchHeight + 4);
+  await expect(page.locator('.advanced-value-chip').filter({ hasText: 'Drama' })).toHaveCount(1);
+  await page.waitForTimeout(450);
+  expect(libraryQueries).toHaveLength(libraryRequestsBeforeEquivalentModeSwitch);
+  await captureAdvancedEvidence(page, 'gate7-library-advanced-one-line');
+
+  await page.getByRole('button', { name: 'Add advanced search criterion' }).click();
+  await page.getByLabel('Criterion to add').selectOption('resolution');
+  await page.getByLabel('Resolution value').selectOption('4k');
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => libraryQueries.at(-1)?.groups?.some((group) => group.type === 'resolution')).toBe(true);
+
+  failLibrary = true;
+  await page.getByLabel('Criterion to add').selectOption('viewing_status');
+  await page.getByLabel('Viewing status value').selectOption('watched');
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await expect(page.getByRole('alert')).toContainText('Deterministic advanced failure');
+  await expect(page.getByRole('heading', { name: parityMovie.title, exact: true })).toBeVisible();
+  await captureAdvancedEvidence(page, 'gate7-library-advanced-error-preserves-card');
+
+  await page.route('**/api/tmdb/people/search**', (route) => route.fulfill({ json: {
+    results: [{ id: '55', name: 'Advanced Performer' }], page: 1, total_pages: 1, total_results: 1
+  } }));
+  await page.route('**/api/tmdb/discover/advanced', async (route) => {
+    const body = route.request().postDataJSON() || {};
+    if (body.query) discoverQueries.push(body.query);
+    if (holdDiscover) await new Promise((resolve) => { releaseDiscover = resolve; });
+    return route.fulfill({ json: {
+      results: emptyDiscover ? [] : [parityMovie], page: 1, page_size: 20, total_pages: 1, total_results: emptyDiscover ? 0 : 1,
+      provider_total_results: emptyDiscover ? 0 : 1, total_scope: 'bounded', total_label: `${emptyDiscover ? 0 : 1} matches collected from TMDB`,
+      local_criteria: []
+    } });
+  });
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: parityMovie.title, exact: true })).toBeVisible();
+  const discoverRequestsBeforeEquivalentModeSwitch = discoverQueries.length;
+  await page.getByLabel('TMDB search type').selectOption('advanced');
+  await expect(page.getByLabel('discover advanced search')).toBeVisible();
+  await expect(page.getByText('This field is not a normal text search')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Search', exact: true })).toBeVisible();
+  await page.waitForTimeout(450);
+  expect(discoverQueries).toHaveLength(discoverRequestsBeforeEquivalentModeSwitch);
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-empty');
+  await page.getByRole('button', { name: 'Add advanced search criterion' }).click();
+  await page.getByLabel('Criterion to add').selectOption('person');
+  await page.getByLabel('Find person').fill('Advanced');
+  await expect(page.getByRole('option', { name: 'Advanced Performer' })).toBeVisible();
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-picker');
+  await page.getByRole('option', { name: 'Advanced Performer' }).click();
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await page.getByLabel('Role for Advanced Performer').selectOption('writer');
+  await page.getByLabel('Criterion to add').selectOption('runtime');
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await page.getByLabel('Runtime preset').selectOption('custom');
+  await page.getByLabel('Runtime from').fill('75');
+  await page.getByLabel('Runtime to').fill('135');
+  await page.getByLabel('Criterion to add').selectOption('minimum_votes');
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await page.getByRole('spinbutton', { name: 'Minimum votes', exact: true }).fill('1234');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => discoverQueries.at(-1)?.groups?.find((group) => group.type === 'person')?.values?.[0]?.role).toBe('writer');
+  expect(discoverQueries.at(-1).groups.find((group) => group.type === 'runtime').values[0]).toEqual({ preset: 'custom', from: 75, to: 135 });
+  expect(discoverQueries.at(-1).groups.find((group) => group.type === 'minimum_votes').values[0].value).toBe(1234);
+  await expect(page.getByText(/matches collected from TMDB/)).toBeVisible();
+  for (const criterion of ['genre', 'year', 'rating', 'language']) {
+    await page.getByLabel('Criterion to add').selectOption(criterion);
+    await page.getByRole('button', { name: 'Add criterion' }).click();
+  }
+  await expect(page.getByRole('button', { name: '+1 more criteria' })).toBeVisible();
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-collapsed');
+  await page.getByRole('button', { name: '+1 more criteria' }).click();
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-wrapped');
+  holdDiscover = true;
+  emptyDiscover = true;
+  const runButton = page.getByRole('button', { name: 'Search', exact: true });
+  await runButton.click();
+  await expect(runButton).toBeDisabled();
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-loading');
+  holdDiscover = false;
+  releaseDiscover();
+  await expect(page.getByText('No TMDB movies match this view.')).toBeVisible();
+  await captureAdvancedEvidence(page, 'gate7-discover-advanced-empty-result');
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors.filter((message) => !message.startsWith('Failed to load resource:'))).toEqual([]);
 });
 
 test('Library switches between canonical movie and raw file views', async ({ page }) => {
@@ -878,7 +1020,7 @@ test('local Library playback uses the centralized player route without changing 
 
 test('Library people search renders stored actors and writers from canonical metadata', async ({ page }) => {
   const profileUrl = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
-  let writerFilterUrl = '';
+  let writerFilter = null;
   const peopleItem = {
     path: 'E:/Movies/Apollo.13.1995.mkv',
     canonical_metadata: {
@@ -892,9 +1034,9 @@ test('Library people search renders stored actors and writers from canonical met
     plex_cast: [],
     plex_directors: []
   };
-  await page.route('**/api/library?view=cards*', async (route) => {
-    const url = route.request().url();
-    if (new URL(url).searchParams.get('role') === 'writer') writerFilterUrl = url;
+  await page.route(libraryCardsRoute, async (route) => {
+    const person = requestGroup(route, 'person')?.values?.[0];
+    if (person?.role === 'writer') writerFilter = person;
     await route.fulfill({ json: {
       items: [{
         path: peopleItem.path,
@@ -923,8 +1065,8 @@ test('Library people search renders stored actors and writers from canonical met
   const writerAction = writerCard.getByRole('button', { name: 'Written films' });
   await expect(writerAction).toBeVisible();
   await writerAction.click();
-  await expect.poll(() => writerFilterUrl).not.toBe('');
-  expect(new URL(writerFilterUrl).searchParams.get('person_id')).toBe('99');
+  await expect.poll(() => writerFilter).not.toBeNull();
+  expect(writerFilter.id).toBe('99');
 });
 
 test('existing actor and director People search remains available in Library and Discover', async ({ page }) => {
@@ -948,8 +1090,9 @@ test('existing actor and director People search remains available in Library and
     plex_cast: [],
     plex_directors: []
   };
-  let discoverWriterUrl = '';
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+  let discoverWriter = null;
+  const advancedPersonRequests = [];
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: {
     items: [parityLibraryItem],
     count: 1,
     total: 1,
@@ -969,7 +1112,8 @@ test('existing actor and director People search remains available in Library and
     total_results: 1
   } }));
   await page.route('**/api/tmdb/person_movies**', (route) => {
-    discoverWriterUrl = route.request().url();
+    const params = new URL(route.request().url()).searchParams;
+    discoverWriter = { id: params.get('person_id'), role: params.get('role') };
     return route.fulfill({ json: {
       results: [parityMovie],
       page: 1,
@@ -977,6 +1121,18 @@ test('existing actor and director People search remains available in Library and
       total_results: 1,
       role: 'writer',
       person_id: person.id
+    } });
+  });
+  await page.route('**/api/tmdb/discover/advanced', (route) => {
+    const body = route.request().postDataJSON();
+    const personValue = requestGroup(route, 'person')?.values?.[0];
+    if (personValue) {
+      advancedPersonRequests.push(body);
+      return route.fulfill({ status: 500, json: { error: 'Normal People must use role-aware credits' } });
+    }
+    return route.fulfill({ json: {
+      results: [parityMovie], page: 1, page_size: 40, total_pages: 1, total_results: 1,
+      has_previous: false, has_next: false, local_criteria: []
     } });
   });
 
@@ -998,8 +1154,10 @@ test('existing actor and director People search remains available in Library and
   const discoverWriterAction = discoverPerson.getByRole('button', { name: 'Written films' });
   await expect(discoverWriterAction).toBeVisible();
   await discoverWriterAction.click();
-  await expect.poll(() => discoverWriterUrl).not.toBe('');
-  expect(new URL(discoverWriterUrl).searchParams.get('role')).toBe('writer');
+  await expect.poll(() => discoverWriter).not.toBeNull();
+  expect(discoverWriter.role).toBe('writer');
+  expect(discoverWriter.id).toBe(person.id);
+  expect(advancedPersonRequests).toEqual([]);
 });
 
 test('Library Keywords resolves a stored identity and filters owned SQL movies', async ({ page }) => {
@@ -1013,7 +1171,7 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
       tmdb_id: '5010'
     }
   };
-  let selectedKeywordUrl = '';
+  let selectedKeyword = null;
 
   await page.route('**/api/library?view=keywords*', (route) => route.fulfill({ json: {
     items: [{ keyword_key: 'tmdb:501', tmdb_id: '501', name: 'space opera', normalized_name: 'space opera', movie_count: 1 }],
@@ -1025,11 +1183,10 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
     source: 'catalog',
     catalog_generation: 1
   } }));
-  await page.route('**/api/library?view=cards*', (route) => {
-    const url = route.request().url();
-    const selectedKeyword = new URL(url).searchParams.get('keyword_id');
-    if (selectedKeyword === '501') {
-      selectedKeywordUrl = url;
+  await page.route(libraryCardsRoute, (route) => {
+    const keywordValue = requestGroup(route, 'keyword')?.values?.[0];
+    if (keywordValue?.id === '501') {
+      selectedKeyword = keywordValue;
       return route.fulfill({ json: {
         items: [keywordMovie],
         count: 1,
@@ -1064,12 +1221,12 @@ test('Library Keywords resolves a stored identity and filters owned SQL movies',
   await expect(page.getByLabel('Library search type')).toHaveValue('movies');
   await expect(page.getByText('Space Archive', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Library path')).toContainText('Keyword: space opera');
-  expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
+  expect(selectedKeyword.id).toBe('501');
 });
 
 test('Library keyword pagination replaces bounded pages and reaches every identity', async ({ page }) => {
   const requestedUrls = [];
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: {
     items: [],
     count: 0,
     total: 0,
@@ -1144,7 +1301,7 @@ test('Library Keywords ignores an older in-flight SQL suggestion response', asyn
     releaseSlowSearch = resolve;
   });
 
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: {
     items: [],
     count: 0,
     total: 0,
@@ -1204,7 +1361,7 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
     tmdb_vote_count: 900,
     plot: 'A remote keyword result.'
   };
-  let selectedKeywordUrl = '';
+  let selectedKeyword = null;
 
   await page.route('**/api/tmdb/keywords/search**', (route) => {
     const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
@@ -1220,11 +1377,12 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
       total_results: 41
     } });
   });
-  await page.route('**/api/tmdb/discover**', (route) => {
-    const url = route.request().url();
-    if (new URL(url).searchParams.get('keyword_id') === '501') {
-      selectedKeywordUrl = url;
-      const requestedPage = Number(new URL(url).searchParams.get('page') || 1);
+  await page.route('**/api/tmdb/discover?*', (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const keywordId = params.get('keyword_id');
+    if (keywordId === '501') {
+      selectedKeyword = { id: keywordId, label: params.get('keyword_name') };
+      const requestedPage = Number(params.get('page') || 1);
       const movie = requestedPage === 1
         ? keywordMovie
         : { ...keywordMovie, tmdb_id: `880${requestedPage}`, title: `Remote Space Page ${requestedPage}` };
@@ -1236,6 +1394,13 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
         total_pages: 3,
         total_results: 41
       } });
+    }
+    return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
+  });
+  await page.route('**/api/tmdb/discover/advanced', (route) => {
+    const keywordValue = requestGroup(route, 'keyword')?.values?.[0];
+    if (keywordValue) {
+      return route.fulfill({ status: 500, json: { error: 'Pure Keyword navigation must stay provider-owned' } });
     }
     return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
   });
@@ -1272,7 +1437,7 @@ test('Discover Keywords keeps TMDB identity, ownership attachment, and back navi
 
   await expect(page.getByText('Remote Space Archive', { exact: true })).toBeVisible();
   await expect(page.locator('.unified-owned-badge').filter({ hasText: 'Owned' })).toBeVisible();
-  expect(new URL(selectedKeywordUrl).searchParams.get('keyword_id')).toBe('501');
+  expect(selectedKeyword.id).toBe('501');
 
   const relationshipPager = page.getByRole('navigation', { name: 'TMDB relationship pagination' });
   await expect(relationshipPager.getByText('Page 1 of 3')).toBeVisible();
@@ -1351,13 +1516,13 @@ test('Discover relationship paging rejects stale pages and follows shrinking pro
     total_pages: 1,
     total_results: 1
   } }));
-  await page.route('**/api/tmdb/discover**', async (route) => {
-    const url = new URL(route.request().url());
-    if (url.searchParams.get('keyword_id') !== '601') {
+  await page.route('**/api/tmdb/discover?*', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get('keyword_id') !== '601') {
       return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
     }
-    const requestedPage = Number(url.searchParams.get('page') || 1);
-    const genre = url.searchParams.get('genre') || '';
+    const requestedPage = Number(params.get('page') || 1);
+    const genre = '';
     requestedPages.push({ page: requestedPage, genre });
     if (requestedPage === 2 && !genre) {
       slowPageStarted = true;
@@ -1371,7 +1536,25 @@ test('Discover relationship paging rejects stale pages and follows shrinking pro
       } }).catch(() => {});
       return;
     }
-    if (requestedPage === 2 && genre === '28') {
+    const title = 'Original page 1';
+    return route.fulfill({ json: {
+      results: [{ tmdb_id: `page-${requestedPage}`, title, year: '2024', genres: [] }],
+      page: requestedPage,
+      page_size: 20,
+      total_pages: 3,
+      total_results: 41
+    } });
+  });
+  await page.route('**/api/tmdb/discover/advanced', (route) => {
+    const body = route.request().postDataJSON() || {};
+    const keywordValue = requestGroup(route, 'keyword')?.values?.[0];
+    const requestedPage = Number(body.page || 1);
+    const genre = requestGroup(route, 'genre')?.values?.[0]?.id || '';
+    if (keywordValue?.id !== '601' || genre !== '28') {
+      return route.fulfill({ json: { results: [], page: 1, total_pages: 1, total_results: 0 } });
+    }
+    requestedPages.push({ page: requestedPage, genre });
+    if (requestedPage === 2) {
       totalsShrank = true;
       return route.fulfill({ json: {
         results: [],
@@ -1381,7 +1564,7 @@ test('Discover relationship paging rejects stale pages and follows shrinking pro
         total_results: 1
       } });
     }
-    const title = totalsShrank ? 'Shrunk total page 1' : genre === '28' ? 'Filtered page 1' : 'Original page 1';
+    const title = totalsShrank ? 'Shrunk total page 1' : 'Filtered page 1';
     return route.fulfill({ json: {
       results: [{ tmdb_id: `page-${requestedPage}`, title, year: '2024', genres: genre ? ['Action'] : [] }],
       page: requestedPage,
@@ -1650,13 +1833,38 @@ test('Discover People and Actor Director Writer relationships replace pages beyo
     } });
   });
   await page.route('**/api/tmdb/person_movies**', (route) => {
-    const url = new URL(route.request().url());
-    const requestedPage = Number(url.searchParams.get('page') || 1);
-    const role = url.searchParams.get('role') || 'actor';
-    const genre = url.searchParams.get('genre') || '';
-    requestedRelationships.push({ page: requestedPage, role, genre });
+    const params = new URL(route.request().url()).searchParams;
+    const requestedPage = Number(params.get('page') || 1);
+    const role = params.get('role') || 'actor';
+    requestedRelationships.push({ owner: 'person-credits', page: requestedPage, role, genre: '' });
     return route.fulfill({ json: {
       results: [{
+        tmdb_id: `${role}-${requestedPage}`,
+        title: `${role} page ${requestedPage}`,
+        year: '2024',
+        poster_url: '',
+        genres: ['Drama'],
+        tmdb_rating: '8.0',
+        tmdb_vote_count: 500,
+        plot: `${role} relationship page`
+      }],
+      role,
+      person_id: '730',
+      page: requestedPage,
+      page_size: 20,
+      total_pages: 12,
+      total_results: 221
+    } });
+  });
+  await page.route('**/api/tmdb/discover/advanced', (route) => {
+    const body = route.request().postDataJSON() || {};
+    const requestedPage = Number(body.page || 1);
+    const role = requestGroup(route, 'person')?.values?.[0]?.role || 'actor';
+    const genre = requestGroup(route, 'genre')?.values?.[0]?.id || '';
+    const owned = requestGroup(route, 'availability')?.values?.[0]?.id === 'owned';
+    requestedRelationships.push({ owner: 'advanced', page: requestedPage, role, genre });
+    return route.fulfill({ json: {
+      results: owned ? [] : [{
         tmdb_id: `${role}-${requestedPage}`,
         title: `${role} page ${requestedPage}${genre ? ` genre ${genre}` : ''}`,
         year: '2024',
@@ -1671,7 +1879,8 @@ test('Discover People and Actor Director Writer relationships replace pages beyo
       page: requestedPage,
       page_size: 20,
       total_pages: 12,
-      total_results: 221
+      total_results: 221,
+      local_criteria: (body.query?.groups || []).filter((group) => ['availability', 'viewing_status', 'movie_list'].includes(group.type))
     } });
   });
   await page.route('**/api/library/check', (route) => route.fulfill({
@@ -1706,17 +1915,18 @@ test('Discover People and Actor Director Writer relationships replace pages beyo
 
   await page.getByLabel('Library ownership').selectOption('owned');
   await expect(page.getByText('No owned movies match this TMDB result page.')).toBeVisible();
+  await expect(relationshipPager.getByText('Page 1 of 12')).toBeVisible();
   await expect(relationshipPager.getByRole('button', { name: 'Next' })).toBeEnabled();
   await relationshipPager.getByRole('button', { name: 'Next' }).click();
-  await expect(relationshipPager.getByText('Page 12 of 12')).toBeVisible();
-  await expect(relationshipPager.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await expect(relationshipPager.getByText('Page 2 of 12')).toBeVisible();
+  await expect(relationshipPager.getByRole('button', { name: 'Previous' })).toBeEnabled();
 
   await page.getByLabel('Library ownership').selectOption('all');
-  await expect(page.getByText('actor page 12', { exact: true })).toBeVisible();
+  await expect(page.getByText('actor page 1', { exact: true })).toBeVisible();
   await page.locator('.discover-toolbar select').nth(2).selectOption('28');
   await expect(page.getByText('actor page 1 genre 28', { exact: true })).toBeVisible();
   await expect(relationshipPager.getByText('Page 1 of 12')).toBeVisible();
-  expect(requestedRelationships.at(-1)).toEqual({ page: 1, role: 'actor', genre: '28' });
+  expect(requestedRelationships.at(-1)).toEqual({ owner: 'advanced', page: 1, role: 'actor', genre: '28' });
 
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(page.locator('.person-search-card').filter({ hasText: 'Page Person 2' })).toBeVisible();
@@ -1830,7 +2040,7 @@ test('Library credit clicks load the people projection before filtering owned wo
     }
   ];
   const person = { id: '380', name: 'Robert De Niro', character: 'Lead' };
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: { items: cards, count: 2, total: 2, page: 1, total_pages: 1, catalog_generation: 1 } }));
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: { items: cards, count: 2, total: 2, page: 1, total_pages: 1, catalog_generation: 1 } }));
   await page.route('**/api/library?view=people*', (route) => route.fulfill({ json: {
     items: cards.map((item) => ({
       path: item.path,
@@ -1880,10 +2090,10 @@ test('Library server paging, filtered selection, and navigation preserve exact r
     canonical_metadata: { accepted: true, title: label, year: String(2020 + index), plot: `${label} plot.` }
   });
   const requests = [];
-  await page.route('**/api/library?view=cards*', (route) => {
-    const url = new URL(route.request().url());
-    const pageNumber = Number(url.searchParams.get('page') || 1);
-    const query = url.searchParams.get('q') || '';
+  await page.route(libraryCardsRoute, (route) => {
+    const body = route.request().postDataJSON() || {};
+    const pageNumber = Number(body.page || 1);
+    const query = requestGroup(route, 'title')?.values?.[0]?.text || '';
     requests.push({ page: pageNumber, query });
     const filtered = query === 'Needle';
     const items = [makeItem(filtered ? 'Needle Result' : `Server Page ${pageNumber}`, pageNumber)];
@@ -1899,7 +2109,7 @@ test('Library server paging, filtered selection, and navigation preserve exact r
   });
   await page.route('**/api/library/selection', async (route) => {
     const body = route.request().postDataJSON();
-    expect(body.filters.query).toBe('');
+    expect(body.query.groups).toEqual([]);
     await route.fulfill({ json: { paths: Array.from({ length: 81 }, (_, index) => `path-${index}`), count: 81 } });
   });
 
@@ -1935,7 +2145,7 @@ test('owned Library posters render from immutable local assets without detail pr
       poster_url: localPosterUrl
     }
   };
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: {
     items: [localPosterItem],
     count: 1,
     total: 1,
@@ -2267,6 +2477,8 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
               video_bit_depth: 10,
               audio_codec: 'AAC',
               audio_channels: 2,
+              audio_language_losses: ['French'],
+              comparison_peer: 'Project.Hail.Mary.2026.1080p.mkv',
               size_human: '2.0 GB'
             },
           ]
@@ -2283,6 +2495,12 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
         paths: [candidatePath],
         folder_count: 1,
         file_count: 0,
+        audio_language_losses: [{
+          path: candidatePath,
+          filename: 'Project.Hail.Mary.2026.720p.mkv',
+          languages: ['French'],
+          keeper: 'Project.Hail.Mary.2026.1080p.mkv',
+        }],
         actions: [{
           target_type: 'folder',
           target: folderTarget,
@@ -2343,11 +2561,22 @@ test('Duplicate cleanup confirms and submits the complete safe movie folder', as
   await expect(dialog).toContainText('1 complete movie folder will move to the Recycle Bin');
   await expect(dialog).toContainText('including 4 sidecar files');
   await expect(dialog).toContainText(folderTarget);
-  await dialog.getByRole('button', { name: 'Move to Recycle Bin' }).click();
+  const confirmDelete = dialog.getByRole('button', { name: 'Move to Recycle Bin' });
+  await expect(dialog).toContainText('loses: French audio from Project.Hail.Mary.2026.720p.mkv');
+  await expect(confirmDelete).toBeDisabled();
+  await dialog.getByRole('checkbox').check();
+  await expect(confirmDelete).toBeEnabled();
+  await confirmDelete.click();
 
   await expect.poll(() => executedRequest).not.toBeNull();
   expect(executedRequest.paths).toEqual([candidatePath]);
   expect(executedRequest.folder_targets).toEqual([folderTarget]);
+  expect(executedRequest.confirmed_audio_language_losses).toEqual([{
+    path: candidatePath,
+    filename: 'Project.Hail.Mary.2026.720p.mkv',
+    languages: ['French'],
+    keeper: 'Project.Hail.Mary.2026.1080p.mkv',
+  }]);
   await expect(page.getByText('1 movie file moved to Recycle Bin, including 1 complete folder')).toBeVisible();
 });
 
@@ -2577,7 +2806,7 @@ test('Maintenance upgrade summary opens the authoritative Library filter', async
     },
     identity: { items: [], pagination: { total: 0, page: 1, total_pages: 1 } }
   } }));
-  await page.route('**/api/library?view=cards*', (route) => route.fulfill({ json: {
+  await page.route(libraryCardsRoute, (route) => route.fulfill({ json: {
     items: [upgradeItem],
     count: 1,
     total: 1,
@@ -3214,8 +3443,7 @@ test('adaptive Discover paging fills the measured desktop card rows', async ({ p
   }));
 
   await page.route('**/api/tmdb/discover**', async (route) => {
-    const url = new URL(route.request().url());
-    const pageSize = Number(url.searchParams.get('page_size') || 20);
+    const pageSize = Number(route.request().postDataJSON()?.page_size || 20);
     requestedPageSizes.push(pageSize);
     await route.fulfill({ json: {
       results: movies.slice(0, pageSize),
@@ -3625,12 +3853,12 @@ test('cold Library navigation measures the grid once and defers unrelated startu
     deferredCurationRequests.push(`${route.request().method()} /api/streaming/config`);
     return route.fulfill({ json: { enabled: false, label: 'Stream', url_template: '' } });
   });
-  await page.route('**/api/library?view=cards*', async (route) => {
-    libraryRequests.push(new URL(route.request().url()));
+  await page.route(libraryCardsRoute, async (route) => {
+    libraryRequests.push(route.request().postDataJSON() || {});
     await libraryGate;
     await route.fulfill({ json: {
       items: [parityLibraryItem], count: 1, total: 1, page: 1,
-      page_size: Number(libraryRequests.at(-1).searchParams.get('page_size')),
+      page_size: Number(libraryRequests.at(-1).page_size),
       total_pages: 1, page_start: 1, page_end: 1,
       facets: { genres: [], sources: [], languages: [], countries: [] },
       stats: { total: 1, low: 0, matched: 1, pending: 0, unmatched: 0 },
@@ -3643,7 +3871,7 @@ test('cold Library navigation measures the grid once and defers unrelated startu
   await expect.poll(() => page.evaluate(() => window.__cpInitialSyncEmitted)).toBe(true);
   await page.waitForTimeout(75);
   expect(libraryRequests).toHaveLength(1);
-  expect(libraryRequests[0].searchParams.get('page_size')).toBe('39');
+  expect(libraryRequests[0].page_size).toBe(39);
   expect(deferredHomeRequests).toEqual([]);
   expect(deferredCurationRequests).toEqual([]);
 
@@ -3686,7 +3914,7 @@ test('committed catalog event quietly adds a final Library card without unmounti
   let markRefreshStarted;
   const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
   const refreshStarted = new Promise((resolve) => { markRefreshStarted = resolve; });
-  await page.route('**/api/library?view=cards*', async (route) => {
+  await page.route(libraryCardsRoute, async (route) => {
     requestCount += 1;
     if (requestCount > 1) {
       markRefreshStarted();

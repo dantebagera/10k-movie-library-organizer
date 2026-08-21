@@ -1,5 +1,35 @@
 # Changelog
 
+## v2.8.5 - August 2026
+
+Cinema Paradiso v2.8.5 adds one shared advanced-search language across the local Library and TMDB Discover, expands IPTV movie review and classification, and tightens native playback and catalogue behavior.
+
+### Added
+
+- A shared, validated advanced-search query model and desktop criterion builder for Library and Discover.
+- SQL-owned compound Library search, identity lookup, stable query signatures, paging, and complete-result selection.
+- TMDB-owned compound Discover planning with bounded provider paging and explicit handling for criteria TMDB cannot prove globally.
+- Provider-local IPTV movie classification, metadata-review, rebuild, fusion, manual-match, and list workflows with preview-before-apply routes.
+- Optional localhost Ollama assistance for IPTV classification with bounded payload validation and provider-local settings.
+- Complete normalized audio-track inventories in authoritative media-file facts.
+- Native-player subtitle action icons and Windows media play/pause command handling.
+- Zero-regression design records for advanced-search ownership, continuity, and release handoff.
+
+### Changed
+
+- Library and Discover simple filters compile into the same query contract used by Advanced mode instead of maintaining a second filter language.
+- IPTV movie storage, enrichment, filtering, pagination, and review state remain provider-local while exposing richer desktop controls.
+- Native-player source metadata and compatibility now identify player `0.1.25` for Cinema Paradiso 2.8.5.
+- Desktop search, pagination, Maintenance, and IPTV layouts were refined without introducing a separate mobile redesign.
+
+### Fixed
+
+- Completed movies opened for rewatch now create a fresh resumable playback session while preserving the independent Watched state.
+- Continue Watching can present an unfinished rewatch even when the movie remains Watched.
+- Maintenance audio decisions use every audio track and exclude subtitle streams from the audio inventory.
+- Stale Discover requests and navigation history no longer replace a newer advanced-search result.
+- Native Windows media play/pause requests respect the resume-decision gate and reveal player controls.
+
 ## v2.8.4 - August 2026
 
 Cinema Paradiso v2.8.4 expands Home trailers, makes list and card actions update immediately, and keeps bulk selections and page navigation consistent across the desktop workspaces.

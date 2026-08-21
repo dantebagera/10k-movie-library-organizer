@@ -21,9 +21,10 @@ from services.media_file_facts import (
     quality_display,
 )
 from services.smart_match import parse_release_filename
+from services.advanced_search import group_map, normalize_query
 
 
-CATALOG_SCHEMA_VERSION = 10
+CATALOG_SCHEMA_VERSION = 11
 
 PLAYBACK_HISTORY_COLUMNS = [
     "path_key", "movie_key", "position_ms", "duration_ms", "last_played_at",
@@ -42,7 +43,7 @@ MEDIA_FILE_V8_COLUMNS = [
     "manual_locked", "raw_json",
 ]
 
-MEDIA_FILE_FACT_COLUMNS = [
+MEDIA_FILE_FACT_V9_COLUMNS = [
     "video_width", "video_height", "video_codec", "video_profile",
     "video_bit_depth", "video_bitrate", "video_frame_rate", "duration_ms",
     "display_aspect_ratio", "rotation_degrees", "audio_codec",
@@ -53,16 +54,19 @@ MEDIA_FILE_FACT_COLUMNS = [
     "probe_modified_time",
 ]
 
+MEDIA_FILE_FACT_COLUMNS = MEDIA_FILE_FACT_V9_COLUMNS + ["audio_tracks_json"]
+
 MEDIA_FILE_MEASUREMENT_COLUMNS = [
     "video_width", "video_height", "video_codec", "video_profile",
     "video_bit_depth", "video_bitrate", "video_frame_rate", "duration_ms",
     "display_aspect_ratio", "rotation_degrees", "audio_codec",
     "audio_channels", "audio_bitrate", "filename_quality_claim",
     "quality_class", "quality_conflict", "quality_nonstandard",
-    "file_facts_version", "classifier_version",
+    "file_facts_version", "classifier_version", "audio_tracks_json",
 ]
 
-MEDIA_FILE_V9_COLUMNS = MEDIA_FILE_V8_COLUMNS + MEDIA_FILE_FACT_COLUMNS
+MEDIA_FILE_V9_COLUMNS = MEDIA_FILE_V8_COLUMNS + MEDIA_FILE_FACT_V9_COLUMNS
+MEDIA_FILE_V11_COLUMNS = MEDIA_FILE_V8_COLUMNS + MEDIA_FILE_FACT_COLUMNS
 
 
 class CatalogError(RuntimeError):
@@ -366,6 +370,30 @@ class CatalogStore:
                 + ", ".join(sorted(required - indexes))
             )
 
+    def _validate_v11_schema(self, connection, *, require_version=True):
+        if require_version and self._catalog_schema_version(connection) != 11:
+            raise CatalogError("Catalogue schema version is not 11")
+        if self._table_columns(connection, "media_files") != MEDIA_FILE_V11_COLUMNS:
+            raise CatalogError("Version 11 media_files schema is incomplete")
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        required = {
+            "idx_media_files_quality",
+            "idx_media_files_facts_stale",
+            "idx_playback_history_movie",
+            "idx_playback_history_recent",
+        }
+        if not required.issubset(indexes):
+            raise CatalogError(
+                "Version 11 indexes are incomplete: "
+                + ", ".join(sorted(required - indexes))
+            )
+        self._validate_v8_schema_relations(connection)
+
     def _validate_v8_schema_relations(self, connection):
         expected_credit_columns = [
             "snapshot_key", "credit_type", "position", "person_key",
@@ -539,6 +567,44 @@ class CatalogStore:
             "foreign_key_violations": len(foreign_keys),
         }
 
+    def _migrate_v10_to_v11(self, connection):
+        if self._catalog_schema_version(connection) != 10:
+            raise CatalogError("Version 10 to 11 migration received the wrong source version")
+        self._validate_v10_schema(connection)
+        before = self._logical_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+        self._migration_checkpoint("before_v11_audio_inventory")
+        connection.execute(
+            "ALTER TABLE media_files ADD COLUMN audio_tracks_json "
+            "TEXT NOT NULL DEFAULT '[]'"
+        )
+        self._migration_checkpoint("before_v11_schema_version_update")
+        connection.execute(
+            "UPDATE catalog_meta SET value='11' WHERE key='schema_version'"
+        )
+        self._migration_checkpoint("during_v11_final_validation")
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if integrity != "ok" or foreign_keys:
+            raise CatalogError(
+                f"Version 11 final integrity failed: integrity={integrity}, "
+                f"foreign_keys={len(foreign_keys)}"
+            )
+        self._validate_v11_schema(connection)
+        after = self._logical_digest(connection, "media_files", MEDIA_FILE_V9_COLUMNS)
+        if after != before:
+            raise CatalogError("Version 11 migration changed pre-existing media file data")
+        return {
+            "from_version": 10,
+            "to_version": 11,
+            "media_files_digest_before": before,
+            "media_files_digest_after": after,
+            "audio_inventory_rows_pending": int(connection.execute(
+                "SELECT COUNT(*) FROM media_files"
+            ).fetchone()[0]),
+            "integrity_check": integrity,
+            "foreign_key_violations": len(foreign_keys),
+        }
+
     def _migrate_v6_to_v7(self, connection):
         if self._catalog_schema_version(connection) != 6:
             raise CatalogError("Version 6 to 7 migration received the wrong source version")
@@ -659,12 +725,15 @@ class CatalogStore:
                 if starting_schema == 9:
                     migration_reports.append(self._migrate_v9_to_v10(connection))
                     starting_schema = 10
-                elif starting_schema != 10:
+                if starting_schema == 10:
+                    migration_reports.append(self._migrate_v10_to_v11(connection))
+                    starting_schema = 11
+                elif starting_schema != 11:
                     raise CatalogError(
                         f"Unsupported catalogue schema version {starting_schema}; "
-                        "expected 6, 7, 8, 9, or 10"
+                        "expected 6, 7, 8, 9, 10, or 11"
                     )
-                self._validate_v10_schema(connection)
+                self._validate_v11_schema(connection)
 
             _execute_schema(connection, """
                 CREATE TABLE IF NOT EXISTS catalog_meta (
@@ -733,7 +802,8 @@ class CatalogStore:
                     probed_at REAL NOT NULL DEFAULT 0,
                     probe_error TEXT NOT NULL DEFAULT '',
                     probe_size INTEGER NOT NULL DEFAULT 0,
-                    probe_modified_time REAL NOT NULL DEFAULT 0
+                    probe_modified_time REAL NOT NULL DEFAULT 0,
+                    audio_tracks_json TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE TABLE IF NOT EXISTS media_identity_keys (
@@ -928,7 +998,7 @@ class CatalogStore:
                     "INSERT INTO catalog_meta(key, value) VALUES('schema_version', ?)",
                     (str(CATALOG_SCHEMA_VERSION),),
                 )
-                self._validate_v10_schema(connection)
+                self._validate_v11_schema(connection)
         if migration_reports:
             report = {
                 **migration_reports[0],
@@ -1090,13 +1160,14 @@ class CatalogStore:
                 _text(record.get("probe_status") or "unprobed"), _number(record.get("probed_at")),
                 _text(record.get("probe_error"))[:80], int(_number(record.get("probe_size"))),
                 _number(record.get("probe_modified_time")),
+                _text(record.get("audio_tracks_json") or "[]"),
         )
 
     @classmethod
     def _upsert_media_file(cls, connection, path_key, record):
         values = cls._media_file_values(path_key, record)
         placeholders = ",".join("?" for _ in values)
-        columns = ",".join(MEDIA_FILE_V9_COLUMNS)
+        columns = ",".join(MEDIA_FILE_V11_COLUMNS)
         connection.execute(
             f"INSERT OR REPLACE INTO media_files({columns}) VALUES ({placeholders})",
             values,
@@ -1494,10 +1565,12 @@ class CatalogStore:
                     pms.poster_url,
                     pms.plot,
                     pms.rating,
+                    pms.vote_count,
                     pms.language,
                     pms.country,
                     pms.country_flag,
                     pms.release_date,
+                    pms.runtime,
                     COALESCE(NULLIF(resolved.override_title, ''), NULLIF(resolved.canonical_title, ''),
                              NULLIF(pms.title, ''), NULLIF(resolved.parsed_title, ''), resolved.filename) AS display_title,
                     COALESCE(NULLIF(resolved.override_year, ''), NULLIF(resolved.canonical_year, ''),
@@ -1675,13 +1748,206 @@ class CatalogStore:
         return (" WHERE " + " AND ".join(f"({clause})" for clause in clauses)) if clauses else "", parameters
 
     @staticmethod
+    def _advanced_library_filter_sql(query, *, upgrade_path_keys=()):
+        normalized, groups = group_map(query, "library")
+        clauses = []
+        parameters = []
+
+        def add(clause, *values):
+            clauses.append(clause)
+            parameters.extend(values)
+
+        def relational_values(group, clause_factory):
+            value_clauses = []
+            value_parameters = []
+            for value in group["values"]:
+                clause, clause_parameters = clause_factory(value)
+                value_clauses.append(f"({clause})")
+                value_parameters.extend(clause_parameters)
+            if group.get("join", "or") == "and":
+                for clause in value_clauses:
+                    clauses.append(clause)
+                parameters.extend(value_parameters)
+            else:
+                add("(" + " OR ".join(value_clauses) + ")", *value_parameters)
+
+        title = groups.get("title")
+        if title:
+            add("""
+                LOWER(
+                    COALESCE(e.display_title, '') || ' ' || COALESCE(e.display_year, '') || ' ' ||
+                    COALESCE(e.filename, '') || ' ' || COALESCE(e.path, '') || ' ' ||
+                    COALESCE(e.plot, '') || ' ' || COALESCE((
+                        SELECT GROUP_CONCAT(g.name, ' ')
+                        FROM movie_genres mg JOIN genres g ON g.genre_key = mg.genre_key
+                        WHERE mg.snapshot_key = e.snapshot_key
+                    ), '')
+                ) LIKE ?
+            """, f"%{title['values'][0]['text'].lower()}%")
+
+        genre = groups.get("genre")
+        if genre:
+            def genre_clause(value):
+                return """
+                    EXISTS(
+                        SELECT 1
+                        FROM movie_genres mg
+                        JOIN genres g ON g.genre_key = mg.genre_key
+                        WHERE mg.snapshot_key = e.snapshot_key
+                          AND (g.genre_key = ? OR g.name = ? OR g.name = ?)
+                    )
+                """, [value["id"], value["id"], value["label"]]
+            relational_values(genre, genre_clause)
+
+        person = groups.get("person")
+        if person:
+            def person_clause(value):
+                credit_type = "cast" if value["role"] == "actor" else value["role"]
+                return """
+                    EXISTS(
+                        SELECT 1
+                        FROM movie_credits mc
+                        JOIN people p ON p.person_key = mc.person_key
+                        WHERE mc.snapshot_key = e.snapshot_key
+                          AND mc.credit_type = ?
+                          AND (
+                              p.person_key = ?
+                              OR COALESCE(NULLIF(p.tmdb_id, ''), p.provider_id) = ?
+                          )
+                    )
+                """, [credit_type, value["id"], value["id"]]
+            relational_values(person, person_clause)
+
+        keyword = groups.get("keyword")
+        if keyword:
+            def keyword_clause(value):
+                return """
+                    EXISTS(
+                        SELECT 1
+                        FROM movie_keywords mk
+                        JOIN keywords k ON k.keyword_key = mk.keyword_key
+                        WHERE mk.snapshot_key = e.snapshot_key
+                          AND (
+                              k.keyword_key = ?
+                              OR (k.tmdb_id <> '' AND k.tmdb_id = ?)
+                              OR k.normalized_name = ?
+                          )
+                    )
+                """, [value["id"], value["id"], normalize_keyword_name(value["label"])]
+            relational_values(keyword, keyword_clause)
+
+        def numeric_clause(column, value, *, require_positive=False):
+            prefix = f"{column} IS NOT NULL"
+            if require_positive:
+                prefix += f" AND CAST({column} AS REAL) > 0"
+            operator = value["operator"]
+            if operator == "between":
+                return f"{prefix} AND CAST({column} AS REAL) BETWEEN ? AND ?", [value["from"], value["to"]]
+            sql_operator = {"exactly": "=", "at_least": ">=", "at_most": "<="}[operator]
+            return f"{prefix} AND CAST({column} AS REAL) {sql_operator} ?", [value["value"]]
+
+        year = groups.get("year")
+        if year:
+            clause, values = numeric_clause("NULLIF(e.display_year, '')", year["values"][0], require_positive=True)
+            add(clause, *values)
+
+        rating = groups.get("rating")
+        if rating:
+            clause, values = numeric_clause("NULLIF(e.rating, '')", rating["values"][0], require_positive=True)
+            add(clause, *values)
+
+        language = groups.get("language")
+        if language:
+            value = language["values"][0]
+            add("(e.language = ? OR e.language = ?)", value["id"], value["label"])
+
+        country = groups.get("country")
+        if country:
+            value = country["values"][0]
+            add(
+                "(UPPER(COALESCE(NULLIF(e.country, ''), e.country_flag)) = UPPER(?) OR COALESCE(NULLIF(e.country_flag, ''), e.country) = ?)",
+                value["id"], value["label"],
+            )
+
+        runtime = groups.get("runtime")
+        if runtime:
+            value = runtime["values"][0]
+            preset = value["preset"]
+            if preset == "short":
+                add("e.runtime IS NOT NULL AND e.runtime > 0 AND e.runtime < 60")
+            elif preset == "feature":
+                add("e.runtime IS NOT NULL AND e.runtime BETWEEN 60 AND 149")
+            elif preset == "long":
+                add("e.runtime IS NOT NULL AND e.runtime >= 150")
+            else:
+                add("e.runtime IS NOT NULL AND e.runtime > 0 AND e.runtime BETWEEN ? AND ?", value["from"], value["to"])
+
+        def list_membership(value, *, system_type=False):
+            field = "ul.system_type" if system_type else "li.list_id"
+            return f"""
+                EXISTS(
+                    SELECT 1
+                    FROM list_items li
+                    JOIN user_lists ul ON ul.list_id = li.list_id
+                    WHERE {field} = ?
+                      AND (
+                        (li.tmdb_id <> '' AND li.tmdb_id = e.tmdb_id)
+                        OR (li.imdb_id <> '' AND LOWER(li.imdb_id) = LOWER(e.imdb_id))
+                        OR (li.path <> '' AND LOWER(li.path) = LOWER(e.path))
+                        OR li.identity_key IN (
+                            SELECT identity_key FROM media_identity_keys WHERE path_key = e.path_key
+                        )
+                      )
+                )
+            """, [value]
+
+        viewing = groups.get("viewing_status")
+        if viewing:
+            state = viewing["values"][0]["id"]
+            if state == "unwatched":
+                clause, values = list_membership("watched", system_type=True)
+                add("NOT (" + clause + ")", *values)
+            else:
+                clause, values = list_membership(state, system_type=True)
+                add(clause, *values)
+
+        movie_list = groups.get("movie_list")
+        if movie_list:
+            relational_values(movie_list, lambda value: list_membership(value["id"]))
+
+        resolution = groups.get("resolution")
+        if resolution:
+            resolution_clauses = []
+            for value in resolution["values"]:
+                resolution_clauses.append({
+                    "upgrade": "e.path_key IN (SELECT value FROM json_each(?))",
+                    "4k": "e.resolution_rank = 4",
+                    "1080p": "e.resolution_rank = 3",
+                    "720p": "e.resolution_rank = 2",
+                    "below-720p": "e.resolution_rank < 2",
+                }[value["id"]])
+                if value["id"] == "upgrade":
+                    parameters.append(_json_text(list(upgrade_path_keys or ())))
+            clauses.append("(" + " OR ".join(resolution_clauses) + ")")
+
+        source = groups.get("library_source")
+        if source:
+            add(
+                "e.rip_source IN (SELECT value FROM json_each(?))",
+                _json_text([value["id"] for value in source["values"]]),
+            )
+
+        where = (" WHERE " + " AND ".join(f"({clause})" for clause in clauses)) if clauses else ""
+        return normalized, where, parameters
+
+    @staticmethod
     def _library_sort_sql(sort_mode):
         title = (
             "cp_sort_key(e.display_title), e.display_title COLLATE NOCASE, "
             "e.added_time DESC, e.parsed_title COLLATE NOCASE, e.path_key"
         )
         return {
-            "rating": title,
+            "rating": f"CAST(COALESCE(NULLIF(e.rating, ''), '-1') AS REAL) DESC, {title}",
             "added": f"COALESCE(NULLIF(e.added_time, 0), e.modified_time, 0) DESC, {title}",
             "year-desc": f"CAST(COALESCE(NULLIF(e.display_year, ''), '0') AS INTEGER) DESC, {title}",
             "year-asc": f"CAST(COALESCE(NULLIF(e.display_year, ''), '0') AS INTEGER), {title}",
@@ -1711,12 +1977,20 @@ class CatalogStore:
         by_path = {row["path_key"]: row for row in decoded}
         return [by_path[key] for key in path_keys if key in by_path]
 
-    def library_page(self, filters=None, *, page=1, page_size=40):
+    def library_page(self, filters=None, *, query=None, page=1, page_size=40, upgrade_path_keys=()):
         filters = dict(filters or {})
         page_size = min(max(int(page_size or 40), 1), 200)
         page = max(int(page or 1), 1)
         cte = self._library_effective_cte()
-        where, parameters = self._library_filter_sql(filters)
+        if query is not None:
+            normalized_query, where, parameters = self._advanced_library_filter_sql(
+                query,
+                upgrade_path_keys=upgrade_path_keys,
+            )
+            sort_mode = normalized_query["sort"]["key"]
+        else:
+            where, parameters = self._library_filter_sql(filters)
+            sort_mode = filters.get("sort")
         connection = self.connect()
         try:
             total = int(connection.execute(
@@ -1729,7 +2003,7 @@ class CatalogStore:
                 row[0]
                 for row in connection.execute(
                     f"{cte} SELECT e.path_key FROM effective e{where} "
-                    f"ORDER BY {self._library_sort_sql(filters.get('sort'))} LIMIT ? OFFSET ?",
+                    f"ORDER BY {self._library_sort_sql(sort_mode)} LIMIT ? OFFSET ?",
                     [*parameters, page_size, offset],
                 ).fetchall()
             ]
@@ -1789,17 +2063,25 @@ class CatalogStore:
         finally:
             connection.close()
 
-    def library_selection_paths(self, filters=None):
+    def library_selection_paths(self, filters=None, *, query=None, upgrade_path_keys=()):
         filters = dict(filters or {})
         cte = self._library_effective_cte()
-        where, parameters = self._library_filter_sql(filters)
+        if query is not None:
+            normalized_query, where, parameters = self._advanced_library_filter_sql(
+                query,
+                upgrade_path_keys=upgrade_path_keys,
+            )
+            sort_mode = normalized_query["sort"]["key"]
+        else:
+            where, parameters = self._library_filter_sql(filters)
+            sort_mode = filters.get("sort")
         connection = self.connect()
         try:
             return [
                 row[0]
                 for row in connection.execute(
                     f"{cte} SELECT e.path FROM effective e{where} "
-                    f"ORDER BY {self._library_sort_sql(filters.get('sort'))}",
+                    f"ORDER BY {self._library_sort_sql(sort_mode)}",
                     parameters,
                 ).fetchall()
             ]
@@ -1953,6 +2235,64 @@ class CatalogStore:
             finally:
                 connection.close()
 
+    def library_people_identities(self, query="", *, limit=20):
+        """Return bounded controlled people identities from owned effective snapshots."""
+        normalized = _text(query).casefold()
+        try:
+            limit = min(max(int(limit or 20), 1), 20)
+        except (TypeError, ValueError):
+            limit = 20
+        if len(normalized) < 2:
+            return {
+                "items": [],
+                "count": 0,
+                "catalog_generation": self.generation("media"),
+            }
+        connection = self.connect()
+        try:
+            rows = connection.execute(
+                f"""
+                    {self._library_effective_cte()}
+                    SELECT
+                        CASE WHEN p.tmdb_id <> '' THEN p.tmdb_id ELSE p.provider_id END AS identity_id,
+                        p.name,
+                        GROUP_CONCAT(DISTINCT mc.credit_type) AS roles,
+                        COUNT(DISTINCT e.path_key) AS movie_count
+                    FROM effective e
+                    JOIN movie_credits mc ON mc.snapshot_key = e.snapshot_key
+                    JOIN people p ON p.person_key = mc.person_key
+                    WHERE LOWER(p.name) LIKE ?
+                    GROUP BY identity_id, p.name
+                    ORDER BY
+                        CASE WHEN LOWER(p.name) = ? THEN 0 ELSE 1 END,
+                        movie_count DESC,
+                        p.name COLLATE NOCASE,
+                        identity_id
+                    LIMIT ?
+                """,
+                (f"%{normalized}%", normalized, limit),
+            ).fetchall()
+            role_order = {"cast": 0, "director": 1, "writer": 2}
+            items = []
+            for row in rows:
+                roles = sorted(
+                    {"actor" if role == "cast" else role for role in str(row["roles"] or "").split(",") if role},
+                    key=lambda role: role_order.get("cast" if role == "actor" else role, 99),
+                )
+                items.append({
+                    "id": str(row["identity_id"] or row["name"]),
+                    "label": str(row["name"] or ""),
+                    "roles": roles,
+                    "movie_count": int(row["movie_count"] or 0),
+                })
+            return {
+                "items": items,
+                "count": len(items),
+                "catalog_generation": self.generation("media"),
+            }
+        finally:
+            connection.close()
+
     def candidates_for_paths(self, path_keys):
         connection = self.connect()
         try:
@@ -1980,6 +2320,7 @@ class CatalogStore:
                        mf.video_frame_rate, mf.duration_ms,
                        mf.display_aspect_ratio, mf.rotation_degrees,
                        mf.audio_codec, mf.audio_channels, mf.audio_bitrate,
+                       mf.audio_tracks_json,
                        mf.filename_quality_claim, mf.quality_class,
                        mf.quality_source, mf.quality_conflict,
                        mf.quality_nonstandard, mf.file_facts_version,
@@ -2013,6 +2354,7 @@ class CatalogStore:
                        mf.video_frame_rate, mf.duration_ms,
                        mf.display_aspect_ratio, mf.rotation_degrees,
                        mf.audio_codec, mf.audio_channels, mf.audio_bitrate,
+                       mf.audio_tracks_json,
                        mf.filename_quality_claim, mf.quality_class,
                        mf.quality_source, mf.quality_conflict,
                        mf.quality_nonstandard, mf.file_facts_version,
@@ -2039,8 +2381,8 @@ class CatalogStore:
             rows = connection.execute(f"""
                 SELECT path_key, path, filename, library_root, size, modified_time,
                        {fact_columns}
-                FROM media_files
-                WHERE file_facts_version < ?
+                FROM media_files AS mf
+                WHERE mf.file_facts_version < ?
                    OR classifier_version < ?
                    OR probe_status='unprobed'
                    OR (
@@ -2052,6 +2394,16 @@ class CatalogStore:
                    )
                    {retry_clause}
                 ORDER BY
+                    CASE WHEN (
+                        (mf.tmdb_id<>'' AND EXISTS (
+                            SELECT 1 FROM media_files AS peer
+                            WHERE peer.path_key<>mf.path_key AND peer.tmdb_id=mf.tmdb_id
+                        ))
+                        OR (mf.imdb_id<>'' AND EXISTS (
+                            SELECT 1 FROM media_files AS peer
+                            WHERE peer.path_key<>mf.path_key AND peer.imdb_id=mf.imdb_id
+                        ))
+                    ) THEN 0 ELSE 1 END,
                     CASE
                         WHEN quality_conflict=1 THEN 0
                         WHEN probe_status='unprobed' THEN 1
@@ -2150,6 +2502,13 @@ class CatalogStore:
                     field: row[field]
                     for field in MEDIA_FILE_MEASUREMENT_COLUMNS
                 })
+                try:
+                    previous_raw = json.loads(row["raw_json"] or "{}")
+                except (TypeError, ValueError):
+                    previous_raw = {}
+                facts["audio_tracks_json"] = _text(
+                    previous_raw.get("audio_tracks_json") or "[]"
+                )
                 facts.update(failure_state)
                 facts["quality_source"] = "last_measured_probe_failed"
             raw = json.loads(row["raw_json"]) if row["raw_json"] else {}

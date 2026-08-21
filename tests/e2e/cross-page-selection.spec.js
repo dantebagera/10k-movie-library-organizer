@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+const libraryCardsRoute = /\/api\/library(?:\?view=cards.*|\/search\/advanced)$/;
+
 function discoverMovie(tmdbId, title) {
   return {
     tmdb_id: String(tmdbId),
@@ -20,7 +22,7 @@ test('Discover keeps selected movies and bulk payloads across server pages', asy
   let bulkPayload = null;
 
   await page.route('**/api/tmdb/discover**', (route) => {
-    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+    const requestedPage = Number(route.request().postDataJSON()?.page || new URL(route.request().url()).searchParams.get('page') || 1);
     return route.fulfill({ json: {
       results: pages[requestedPage] || [],
       page: requestedPage,
@@ -103,8 +105,8 @@ test('Library keeps selected movies and resolved bulk items across server pages'
   ];
   let selectionPayload = null;
 
-  await page.route('**/api/library?view=cards*', (route) => {
-    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+  await page.route(libraryCardsRoute, (route) => {
+    const requestedPage = Number(route.request().postDataJSON()?.page || new URL(route.request().url()).searchParams.get('page') || 1);
     return route.fulfill({ json: {
       items: [items[requestedPage - 1]],
       count: 1,
@@ -258,10 +260,10 @@ test('Maintenance keeps selected paths across pages and previews the complete de
 
   await page.locator('.cleanup-workspace .library-pagination').getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('Page 2 of 2', { exact: true })).toBeVisible();
-  await expect(page.getByText('1 selected', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 selected', { exact: true })).toBeVisible();
 
   const pageTwoRow = page.locator('.cleanup-file-row').filter({ hasText: 'page-two-remove.mkv' });
-  await pageTwoRow.locator('input[type="checkbox"]').check();
+  await expect(pageTwoRow.locator('input[type="checkbox"]')).toBeChecked();
   await expect(page.getByText('2 selected', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Delete selected (2)', exact: true }).click();

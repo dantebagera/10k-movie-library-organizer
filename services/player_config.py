@@ -62,7 +62,7 @@ def default_player_config():
         "prefer_forced_subtitles": False,
         "prefer_hearing_impaired_subtitles": False,
         "resume_enabled": True,
-        "minimum_resume_seconds": 120,
+        "minimum_resume_seconds": 30,
         "completion_threshold": 0.92,
         "auto_mark_completed_watched": True,
         "hardware_decoding": "safe_auto",

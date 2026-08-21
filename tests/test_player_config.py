@@ -13,7 +13,7 @@ class PlayerConfigTests(unittest.TestCase):
 
         self.assertEqual(config.public_payload()["mode"], "os_default")
         self.assertEqual(config.public_payload()["completion_threshold"], 0.92)
-        self.assertEqual(config.public_payload()["minimum_resume_seconds"], 120)
+        self.assertEqual(config.public_payload()["minimum_resume_seconds"], 30)
         self.assertFalse(config.public_payload()["auto_subtitle_search"])
 
     def test_credentials_are_stored_but_never_returned(self):

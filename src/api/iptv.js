@@ -1,9 +1,11 @@
 import { fetchJson } from './client.js';
 
-function queryString(params) {
+export function queryString(params = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value !== '' && value !== undefined && value !== null && value !== false) query.set(key, String(value));
+    if (value !== '' && value !== undefined && value !== null && value !== false && ['string', 'number', 'boolean'].includes(typeof value)) {
+      query.set(key, String(value));
+    }
   });
   return query.toString();
 }
@@ -11,6 +13,11 @@ function queryString(params) {
 function providerPath(providerId, suffix = '') {
   if (!providerId) throw new Error('An IPTV provider must be selected');
   return `/api/iptv/providers/${encodeURIComponent(providerId)}${suffix}`;
+}
+
+function withQuery(path, params = {}) {
+  const query = queryString(params);
+  return query ? `${path}?${query}` : path;
 }
 
 export const iptvApi = {
@@ -48,12 +55,56 @@ export const iptvApi = {
   sync: (providerId) => fetchJson(providerPath(providerId, '/sync'), { method: 'POST' }),
   categories: (providerId, kind) => fetchJson(`${providerPath(providerId, '/categories')}?${queryString({ kind })}`),
   items: (providerId, params) => fetchJson(`${providerPath(providerId, '/items')}?${queryString(params)}`),
-  movies: (providerId, params) => fetchJson(`${providerPath(providerId, '/movies')}?${queryString(params)}`),
-  movieFacets: (providerId) => fetchJson(providerPath(providerId, '/movies/facets')),
+  movies: (providerId, params, options) => fetchJson(`${providerPath(providerId, '/movies')}?${queryString(params)}`, options),
+  movieFacets: (providerId, params = {}) => fetchJson(withQuery(providerPath(providerId, '/movies/facets'), params)),
   movieProjectionStatus: (providerId) => fetchJson(providerPath(providerId, '/movies/projection/status')),
   retryMovieProjection: (providerId) => fetchJson(providerPath(providerId, '/movies/projection/retry'), { method: 'POST' }),
-  movieStatus: (providerId) => fetchJson(providerPath(providerId, '/movies/metadata/status')),
+  movieStatus: (providerId, params = {}) => fetchJson(withQuery(providerPath(providerId, '/movies/metadata/status'), params)),
   movieMetadataReview: (providerId, params = {}) => fetchJson(`${providerPath(providerId, '/movies/metadata/review')}?${queryString(params)}`),
+  movieClassificationPreview: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/classification/preview'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  movieClassificationApply: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/classification/apply'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  createMovieMatchJob: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/match-jobs'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  movieMatchJob: (providerId, jobId) => fetchJson(providerPath(providerId, `/movies/match-jobs/${encodeURIComponent(jobId)}`)),
+  cancelMovieMatchJob: (providerId, jobId) => fetchJson(providerPath(providerId, `/movies/match-jobs/${encodeURIComponent(jobId)}/cancel`), { method: 'POST' }),
+  applyMovieMatchJob: (providerId, jobId, payload = {}) => fetchJson(providerPath(providerId, `/movies/match-jobs/${encodeURIComponent(jobId)}/apply`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  movieRebuildPreview: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/rebuild/preview'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  movieRebuildJob: (providerId, jobId) => fetchJson(providerPath(providerId, `/movies/rebuild/${encodeURIComponent(jobId)}`)),
+  applyMovieRebuild: (providerId, jobId, payload = {}) => fetchJson(providerPath(providerId, `/movies/rebuild/${encodeURIComponent(jobId)}/apply`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  cancelMovieRebuild: (providerId, jobId) => fetchJson(providerPath(providerId, `/movies/rebuild/${encodeURIComponent(jobId)}/cancel`), { method: 'POST' }),
+  movieFusionPreview: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/fusion/preview'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+  applyMovieFusion: (providerId, payload = {}) => fetchJson(providerPath(providerId, '/movies/fusion/apply'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
   movieEnrichment: (providerId, action, payload = {}) => fetchJson(providerPath(providerId, `/movies/enrichment/${encodeURIComponent(action)}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
