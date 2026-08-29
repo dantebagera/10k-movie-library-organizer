@@ -56,6 +56,49 @@ class AdvancedSearchModelTest(unittest.TestCase):
         values = normalize_query(query)["groups"][0]["values"]
         self.assertEqual([value["role"] for value in values], ["actor", "director"])
 
+    def test_genre_exclusion_is_individual_strict_and_part_of_execution_identity(self):
+        query = empty_query("discover")
+        query["groups"] = [{
+            "type": "genre",
+            "join": "and",
+            "values": [
+                {"id": "27", "label": "Horror"},
+                {"id": "878", "label": "Sci-Fi"},
+                {"id": "16", "label": "Animation", "exclude": True},
+                {"id": "35", "label": "Comedy", "exclude": True},
+            ],
+        }]
+        normalized = normalize_query(query)
+        values = normalized["groups"][0]["values"]
+        self.assertEqual({value["id"] for value in values if not value.get("exclude")}, {"27", "878"})
+        self.assertEqual({value["id"] for value in values if value.get("exclude")}, {"16", "35"})
+
+        without_not = empty_query("discover")
+        without_not["groups"] = [{
+            "type": "genre", "join": "and",
+            "values": [{"id": "27", "label": "Horror"}, {"id": "878", "label": "Sci-Fi"}],
+        }]
+        self.assertNotEqual(query_signature(query), query_signature(without_not))
+
+        malformed = empty_query("discover")
+        malformed["groups"] = [{
+            "type": "genre", "join": "or",
+            "values": [{"id": "35", "label": "Comedy", "exclude": "yes"}],
+        }]
+        with self.assertRaisesRegex(AdvancedSearchValidationError, "true or false"):
+            normalize_query(malformed)
+
+        contradictory = empty_query("discover")
+        contradictory["groups"] = [{
+            "type": "genre", "join": "or",
+            "values": [
+                {"id": "35", "label": "Comedy"},
+                {"id": "35", "label": "Comedy", "exclude": True},
+            ],
+        }]
+        with self.assertRaisesRegex(AdvancedSearchValidationError, "both included and excluded"):
+            normalize_query(contradictory)
+
     def test_library_rejects_vote_count_and_producer(self):
         query = empty_query()
         query["groups"] = [{"type": "minimum_votes", "values": [{"value": 1}]}]

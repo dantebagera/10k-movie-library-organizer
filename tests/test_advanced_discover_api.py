@@ -42,6 +42,24 @@ class DiscoverPlannerTest(unittest.TestCase):
         self.assertEqual(plan.provider_params["with_runtime.gte"], 60)
         self.assertEqual(plan.provider_params["with_runtime.lte"], 149)
 
+    def test_genre_not_is_a_veto_in_provider_and_summary_filtering(self):
+        plan = build_discover_plan(discover_query([{
+            "type": "genre",
+            "join": "and",
+            "values": [
+                {"id": "27", "label": "Horror"},
+                {"id": "878", "label": "Science Fiction"},
+                {"id": "16", "label": "Animation", "exclude": True},
+                {"id": "35", "label": "Comedy", "exclude": True},
+            ],
+        }]))
+
+        self.assertEqual(plan.provider_params["with_genres"], "27,878")
+        self.assertEqual(plan.provider_params["without_genres"], "16,35")
+        self.assertTrue(movie_matches_summary({"genre_ids": [27, 878]}, plan.summary_groups))
+        self.assertFalse(movie_matches_summary({"genre_ids": [27, 878, 35]}, plan.summary_groups))
+        self.assertFalse(movie_matches_summary({"genre_ids": [27, 35]}, plan.summary_groups))
+
     def test_title_rejects_filters_tmdb_summaries_cannot_prove(self):
         title = {"type": "title", "values": [{"text": "Alien"}]}
         for unsupported in (

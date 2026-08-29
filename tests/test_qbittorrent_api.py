@@ -3,7 +3,7 @@ import unittest
 import urllib.error
 from email.message import Message
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import app
 
@@ -157,6 +157,7 @@ class QBittorrentApiTests(unittest.TestCase):
             "year": "2026",
             "tmdb_id": "800",
             "imdb_id": "tt0000800",
+            "expected_size": 1_234_567_890,
         })
 
         self.assertEqual(response.status_code, 200)
@@ -164,7 +165,124 @@ class QBittorrentApiTests(unittest.TestCase):
         self.assertEqual(self.manager.submitted[0][2]["title"], "Movie")
         self.assertEqual(self.manager.submitted[0][2]["tmdb_id"], "800")
         self.assertEqual(self.manager.submitted[0][2]["imdb_id"], "tt0000800")
+        self.assertEqual(self.manager.submitted[0][2]["expected_size"], 1_234_567_890)
         self.assertEqual(self.manager.submitted[0][2]["identity_handoff"]["state"], "pending")
+
+    def test_submit_prefers_a_hash_verifiable_torrent_file_when_both_transports_exist(self):
+        info_hash = "d4b719ed66754116dc6c656303172ba96abfcae1"
+        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn=Movie"
+        with patch("app._resolve_prowlarr_download", return_value={
+            "kind": "torrent", "content": b"torrent", "filename": "movie.torrent",
+        }):
+            response = self.client.post("/api/qbittorrent/submit", json={
+                "magnet_url": magnet,
+                "download_url": "http://prowlarr.test/prowlarr/1/download?id=5",
+                "info_hash": info_hash,
+                "title": "Movie",
+                "tmdb_id": "800",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.manager.submitted[0][0], "torrent")
+        self.assertEqual(self.manager.submitted[0][3]["expected_info_hash"], info_hash)
+
+    def test_submit_falls_back_to_the_original_magnet_when_torrent_identity_is_substituted(self):
+        info_hash = "e4b719ed66754116dc6c656303172ba96abfcae1"
+        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn=Movie"
+        self.manager.submit_torrent = Mock(side_effect=app.TorrentIdentityMismatch(
+            "Blocked torrent because its infohash does not match the selected release"
+        ))
+        with patch("app._resolve_prowlarr_download", return_value={
+            "kind": "torrent", "content": b"poisoned-torrent", "filename": "movie.torrent",
+        }):
+            response = self.client.post("/api/qbittorrent/submit", json={
+                "magnet_url": magnet,
+                "download_url": "http://prowlarr.test/prowlarr/1/download?id=6",
+                "info_hash": info_hash,
+                "title": "Movie",
+                "tmdb_id": "800",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.manager.submitted[0][0], "magnet")
+        self.assertEqual(self.manager.submitted[0][1], magnet)
+
+    def test_prowlarr_resolver_preserves_a_magnet_redirect_with_its_trackers(self):
+        info_hash = "a4b719ed66754116dc6c656303172ba96abfcae1"
+        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn=Movie&tr=udp%3A%2F%2Ftracker.example%2Fannounce"
+        headers = Message()
+        headers["Location"] = magnet
+        redirect = urllib.error.HTTPError("http://prowlarr.test/download", 301, "Moved", headers, None)
+
+        with patch("app.urllib.request.build_opener") as build_opener:
+            build_opener.return_value.open.side_effect = redirect
+            transport = app._resolve_prowlarr_download("http://prowlarr.test/download")
+
+        self.assertEqual(transport, {"kind": "magnet", "magnet": magnet})
+
+    def test_prowlarr_resolver_returns_a_torrent_file_without_following_external_urls(self):
+        response = MagicMock()
+        response.read.return_value = b"torrent"
+        response.headers.get.return_value = "attachment; filename=movie.torrent"
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value = response
+
+        with patch("app.urllib.request.build_opener", return_value=opener):
+            transport = app._resolve_prowlarr_download("http://prowlarr.test/download")
+
+        self.assertEqual(transport, {"kind": "torrent", "content": b"torrent", "filename": "movie.torrent"})
+
+    def test_submit_uses_a_hash_matching_prowlarr_redirect_magnet(self):
+        info_hash = "b4b719ed66754116dc6c656303172ba96abfcae1"
+        magnet = f"magnet:?xt=urn:btih:{info_hash}&dn=Movie&tr=udp%3A%2F%2Ftracker.example%2Fannounce"
+        with patch("app._resolve_prowlarr_download", return_value={"kind": "magnet", "magnet": magnet}):
+            response = self.client.post("/api/qbittorrent/submit", json={
+                "download_url": "http://prowlarr.test/download",
+                "info_hash": info_hash,
+                "title": "Movie",
+                "tmdb_id": "800",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.manager.submitted[0][0], "magnet")
+        self.assertEqual(self.manager.submitted[0][1], magnet)
+
+    def test_submit_blocks_a_mismatched_prowlarr_redirect_magnet(self):
+        with patch("app._resolve_prowlarr_download", return_value={
+            "kind": "magnet",
+            "magnet": "magnet:?xt=urn:btih:c4b719ed66754116dc6c656303172ba96abfcae1&dn=Other",
+        }):
+            response = self.client.post("/api/qbittorrent/submit", json={
+                "download_url": "http://prowlarr.test/download",
+                "info_hash": "d4b719ed66754116dc6c656303172ba96abfcae1",
+                "title": "Movie",
+                "tmdb_id": "800",
+            })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not match the selected release", response.get_json()["error"])
+        self.assertEqual(self.manager.submitted, [])
+
+    def test_prowlarr_result_links_do_not_fabricate_a_trackerless_magnet(self):
+        links = app._prowlarr_result_links({
+            "infoHash": "e4b719ed66754116dc6c656303172ba96abfcae1",
+            "downloadUrl": "http://prowlarr.test/download",
+        })
+
+        self.assertEqual(links["magnet_url"], "")
+        self.assertEqual(links["download_url"], "http://prowlarr.test/download")
+
+    def test_submit_blocks_a_magnet_that_disagrees_with_the_selected_release_identity(self):
+        response = self.client.post("/api/qbittorrent/submit", json={
+            "magnet_url": "magnet:?xt=urn:btih:f4b719ed66754116dc6c656303172ba96abfcae1&dn=Other",
+            "info_hash": "e4b719ed66754116dc6c656303172ba96abfcae1",
+            "title": "Movie",
+            "tmdb_id": "800",
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not match the selected release", response.get_json()["error"])
+        self.assertEqual(self.manager.submitted, [])
 
     def test_submit_blocks_owned_movies_unless_the_request_is_an_upgrade(self):
         magnet = "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567"
@@ -197,6 +315,7 @@ class QBittorrentApiTests(unittest.TestCase):
                 "title": release_title,
                 "indexer": "Trusted",
                 "resolution": "4K",
+                "size_bytes": 12_345_678_900,
                 "magnet_url": "magnet:?xt=urn:btih:2123456789abcdef0123456789abcdef01234567",
             },
         })
@@ -205,6 +324,7 @@ class QBittorrentApiTests(unittest.TestCase):
         metadata = self.manager.submitted[0][2]
         self.assertTrue(metadata["upgrade"])
         self.assertEqual(metadata["release_title"], release_title)
+        self.assertEqual(metadata["expected_size"], 12_345_678_900)
         self.assertEqual(metadata["identity_handoff"]["state"], "pending")
 
     def test_bulk_submission_rejects_a_variant_below_the_selected_quality(self):
@@ -253,10 +373,10 @@ class QBittorrentApiTests(unittest.TestCase):
         headers = Message()
         headers["Location"] = magnet
 
-        def fake_urlopen(request, timeout=0):
-            raise urllib.error.HTTPError(request.full_url, 301, "Moved Permanently", headers, None)
-
-        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("app.urllib.request.build_opener") as build_opener:
+            build_opener.return_value.open.side_effect = urllib.error.HTTPError(
+                "http://prowlarr.test/prowlarr/6/download?id=1", 301, "Moved Permanently", headers, None,
+            )
             response = self.client.post("/api/qbittorrent/submit", json={
                 "download_url": "http://prowlarr.test/prowlarr/6/download?id=1",
                 "title": "Movie",
@@ -266,6 +386,27 @@ class QBittorrentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.manager.submitted[0][0], "magnet")
         self.assertEqual(self.manager.submitted[0][1], magnet)
+
+    def test_submit_blocks_a_prowlarr_redirect_to_a_different_release_hash(self):
+        selected_hash = "0123456789abcdef0123456789abcdef01234567"
+        redirect_magnet = "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567&dn=Other"
+        headers = Message()
+        headers["Location"] = redirect_magnet
+
+        with patch("app.urllib.request.build_opener") as build_opener:
+            build_opener.return_value.open.side_effect = urllib.error.HTTPError(
+                "http://prowlarr.test/prowlarr/6/download?id=2", 301, "Moved Permanently", headers, None,
+            )
+            response = self.client.post("/api/qbittorrent/submit", json={
+                "download_url": "http://prowlarr.test/prowlarr/6/download?id=2",
+                "info_hash": selected_hash,
+                "title": "Movie",
+                "tmdb_id": "800",
+            })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not match the selected release", response.get_json()["error"])
+        self.assertEqual(self.manager.submitted, [])
 
     def test_submit_duplicate_magnet_conflict_returns_existing_job(self):
         magnet = "magnet:?xt=urn:btih:48373C3569751AA5C51072E826DD43FFB350BA84&dn=Movie"

@@ -31,11 +31,17 @@ class TrailerModalUiTest(unittest.TestCase):
         self.assertNotIn("More from Rotten Tomatoes", self.app_source)
 
     def test_missing_tmdb_trailer_searches_youtube_only_inside_shared_modal(self):
-        self.assertIn("searchYouTubeMovieTrailers(requestedMovie", self.app_source)
+        self.assertIn("searchYouTubeMovieTrailers({ title: requestedMovie.title, year: requestedMovie.year }", self.app_source)
         self.assertIn("Finding an embeddable trailer", self.app_source)
         self.assertIn("Choose the correct trailer", self.app_source)
         self.assertIn("setFallbackVideo(video)", self.app_source)
         self.assertIn("Search YouTube manually", self.app_source)
+
+    def test_movie_trailer_player_recovers_from_youtube_embed_errors(self):
+        self.assertIn("onError: ({ data })", self.app_source)
+        self.assertIn("requestTrailerAlternatives();", self.app_source)
+        self.assertIn("Try another trailer", self.app_source)
+        self.assertIn("Cinema Paradiso only keeps this choice for this open trailer session.", self.app_source)
 
     def test_trailer_modal_embeds_youtube_player_with_fullscreen_controls(self):
         self.assertIn("function TrailerModal(", self.app_source)

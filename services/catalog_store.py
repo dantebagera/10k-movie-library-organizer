@@ -1758,18 +1758,27 @@ class CatalogStore:
             parameters.extend(values)
 
         def relational_values(group, clause_factory):
-            value_clauses = []
-            value_parameters = []
+            included_clauses = []
+            included_parameters = []
+            excluded_clauses = []
+            excluded_parameters = []
             for value in group["values"]:
                 clause, clause_parameters = clause_factory(value)
-                value_clauses.append(f"({clause})")
-                value_parameters.extend(clause_parameters)
-            if group.get("join", "or") == "and":
-                for clause in value_clauses:
+                if value.get("exclude"):
+                    excluded_clauses.append(f"NOT ({clause})")
+                    excluded_parameters.extend(clause_parameters)
+                else:
+                    included_clauses.append(f"({clause})")
+                    included_parameters.extend(clause_parameters)
+            if included_clauses and group.get("join", "or") == "and":
+                for clause in included_clauses:
                     clauses.append(clause)
-                parameters.extend(value_parameters)
-            else:
-                add("(" + " OR ".join(value_clauses) + ")", *value_parameters)
+                parameters.extend(included_parameters)
+            elif included_clauses:
+                add("(" + " OR ".join(included_clauses) + ")", *included_parameters)
+            for clause in excluded_clauses:
+                clauses.append(clause)
+            parameters.extend(excluded_parameters)
 
         title = groups.get("title")
         if title:

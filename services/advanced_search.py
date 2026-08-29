@@ -80,7 +80,10 @@ def _integer(value, label, minimum, maximum):
 def _identity_value(value, criterion_type):
     if not isinstance(value, dict):
         _fail(f"{criterion_type} value must be an object")
-    unknown = set(value) - ({"id", "label", "role"} if criterion_type == "person" else {"id", "label"})
+    allowed = {"id", "label", "role"} if criterion_type == "person" else {"id", "label"}
+    if criterion_type == "genre":
+        allowed = allowed | {"exclude"}
+    unknown = set(value) - allowed
     if unknown:
         _fail(f"Unknown {criterion_type} value fields: {', '.join(sorted(unknown))}")
     identity = _text(value.get("id"), f"{criterion_type} id", 120)
@@ -88,6 +91,11 @@ def _identity_value(value, criterion_type):
     if not identity or not label:
         _fail(f"{criterion_type} requires a controlled identity")
     normalized = {"id": identity, "label": label}
+    if criterion_type == "genre" and "exclude" in value:
+        if not isinstance(value["exclude"], bool):
+            _fail("Genre exclusion must be true or false")
+        if value["exclude"]:
+            normalized["exclude"] = True
     if criterion_type == "person":
         role = _text(value.get("role"), "person role", 20).lower()
         if role not in PERSON_ROLES:
@@ -221,17 +229,19 @@ def normalize_query(query, expected_scope=None):
         if len(raw_values) > MAX_GROUP_VALUES:
             _fail(f"{criterion_type} exceeds the per-group limit")
         values = []
-        seen_values = set()
+        seen_values = {}
         for raw_value in raw_values:
             value = _normalize_value(criterion_type, raw_value)
             key = _value_key(criterion_type, value)
             if key in seen_values:
+                if criterion_type == "genre" and bool(seen_values[key].get("exclude")) != bool(value.get("exclude")):
+                    _fail("A genre cannot be both included and excluded")
                 continue
-            seen_values.add(key)
+            seen_values[key] = value
             values.append(value)
         if criterion_type not in REPEATABLE_CRITERIA and len(values) != 1:
             _fail(f"{criterion_type} accepts one value")
-        values.sort(key=lambda item: _value_key(criterion_type, item))
+        values.sort(key=lambda item: (bool(item.get("exclude")), _value_key(criterion_type, item)))
         group = {"type": criterion_type, "values": values}
         if criterion_type in REPEATABLE_CRITERIA:
             join = _text(raw_group.get("join") or "or", f"{criterion_type} join", 10).lower()

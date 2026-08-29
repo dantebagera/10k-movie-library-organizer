@@ -9,7 +9,7 @@ PLAYER_ROOT = PROJECT_ROOT / "native" / "player"
 
 
 class NativePlayerSourceTests(unittest.TestCase):
-    def test_windows_helper_embeds_the_cp_application_icon(self):
+    def test_windows_helper_embeds_a_distinct_player_icon(self):
         cmake = (PLAYER_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         resource = (PLAYER_ROOT / "resources" / "cp-player.rc").read_text(
             encoding="utf-8"
@@ -24,7 +24,9 @@ class NativePlayerSourceTests(unittest.TestCase):
         self.assertIn('"${CMAKE_CURRENT_SOURCE_DIR}/resources"', cmake)
         self.assertIn('IDI_CP_PLAYER_ICON ICON "cp-player.ico"', resource)
         self.assertIn("#define IDI_CP_PLAYER_ICON 101", resource_header)
-        self.assertIn('QT_RESOURCE_ALIAS "cp-player.png"', cmake)
+        self.assertIn('resources/cp-player-icon.png', cmake)
+        self.assertNotIn('static/cinema-paradiso-icon-preview.png', cmake)
+        self.assertTrue((PLAYER_ROOT / "resources" / "cp-player-icon.png").is_file())
         self.assertIn('PREFIX "/branding"', cmake)
         self.assertIn(
             'QIcon(QStringLiteral(":/branding/cp-player.png"))',

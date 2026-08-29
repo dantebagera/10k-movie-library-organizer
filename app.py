@@ -1,4 +1,5 @@
 import atexit
+import copy
 import datetime
 import os
 import re
@@ -81,10 +82,12 @@ from services.qbittorrent import (
     HOP_BY_HOP_HEADERS,
     QBittorrentError,
     QBittorrentManager,
+    TorrentIdentityMismatch,
     build_downloads_html,
     is_allowed_prowlarr_url,
     is_path_within,
     magnet_hash,
+    normalize_torrent_info_hash,
 )
 from flask import Flask, Response, jsonify, request, make_response, send_file, send_from_directory
 from services.catalog_events import CatalogEventBroker
@@ -239,14 +242,8 @@ def _save_config(data):
         pass
 
 _cfg = _load_config()
-try:
-    _APP_VERSION = str(
-        _json.loads(Path(_BASE_DIR, 'package.json').read_text(encoding='utf-8')).get('version') or ''
-    ).strip()
-except (OSError, ValueError):
-    _APP_VERSION = ''
 _player_config = PlayerConfig(_cfg.get('player'))
-_player_runtime = PlayerRuntime(Path(_BASE_DIR, 'runtime', 'player'), _APP_VERSION)
+_player_runtime = PlayerRuntime(Path(_BASE_DIR, 'runtime', 'player'))
 _playback_history_store = PlaybackHistoryStore(
     lambda: _catalog_repository().store,
 )
@@ -275,6 +272,8 @@ _player_manager = PlayerManager(
 OLLAMA_CANDIDATE_LIMIT_DEFAULT = 15
 OLLAMA_CANDIDATE_LIMIT_MIN = 1
 OLLAMA_CANDIDATE_LIMIT_MAX = 50
+OLLAMA_CLOUD_CATALOG_URL = 'https://ollama.com'
+OLLAMA_ACCESS_SCAN_WORKERS = 4
 SOURCE_SEARCH_ALIAS_LIMIT = 6
 SOURCE_SEARCH_QUERY_LIMIT = 10
 SOURCE_SEARCH_RESULTS_PER_INDEXER = 100
@@ -294,6 +293,8 @@ FOLLOWED_RELEASE_FAILURE_RETRY_SECONDS = 60 * 60
 _source_search_jobs = {}
 _source_search_jobs_lock = threading.Lock()
 _followed_release_scan_lock = threading.Lock()
+_ollama_access_scan_cache = {}
+_ollama_access_scan_cache_lock = threading.Lock()
 _ai_control_plan_store = ai_control.PlanStore(ttl_seconds=900)
 
 
@@ -358,9 +359,21 @@ _yts_rss_feeds = [
     for value in _cfg.get('yts_rss_feeds', ['https://yts.gg/rss', 'https://yts.bz/rss', 'https://yts.lt/rss'])
     if str(value).strip()
 ]
+YTS_SOURCE_IDENTITY_CACHE_TTL_SECONDS = 24 * 60 * 60
+YTS_SOURCE_IDENTITY_TIMEOUT_SECONDS = 10
+YTS_SOURCE_IDENTITY_MAX_BYTES = 2 * 1024 * 1024
+_yts_source_identity_cache = {}
+_yts_source_identity_cache_lock = threading.RLock()
 _tmdb_key       = _cfg.get('tmdb_key', '')
 _youtube_api_key = str(_cfg.get('youtube_api_key', '') or '').strip()
-_youtube_service = YouTubeService(HOME_TRAILER_SOURCES, api_key=_youtube_api_key)
+_youtube_trailer_region = str(_cfg.get('youtube_trailer_region', 'EG') or 'EG').strip().upper()
+if not re.fullmatch(r'[A-Z]{2}', _youtube_trailer_region):
+    _youtube_trailer_region = 'EG'
+_youtube_service = YouTubeService(
+    HOME_TRAILER_SOURCES,
+    api_key=_youtube_api_key,
+    trailer_region=_youtube_trailer_region,
+)
 _tmdb_include_adult = _coerce_bool(_cfg.get('tmdb_include_adult'), False)
 _library_show_adult = _coerce_bool(_cfg.get('library_show_adult'), True)
 _plex_url       = _cfg.get('plex_url', 'http://localhost:32400')
@@ -649,6 +662,66 @@ def _is_yts_indexer_name(name):
     return 'yts' in text or 'yify' in text
 
 
+def _is_yts_movie_source_url(value):
+    parsed = urllib.parse.urlparse(str(value or '').strip())
+    host = str(parsed.hostname or '').lower().removeprefix('www.')
+    return (
+        parsed.scheme in {'http', 'https'}
+        and host in {'yts.mx', 'yts.gg', 'yts.bz', 'yts.lt'}
+        and str(parsed.path or '').startswith('/movies/')
+    )
+
+
+def _yts_source_imdb_id(value, *, timeout=YTS_SOURCE_IDENTITY_TIMEOUT_SECONDS):
+    """Read the IMDb identity exposed by a YTS movie page, with a bounded cache."""
+    source_url = str(value or '').strip()
+    if not _is_yts_movie_source_url(source_url):
+        return ''
+    now = time.monotonic()
+    with _yts_source_identity_cache_lock:
+        cached = _yts_source_identity_cache.get(source_url)
+        if cached and cached.get('expires_at', 0) > now:
+            return cached.get('imdb_id', '')
+    imdb_id = ''
+    try:
+        request = urllib.request.Request(source_url, headers={
+            'Accept': 'text/html,application/xhtml+xml',
+            'User-Agent': 'CinemaParadiso/2.6 (+https://local.app)',
+        })
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read(YTS_SOURCE_IDENTITY_MAX_BYTES + 1)
+        if len(payload) > YTS_SOURCE_IDENTITY_MAX_BYTES:
+            raise ValueError('YTS source page exceeded the identity-read limit')
+        document = payload.decode('utf-8', errors='replace')
+        match = re.search(r'imdb\.com/title/(tt\d{5,12})', document, flags=re.I)
+        if match:
+            imdb_id = match.group(1).lower()
+    except Exception:
+        pass
+    with _yts_source_identity_cache_lock:
+        _yts_source_identity_cache[source_url] = {
+            'imdb_id': imdb_id,
+            'expires_at': now + YTS_SOURCE_IDENTITY_CACHE_TTL_SECONDS,
+        }
+    return imdb_id
+
+
+def _yts_result_matches_movie_identity(result, movie, *, require_verification=False):
+    """Reject only YTS results whose own source page proves a different IMDb movie."""
+    if not _is_yts_indexer_name((result or {}).get('indexer')):
+        return True
+    expected_imdb_id = _movie_imdb_id(movie).lower()
+    if not expected_imdb_id:
+        return True
+    source_url = (result or {}).get('infoUrl') or (result or {}).get('info_url') or ''
+    source_imdb_id = _yts_source_imdb_id(source_url)
+    if source_imdb_id:
+        result['source_imdb_id'] = source_imdb_id
+        result['source_identity_verified'] = source_imdb_id == expected_imdb_id
+        return source_imdb_id == expected_imdb_id
+    return not require_verification
+
+
 def _enabled_prowlarr_indexer_ids():
     return [indexer['id'] for indexer in _fetch_enabled_prowlarr_indexers()]
 
@@ -786,6 +859,18 @@ def _movie_with_source_title_aliases(movie, *, allow_alias_fetch=True):
     evidence = _movie_source_release_year_evidence(enriched, metadata)
     enriched['release_year_evidence'] = evidence
     enriched['release_years'] = [item['year'] for item in evidence]
+    return enriched
+
+
+def _movie_with_followed_imdb_identity(movie):
+    """Persist the TMDB-backed identity that automatic Follow acquisition must use."""
+    enriched = dict(movie or {})
+    if enriched.get('imdb_id'):
+        return enriched
+    metadata = _movie_tmdb_metadata_for_source_search(enriched)
+    imdb_id = str((metadata or {}).get('imdb_id', '') or '').strip()
+    if imdb_id:
+        enriched['imdb_id'] = imdb_id
     return enriched
 
 
@@ -939,6 +1024,8 @@ def _prowlarr_search_movie(
         for result in results:
             if not _prowlarr_result_matches_movie(result, movie):
                 continue
+            if not _yts_result_matches_movie_identity(result, movie):
+                continue
             if accept_result is not None and not accept_result(result):
                 continue
             key = _prowlarr_result_key(result)
@@ -953,17 +1040,6 @@ def _prowlarr_search_movie(
     return merged
 
 
-def _magnet_url_from_info_hash(info_hash, title=''):
-    value = str(info_hash or '').strip()
-    if not re.fullmatch(r'[A-Fa-f0-9]{40}', value):
-        return ''
-    magnet = f"magnet:?xt=urn:btih:{value.upper()}"
-    title = str(title or '').strip()
-    if title:
-        magnet += f"&dn={urllib.parse.quote(title)}"
-    return magnet
-
-
 def _prowlarr_result_links(result):
     raw_magnet = str((result or {}).get('magnetUrl') or '').strip()
     raw_download = str((result or {}).get('downloadUrl') or '').strip()
@@ -974,11 +1050,10 @@ def _prowlarr_result_links(result):
     elif raw_download.lower().startswith('magnet:'):
         magnet_url = raw_download
         download_url = ''
-    else:
-        magnet_url = _magnet_url_from_info_hash((result or {}).get('infoHash'), (result or {}).get('title', ''))
-        if not download_url and re.match(r'^https?://', raw_magnet, flags=re.I):
-            download_url = raw_magnet
-    return {'magnet_url': magnet_url, 'download_url': download_url}
+    elif not download_url and re.match(r'^https?://', raw_magnet, flags=re.I):
+        download_url = raw_magnet
+    info_hash = normalize_torrent_info_hash((result or {}).get('infoHash')) or magnet_hash(magnet_url)
+    return {'magnet_url': magnet_url, 'download_url': download_url, 'info_hash': info_hash}
 
 
 def _magnet_from_http_redirect(error):
@@ -1008,6 +1083,7 @@ def _torrent_resolution_from_title(title):
 def _yts_rss_variant_from_item(item):
     title = item.findtext('title') or ''
     link = item.findtext('link') or ''
+    description = item.findtext('description') or ''
     enclosure = item.find('enclosure')
     enclosure_url = enclosure.get('url', '') if enclosure is not None else ''
     hash_match = re.search(r'([A-Fa-f0-9]{40})$', enclosure_url)
@@ -1028,10 +1104,14 @@ def _yts_rss_variant_from_item(item):
             'seeders': 0,
             'magnet_url': f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(title)}",
             'download_url': '',
+            'info_hash': info_hash.lower(),
             'info_url': link,
             'indexer': 'YTS RSS',
             'size_human': '?',
             'title': title,
+            # RSS has richer source facts; retain them for identity diagnostics.
+            'rss_description': description,
+            'rss_published_at': item.findtext('pubDate') or '',
         },
     }
 
@@ -2471,6 +2551,7 @@ def _all_config():
         'plex_token': _plex_token,
         'tmdb_key': _tmdb_key,
         'youtube_api_key': _youtube_api_key,
+        'youtube_trailer_region': _youtube_trailer_region,
         'tmdb_include_adult': _tmdb_include_adult,
         'library_show_adult': _library_show_adult,
         'ollama_url': _ollama_url,
@@ -3242,6 +3323,7 @@ def _torrent_variants_from_prowlarr_results(results):
             'seeders': seeders,
             'magnet_url': links['magnet_url'],
             'download_url': links['download_url'],
+            'info_hash': links['info_hash'],
             'info_url': r.get('infoUrl', ''),
             'indexer': r.get('indexer', ''),
             'size_human': format_size(size) if size else '?',
@@ -3830,6 +3912,7 @@ def _followed_release_candidate(result, trusted_indexer_names=None, *, indexer_o
         'indexer': result_indexer,
         'magnet_url': links['magnet_url'],
         'download_url': links['download_url'],
+        'info_hash': links['info_hash'],
         'info_url': result.get('infoUrl') or result.get('info_url', ''),
     }
 
@@ -3841,9 +3924,15 @@ def _probe_followed_release(movie, context=None):
     enriched = dict(movie or {})
     if not enriched.get('title_aliases'):
         enriched = _movie_with_source_title_aliases(enriched)
+    # Follow is automatic: without a durable target identity it may only create
+    # a plausible-looking wrong release, so wait for TMDB identity resolution.
+    if not _movie_imdb_id(enriched):
+        return {'searched': False, 'release': None}
     trusted_names = context.get('indexer_names') or set()
 
     def accepts(result):
+        if not _yts_result_matches_movie_identity(result, enriched, require_verification=True):
+            return False
         return _followed_release_candidate(result, trusted_names) is not None
 
     try:
@@ -3868,6 +3957,8 @@ def _find_best_followed_release(movie, context=None):
 
 
 def _followed_rss_release(movie, rows):
+    if not _movie_imdb_id(movie):
+        return None
     for row in rows or []:
         for variant in row.get('variants', []) or []:
             result = {
@@ -3877,6 +3968,10 @@ def _followed_rss_release(movie, rows):
                 'infoUrl': variant.get('info_url', ''),
             }
             if not _prowlarr_result_matches_movie(result, movie):
+                continue
+            # The Follow engine is automatic: do not mark an RSS item available
+            # unless its own YTS page confirms the followed movie's IMDb identity.
+            if not _yts_result_matches_movie_identity(result, movie, require_verification=True):
                 continue
             candidate = _followed_release_candidate(result, {'YTS RSS'}, indexer_override='YTS RSS')
             if candidate:
@@ -3984,6 +4079,16 @@ def _followed_scan_update(movie, patch):
     }
 
 
+def _followed_release_has_mismatched_yts_identity(movie):
+    """Return true only when an already-available YTS release proves it is another film."""
+    expected_imdb_id = _movie_imdb_id(movie).lower()
+    release = (movie or {}).get('best_release') or {}
+    if not expected_imdb_id or not _is_yts_indexer_name(release.get('indexer')):
+        return False
+    source_imdb_id = _yts_source_imdb_id(release.get('info_url') or release.get('infoUrl') or '')
+    return bool(source_imdb_id and source_imdb_id != expected_imdb_id)
+
+
 def _followed_release_priority(movie):
     last_checked = float((movie or {}).get('last_checked') or 0)
     last_attempted = float((movie or {}).get('last_attempted') or 0)
@@ -4003,31 +4108,41 @@ def _followed_release_priority(movie):
 def _check_followed_releases():
     scan_started = time.perf_counter()
     store = _curation_store()
-    current = store.followed_all()
+    current = _backfill_followed_release_dates(store, store.followed_all())
     removed_owned = []
     newly_available = []
     now = time.time()
     owned_matches = _find_owned_movies(current)
     rss_candidates = []
-    skipped = {'available': 0, 'unreleased': 0, 'not_due': 0}
+    scan_updates = []
+    skipped = {'available': 0, 'unreleased': 0, 'not_due': 0, 'unverified_identity': 0}
     for item, owned in zip(current, owned_matches):
         if owned:
             removed_owned.append({**item, 'status': 'owned', 'owned': owned, 'updated_at': now, 'last_checked': now})
             continue
-        if str(item.get('status') or 'watching') == 'available':
-            skipped['available'] += 1
-            continue
         try:
-            rss_candidates.append(_movie_with_source_title_aliases(item, allow_alias_fetch=False))
+            enriched = _movie_with_source_title_aliases(item, allow_alias_fetch=False)
         except Exception:
-            rss_candidates.append(dict(item))
+            enriched = dict(item)
+        if enriched.get('imdb_id') and enriched.get('imdb_id') != item.get('imdb_id'):
+            scan_updates.append(_followed_scan_update(item, {'imdb_id': enriched['imdb_id']}))
+        if not _movie_imdb_id(enriched):
+            skipped['unverified_identity'] += 1
+            continue
+        if str(item.get('status') or 'watching') == 'available':
+            if not _followed_release_has_mismatched_yts_identity(enriched):
+                skipped['available'] += 1
+                continue
+            # A past generic-title result has since proved to be another movie.
+            # Re-enter this one scan as watching so it can be replaced or retried.
+            enriched = {**enriched, 'status': 'watching', 'best_release': {}, 'next_check_at': 0}
+        rss_candidates.append(enriched)
 
     store.apply_followed_scan(removals=removed_owned)
 
     rss_candidates.sort(key=_followed_release_priority)
     context = _followed_release_search_context() if rss_candidates else {'ready': False, 'indexers': []}
     pending = list(rss_candidates)
-    scan_updates = []
     rss_matches = 0
     prowlarr_searches = 0
     failed_searches = 0
@@ -4995,31 +5110,10 @@ def _ai_control_submit_download(item):
         'upgrade': bool(item.get('upgrade')) or _curated_movie_is_owned(item),
         'release_title': variant.get('title', ''),
         'indexer': variant.get('indexer', ''),
+        'expected_size': variant.get('size_bytes') or variant.get('size') or 0,
+        'expected_info_hash': variant.get('info_hash') or variant.get('infoHash') or '',
     })
-    magnet = str(variant.get('magnet_url', '') or '').strip()
-    download_url = str(variant.get('download_url', '') or '').strip()
-    manager = _get_qbittorrent_manager()
-    if magnet:
-        return manager.submit_magnet(magnet, metadata)
-    if not download_url:
-        raise ValueError('No usable magnet or torrent URL was provided')
-    candidate = urllib.parse.urljoin(f"{_prowlarr_url}/", download_url)
-    if not is_allowed_prowlarr_url(candidate, _prowlarr_url):
-        raise ValueError('Torrent URL is not from the configured Prowlarr server')
-    req = urllib.request.Request(candidate, headers={
-        'X-Api-Key': _prowlarr_key,
-        'Accept': 'application/x-bittorrent, application/octet-stream',
-    })
-    with urllib.request.urlopen(req, timeout=30) as response:
-        torrent_bytes = response.read(10 * 1024 * 1024 + 1)
-        if len(torrent_bytes) > 10 * 1024 * 1024:
-            raise ValueError('Torrent file is larger than 10 MB')
-        content_disposition = response.headers.get('Content-Disposition', '')
-    filename_match = re.search(r'filename="?([^";]+)', content_disposition, flags=re.I)
-    filename = filename_match.group(1) if filename_match else 'ai-control-result.torrent'
-    if not filename.lower().endswith('.torrent'):
-        filename += '.torrent'
-    return manager.submit_torrent(torrent_bytes, os.path.basename(filename), metadata)
+    return _submit_qbittorrent_candidate(_get_qbittorrent_manager(), variant, metadata)
 
 
 @app.route('/api/ai-control/preview', methods=['POST'])
@@ -5179,7 +5273,89 @@ def _qbittorrent_submission_metadata(data):
         'identity_handoff': {'state': 'pending'},
         'release_title': str(data.get('release_title', data.get('title', '')) or '').strip(),
         'indexer': str(data.get('indexer', '') or '').strip(),
+        'expected_size': max(0, NumberSafe(data.get('expected_size'))),
+        'expected_info_hash': normalize_torrent_info_hash(
+            data.get('expected_info_hash') or data.get('info_hash') or data.get('infoHash')
+        ),
     }
+
+
+class _ProwlarrNoRedirect(urllib.request.HTTPRedirectHandler):
+    """Expose Prowlarr's magnet redirects instead of losing them to urllib."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def _resolve_prowlarr_download(download_url, default_filename='prowlarr-result.torrent'):
+    """Resolve a configured Prowlarr download into one verified transport.
+
+    The Prowlarr endpoint is the only HTTP URL CP may fetch. A magnet redirect
+    is data, not another HTTP hop: preserve its tracker list and let the caller
+    verify its infohash before qBittorrent receives it.
+    """
+    candidate = urllib.parse.urljoin(f"{_prowlarr_url}/", str(download_url or '').strip())
+    if not is_allowed_prowlarr_url(candidate, _prowlarr_url):
+        raise ValueError('Torrent URL is not from the configured Prowlarr server')
+    req = urllib.request.Request(candidate, headers={
+        'X-Api-Key': _prowlarr_key,
+        'Accept': 'application/x-bittorrent, application/octet-stream',
+    })
+    try:
+        with urllib.request.build_opener(_ProwlarrNoRedirect()).open(req, timeout=30) as response:
+            torrent_bytes = response.read(10 * 1024 * 1024 + 1)
+            if len(torrent_bytes) > 10 * 1024 * 1024:
+                raise ValueError('Torrent file is larger than 10 MB')
+            content_disposition = response.headers.get('Content-Disposition', '')
+    except urllib.error.HTTPError as error:
+        redirect_magnet = _magnet_from_http_redirect(error)
+        if redirect_magnet:
+            return {'kind': 'magnet', 'magnet': redirect_magnet}
+        raise
+    filename_match = re.search(r'filename="?([^";]+)', content_disposition, flags=re.I)
+    filename = filename_match.group(1) if filename_match else default_filename
+    if not filename.lower().endswith('.torrent'):
+        filename += '.torrent'
+    return {'kind': 'torrent', 'content': torrent_bytes, 'filename': os.path.basename(filename)}
+
+
+def _submit_qbittorrent_candidate(manager, candidate, metadata):
+    candidate = candidate or {}
+    magnet = str(candidate.get('magnet_url', '') or '').strip()
+    download_url = str(candidate.get('download_url', '') or '').strip()
+    expected_info_hash = (
+        normalize_torrent_info_hash(candidate.get('info_hash') or candidate.get('infoHash'))
+        or normalize_torrent_info_hash((metadata or {}).get('expected_info_hash'))
+        or magnet_hash(magnet)
+    )
+    metadata = {**(metadata or {}), 'expected_info_hash': expected_info_hash}
+
+    def submit_magnet(transport_magnet):
+        transport_hash = magnet_hash(transport_magnet)
+        if expected_info_hash and transport_hash != expected_info_hash:
+            raise TorrentIdentityMismatch(
+                'Blocked magnet because its infohash does not match the selected release'
+            )
+        return manager.submit_magnet(transport_magnet, metadata)
+
+    if download_url:
+        try:
+            transport = _resolve_prowlarr_download(download_url)
+            if transport['kind'] == 'magnet':
+                return submit_magnet(transport['magnet'])
+            return manager.submit_torrent(transport['content'], transport['filename'], metadata)
+        except TorrentIdentityMismatch:
+            if magnet:
+                return submit_magnet(magnet)
+            raise
+        except (urllib.error.HTTPError, urllib.error.URLError):
+            if magnet:
+                return submit_magnet(magnet)
+            raise
+
+    if magnet:
+        return submit_magnet(magnet)
+    raise ValueError('No usable magnet or torrent URL was provided')
 
 
 def _download_job_has_stable_identity(data):
@@ -5214,36 +5390,8 @@ def qbittorrent_submit():
     manager = _get_qbittorrent_manager()
     metadata = _qbittorrent_submission_metadata(data)
     magnet = str(data.get('magnet_url', '') or '').strip()
-    download_url = str(data.get('download_url', '') or '').strip()
     try:
-        if magnet:
-            job = manager.submit_magnet(magnet, metadata)
-        elif download_url:
-            candidate = urllib.parse.urljoin(f"{_prowlarr_url}/", download_url)
-            if not is_allowed_prowlarr_url(candidate, _prowlarr_url):
-                return jsonify({'error': 'Torrent URL is not from the configured Prowlarr server'}), 400
-            req = urllib.request.Request(candidate, headers={
-                'X-Api-Key': _prowlarr_key,
-                'Accept': 'application/x-bittorrent, application/octet-stream',
-            })
-            try:
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    torrent_bytes = response.read(10 * 1024 * 1024 + 1)
-                    if len(torrent_bytes) > 10 * 1024 * 1024:
-                        return jsonify({'error': 'Torrent file is larger than 10 MB'}), 400
-                    content_disposition = response.headers.get('Content-Disposition', '')
-                filename_match = re.search(r'filename="?([^";]+)', content_disposition, flags=re.I)
-                filename = filename_match.group(1) if filename_match else 'prowlarr-result.torrent'
-                if not filename.lower().endswith('.torrent'):
-                    filename += '.torrent'
-                job = manager.submit_torrent(torrent_bytes, os.path.basename(filename), metadata)
-            except urllib.error.HTTPError as error:
-                redirect_magnet = _magnet_from_http_redirect(error)
-                if not redirect_magnet:
-                    raise
-                job = manager.submit_magnet(redirect_magnet, metadata)
-        else:
-            return jsonify({'error': 'No usable magnet or torrent URL was provided'}), 400
+        job = _submit_qbittorrent_candidate(manager, data, metadata)
         return jsonify(job)
     except urllib.error.HTTPError as error:
         if magnet and getattr(error, 'code', None) == 409:
@@ -5251,7 +5399,7 @@ def qbittorrent_submit():
             if existing_job:
                 return jsonify({**existing_job, 'already_exists': True})
         return jsonify({'error': f'Prowlarr torrent download returned HTTP {error.code}'}), 502
-    except (QBittorrentError, OSError) as error:
+    except (QBittorrentError, OSError, ValueError) as error:
         return jsonify({'error': str(error)}), 400
 
 
@@ -5367,6 +5515,7 @@ def prowlarr_search():
                 'resolution': res,
                 'download_url': links['download_url'],
                 'magnet_url': links['magnet_url'],
+                'info_hash': links['info_hash'],
                 'info_url': r.get('infoUrl', ''),
             })
         # Sort: resolution desc, then seeders desc
@@ -6356,12 +6505,13 @@ def get_youtube_config():
     return jsonify({
         'configured': bool(_youtube_api_key),
         'key_hint': f'ends in {_youtube_api_key[-4:]}' if len(_youtube_api_key) >= 4 else '',
+        'trailer_region': _youtube_trailer_region,
     })
 
 
 @app.route('/api/youtube/config', methods=['POST'])
 def set_youtube_config():
-    global _youtube_api_key
+    global _youtube_api_key, _youtube_trailer_region
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({'error': 'No data provided'}), 400
@@ -6371,12 +6521,17 @@ def set_youtube_config():
         candidate = str(data.get('key') or '').strip()
         if candidate:
             _youtube_api_key = candidate
+    if 'trailer_region' in data:
+        candidate_region = str(data.get('trailer_region') or '').strip().upper()
+        _youtube_trailer_region = candidate_region if re.fullmatch(r'[A-Z]{2}', candidate_region) else 'EG'
     _youtube_service.set_api_key(_youtube_api_key)
+    _youtube_service.set_trailer_region(_youtube_trailer_region)
     _save_config(_all_config())
     return jsonify({
         'success': True,
         'configured': bool(_youtube_api_key),
         'key_hint': f'ends in {_youtube_api_key[-4:]}' if len(_youtube_api_key) >= 4 else '',
+        'trailer_region': _youtube_trailer_region,
     })
 
 
@@ -7056,11 +7211,15 @@ TMDB_PROVIDER_PAGE_SIZE = 20
 TMDB_LOGICAL_PAGE_SIZE_LIMIT = 100
 TMDB_PAGE_WINDOW_CACHE_TTL_SECONDS = 60
 TMDB_PAGE_WINDOW_CACHE_LIMIT = 256
+TMDB_DISCOVER_SNAPSHOT_CACHE_TTL_SECONDS = 60
+TMDB_DISCOVER_SNAPSHOT_CACHE_LIMIT = 64
 TMDB_DENSE_SCAN_PAGE_BUDGET = 10
 TMDB_DENSE_WINDOW_CACHE_TTL_SECONDS = 120
 TMDB_DENSE_WINDOW_CACHE_LIMIT = 64
 _tmdb_page_window_cache = {}
 _tmdb_page_window_cache_lock = threading.Lock()
+_tmdb_discover_snapshot_cache = {}
+_tmdb_discover_snapshot_cache_lock = threading.Lock()
 _tmdb_dense_window_cache = {}
 _tmdb_dense_window_cache_lock = threading.Lock()
 
@@ -7188,6 +7347,69 @@ def _tmdb_fetch_page_window(first_url, provider_pages):
             data['total_results'] = page_data.get('total_results', 0)
         data['results'].extend(page_data.get('results', []))
     return data
+
+
+def _tmdb_discover_snapshot_key(first_url, page_size):
+    """Identify one short-lived logical Discover feed without retaining its API key."""
+    parsed = urllib.parse.urlsplit(first_url)
+    query = [
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if key not in {'api_key', 'page'}
+    ]
+    source = urllib.parse.urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urllib.parse.urlencode(sorted(query)),
+        '',
+    ))
+    return hashlib.sha256(f'{source}|page_size={page_size}'.encode('utf-8')).hexdigest()
+
+
+def _tmdb_unique_discover_window(snapshot_key, page, data, provider_offset, page_size):
+    """Remove TMDB page overlap while keeping consecutive Discover pages stable.
+
+    Popular and trending lists can reorder between TMDB provider pages.  The
+    snapshot is intentionally short-lived and only remembers IDs CP has
+    already displayed for the same query; it never causes an extra TMDB fetch.
+    """
+    provider_window = list((data.get('results', []) or [])[provider_offset:provider_offset + page_size])
+    now = time.monotonic()
+    with _tmdb_discover_snapshot_cache_lock:
+        expired = [
+            key for key, entry in _tmdb_discover_snapshot_cache.items()
+            if now - entry['touched_at'] >= TMDB_DISCOVER_SNAPSHOT_CACHE_TTL_SECONDS
+        ]
+        for key in expired:
+            _tmdb_discover_snapshot_cache.pop(key, None)
+        entry = _tmdb_discover_snapshot_cache.get(snapshot_key)
+        if entry is None:
+            while len(_tmdb_discover_snapshot_cache) >= TMDB_DISCOVER_SNAPSHOT_CACHE_LIMIT:
+                oldest = min(
+                    _tmdb_discover_snapshot_cache,
+                    key=lambda key: _tmdb_discover_snapshot_cache[key]['touched_at'],
+                )
+                _tmdb_discover_snapshot_cache.pop(oldest, None)
+            entry = {'seen': set(), 'pages': {}, 'touched_at': now}
+            _tmdb_discover_snapshot_cache[snapshot_key] = entry
+        entry['touched_at'] = now
+        cached = entry['pages'].get(page)
+        if cached is not None:
+            return copy.deepcopy(cached)
+
+        page_seen = set()
+        unique = []
+        for movie in provider_window:
+            movie_id = _tmdb_movie_id(movie)
+            if movie_id and (movie_id in entry['seen'] or movie_id in page_seen):
+                continue
+            if movie_id:
+                page_seen.add(movie_id)
+            unique.append(movie)
+        entry['seen'].update(page_seen)
+        entry['pages'][page] = copy.deepcopy(unique)
+        return unique
 
 
 def _tmdb_person_credit_ids(person_id, role):
@@ -7469,11 +7691,15 @@ def advanced_tmdb_discover():
                 'strategy': 'dense_window',
             })
 
-        data = _tmdb_fetch_page_window(
-            _tmdb_advanced_url(plan, provider_pages[0]),
-            provider_pages,
+        first_url = _tmdb_advanced_url(plan, provider_pages[0])
+        data = _tmdb_fetch_page_window(first_url, provider_pages)
+        provider_window = _tmdb_unique_discover_window(
+            _tmdb_discover_snapshot_key(first_url, page_size),
+            page,
+            data,
+            provider_offset,
+            page_size,
         )
-        provider_window = (data.get('results', []) or [])[provider_offset:provider_offset + page_size]
         movies = [_normalize_tmdb_movie_summary(movie) for movie in provider_window]
 
         metadata = _tmdb_page_metadata(
@@ -7623,9 +7849,11 @@ def explore_browse():
                 'seeders': r.get('seeders', 0),
                 'magnet_url': links['magnet_url'],
                 'download_url': links['download_url'],
+                'info_hash': links['info_hash'],
                 'info_url': r.get('infoUrl', ''),
                 'indexer': r.get('indexer', ''),
                 'size_human': format_size(size) if size else '?',
+                'size_bytes': size,
                 'title': title,
             }
             key = f"{parsed_title.lower()}_{parsed_year}"
@@ -7807,9 +8035,15 @@ def tmdb_discover():
             url = f"{base_url}?api_key={urllib.parse.quote(_tmdb_key)}&language=en-US&page={tmdb_pages[0]}"
 
         data = _tmdb_fetch_page_window(url, tmdb_pages)
+        provider_window = _tmdb_unique_discover_window(
+            _tmdb_discover_snapshot_key(url, page_size),
+            page,
+            data,
+            provider_offset,
+            page_size,
+        )
         movies = []
-        provider_results = data.get('results', [])
-        for m in provider_results[provider_offset:provider_offset + page_size]:
+        for m in provider_window:
             poster_path = m.get('poster_path', '')
             release = m.get('release_date', '') or ''
             year    = release[:4] if release else ''
@@ -12044,7 +12278,7 @@ def user_followed_releases():
     movie = body.get('movie') or body
     try:
         if request.method == 'POST':
-            followed = store.follow_movie(movie)
+            followed = store.follow_movie(_movie_with_followed_imdb_identity(movie))
             return jsonify(_curation_payload({'movie': followed, 'movies': _sort_followed_releases(store.followed_all())}, store))
         removed = store.unfollow_movie(movie)
         return jsonify(_curation_payload({'success': True, 'removed': removed, 'movies': _sort_followed_releases(store.followed_all())}, store))
@@ -12602,6 +12836,43 @@ def tmdb_imdb_id():
 
 # ── Ollama / Pick My Movie ───────────────────────────────────────────────────
 
+def _ollama_validate_model(url, model):
+    started_at = time.monotonic()
+    raw = _ollama_api_json(url, '/api/chat', payload={
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'Return only valid JSON with the exact shape {"ok":true}.'},
+            {'role': 'user', 'content': 'Confirm that this model can answer Cinema Paradiso.'},
+        ],
+        'stream': False,
+        'format': 'json',
+        'options': {'temperature': 0},
+    })
+    content = str(raw.get('message', {}).get('content', '') or '')
+    parsed = _ollama_json_content(content)
+    if not isinstance(parsed, dict) or parsed.get('ok') is not True:
+        raise ValueError('model did not return the required JSON')
+    return {
+        'success': True,
+        'model': model,
+        'elapsed_ms': round((time.monotonic() - started_at) * 1000),
+    }
+
+
+def _ollama_validation_error(error, model):
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return f'Ollama model {model} timed out while generating a test response.', 504
+    if isinstance(error, urllib.error.HTTPError):
+        return f'Ollama model {model} returned HTTP {error.code}', 502
+    if isinstance(error, urllib.error.URLError):
+        if isinstance(error.reason, (socket.timeout, TimeoutError)):
+            return f'Ollama model {model} timed out while generating a test response.', 504
+        return f'Cannot reach Ollama: {error.reason}', 502
+    if isinstance(error, (_json.JSONDecodeError, ValueError, KeyError)):
+        return f'Ollama model {model} did not return the required JSON response.', 502
+    return f'Cannot reach Ollama: {error}', 502
+
+
 @app.route('/api/ollama/config', methods=['GET'])
 def get_ollama_config():
     return jsonify({
@@ -12617,6 +12888,7 @@ def set_ollama_config():
     data = request.get_json(silent=True)
     if not data:
         return jsonify({'error': 'No data provided'}), 400
+    candidate_limit = _ollama_candidate_limit
     if 'candidate_limit' in data:
         try:
             candidate_limit = int(data.get('candidate_limit'))
@@ -12624,11 +12896,22 @@ def set_ollama_config():
             return jsonify({'error': 'candidate_limit must be an integer from 1 to 50'}), 400
         if candidate_limit < OLLAMA_CANDIDATE_LIMIT_MIN or candidate_limit > OLLAMA_CANDIDATE_LIMIT_MAX:
             return jsonify({'error': 'candidate_limit must be an integer from 1 to 50'}), 400
-        _ollama_candidate_limit = candidate_limit
-    _ollama_url   = data.get('url', 'http://localhost:11434').strip().rstrip('/')
-    _ollama_model = data.get('model', '').strip()
+    next_url = data.get('url', 'http://localhost:11434').strip().rstrip('/')
+    next_model = data.get('model', '').strip()
+    validation = None
+    if next_model:
+        if not next_url:
+            return jsonify({'error': 'No Ollama URL configured — add it in Settings.'}), 400
+        try:
+            validation = _ollama_validate_model(next_url, next_model)
+        except Exception as error:
+            message, status = _ollama_validation_error(error, next_model)
+            return jsonify({'error': message}), status
+    _ollama_candidate_limit = candidate_limit
+    _ollama_url = next_url
+    _ollama_model = next_model
     _save_config(_all_config())
-    return jsonify({'success': True})
+    return jsonify({'success': True, 'model_test': validation})
 
 
 def _ollama_model_name(item):
@@ -12637,18 +12920,78 @@ def _ollama_model_name(item):
     return str(item.get('model') or item.get('name') or '').strip()
 
 
+def _ollama_is_cloud_model(model):
+    key = str(model or '').strip().casefold()
+    return key.endswith(':cloud') or key.endswith('-cloud')
+
+
+def _ollama_cloud_alias(model):
+    model = str(model or '').strip()
+    if not model or _ollama_is_cloud_model(model):
+        return model
+    if ':' in model:
+        return f'{model}-cloud'
+    return f'{model}:cloud'
+
+
+def _ollama_merge_cloud_model(models, model, **metadata):
+    model = str(model or '').strip()
+    if not model:
+        return
+    key = model.casefold()
+    entry = models.setdefault(key, {'model': model, 'description': '', 'required_plan': ''})
+    for field in ('description', 'required_plan'):
+        value = str(metadata.get(field) or '').strip()
+        if value:
+            entry[field] = value
+    if metadata.get('registered'):
+        entry['registered'] = True
+
+
+def _ollama_cached_access_scan(url, cloud_models):
+    key = str(url or '').strip().rstrip('/').casefold()
+    model_keys = tuple(sorted(item['model'].casefold() for item in cloud_models))
+    with _ollama_access_scan_cache_lock:
+        cached = _ollama_access_scan_cache.get(key)
+        if not cached or cached.get('model_keys') != model_keys:
+            return None
+        return cached.get('scan')
+
+
+def _ollama_apply_access_scan(catalog, scan):
+    if not scan:
+        catalog['access_scan'] = None
+        return catalog
+    statuses = {
+        str(item.get('model') or '').casefold(): str(item.get('status') or 'unknown')
+        for item in scan.get('results', [])
+    }
+    for item in catalog.get('cloud_models', []):
+        item['access_status'] = statuses.get(item['model'].casefold(), 'unknown')
+    catalog['access_scan'] = {key: value for key, value in scan.items() if key != 'results'}
+    return catalog
+
+
 def _ollama_model_choices(url):
-    free_cloud_models = []
+    cloud_models = {}
     local_models = []
     warnings = []
+    local_reachable = False
+    cloud_catalog_reachable = False
 
     try:
         tags = _ollama_api_json(url, '/api/tags', timeout=8)
+        local_reachable = True
         seen_local = set()
         for item in tags.get('models', []):
             model = _ollama_model_name(item)
             key = model.casefold()
-            if not model or key.endswith('cloud') or key in seen_local:
+            if not model:
+                continue
+            if _ollama_is_cloud_model(model):
+                _ollama_merge_cloud_model(cloud_models, model, registered=True)
+                continue
+            if key in seen_local:
                 continue
             seen_local.add(key)
             details = item.get('details') if isinstance(item.get('details'), dict) else {}
@@ -12660,36 +13003,81 @@ def _ollama_model_choices(url):
         warnings.append(f'Local model list unavailable: {error}')
 
     try:
+        tags = _ollama_api_json(OLLAMA_CLOUD_CATALOG_URL, '/api/tags', timeout=8)
+        cloud_catalog_reachable = True
+        for item in tags.get('models', []):
+            _ollama_merge_cloud_model(cloud_models, _ollama_cloud_alias(_ollama_model_name(item)))
+    except Exception as error:
+        warnings.append(f'Cloud model catalog unavailable: {error}')
+
+    try:
         recommendations = _ollama_api_json(url, '/api/experimental/model-recommendations', timeout=8)
-        seen_cloud = set()
         for item in recommendations.get('recommendations', []):
             model = _ollama_model_name(item)
-            key = model.casefold()
-            if (
-                not model
-                or not key.endswith('cloud')
-                or str(item.get('required_plan') or '').strip().casefold() != 'free'
-                or key in seen_cloud
-            ):
+            if not _ollama_is_cloud_model(model):
                 continue
-            seen_cloud.add(key)
-            free_cloud_models.append({
-                'model': model,
-                'description': str(item.get('description') or '').strip(),
-                'required_plan': 'free',
-            })
+            _ollama_merge_cloud_model(
+                cloud_models,
+                model,
+                description=item.get('description'),
+                required_plan=item.get('required_plan'),
+            )
     except Exception as error:
-        warnings.append(f'Free cloud model list unavailable: {error}')
+        warnings.append(f'Cloud plan metadata unavailable: {error}')
 
-    free_cloud_models.sort(key=lambda item: item['model'].casefold())
+    cloud_models = sorted(cloud_models.values(), key=lambda item: item['model'].casefold())
     local_models.sort(key=lambda item: item['model'].casefold())
-    return {
+    catalog = {
         'configured_model': _ollama_model,
-        'free_cloud_models': free_cloud_models,
+        'cloud_models': cloud_models,
         'local_models': local_models,
         'warnings': warnings,
-        'reachable': len(warnings) < 2,
+        'reachable': local_reachable or cloud_catalog_reachable,
     }
+    return _ollama_apply_access_scan(catalog, _ollama_cached_access_scan(url, cloud_models))
+
+
+def _ollama_http_error_detail(error):
+    try:
+        payload = _json.loads(error.read().decode())
+        return str(payload.get('error') or '').strip()
+    except Exception:
+        return ''
+
+
+def _ollama_probe_model_access(url, model):
+    started_at = time.monotonic()
+    try:
+        _ollama_api_json(url, '/api/chat', payload={
+            'model': model,
+            'messages': [{'role': 'user', 'content': 'Reply OK.'}],
+            'stream': False,
+            'think': False,
+            'options': {'temperature': 0, 'num_predict': 1},
+        }, timeout=30)
+        return {
+            'model': model,
+            'status': 'accessible',
+            'http_status': 200,
+            'elapsed_ms': round((time.monotonic() - started_at) * 1000),
+        }
+    except urllib.error.HTTPError as error:
+        blocked = error.code == 403
+        return {
+            'model': model,
+            'status': 'blocked' if blocked else 'unknown',
+            'http_status': error.code,
+            'elapsed_ms': round((time.monotonic() - started_at) * 1000),
+            'error': _ollama_http_error_detail(error) or f'HTTP {error.code}',
+        }
+    except Exception as error:
+        return {
+            'model': model,
+            'status': 'unknown',
+            'http_status': None,
+            'elapsed_ms': round((time.monotonic() - started_at) * 1000),
+            'error': str(error),
+        }
 
 
 @app.route('/api/ollama/models')
@@ -12700,6 +13088,48 @@ def get_ollama_models():
     return jsonify(_ollama_model_choices(url))
 
 
+@app.route('/api/ollama/models/scan', methods=['POST'])
+def scan_ollama_models():
+    data = request.get_json(silent=True) or {}
+    url = str(data.get('url') or _ollama_url).strip().rstrip('/')
+    if not url:
+        return jsonify({'error': 'No Ollama URL configured — add it in Settings.'}), 400
+    catalog = _ollama_model_choices(url)
+    models = [item['model'] for item in catalog.get('cloud_models', [])]
+    if not models:
+        return jsonify({'error': 'Ollama cloud catalog returned no models to scan.'}), 502
+    results_by_model = {}
+    workers = min(OLLAMA_ACCESS_SCAN_WORKERS, len(models))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        future_models = {
+            executor.submit(_ollama_probe_model_access, url, model): model
+            for model in models
+        }
+        for future in concurrent.futures.as_completed(future_models):
+            model = future_models[future]
+            try:
+                result = future.result()
+            except Exception as error:
+                result = {'model': model, 'status': 'unknown', 'http_status': None, 'error': str(error)}
+            results_by_model[model.casefold()] = result
+    results = [results_by_model[model.casefold()] for model in models]
+    scan = {
+        'scanned_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'catalog_count': len(results),
+        'accessible_count': sum(item['status'] == 'accessible' for item in results),
+        'blocked_count': sum(item['status'] == 'blocked' for item in results),
+        'unknown_count': sum(item['status'] == 'unknown' for item in results),
+        'results': results,
+    }
+    cache_key = url.casefold()
+    with _ollama_access_scan_cache_lock:
+        _ollama_access_scan_cache[cache_key] = {
+            'model_keys': tuple(sorted(model.casefold() for model in models)),
+            'scan': scan,
+        }
+    return jsonify(_ollama_apply_access_scan(catalog, scan))
+
+
 @app.route('/api/ollama/test')
 def ollama_test():
     url = request.args.get('url', _ollama_url).strip().rstrip('/')
@@ -12708,39 +13138,11 @@ def ollama_test():
         return jsonify({'error': 'No Ollama URL configured — add it in Settings.'}), 400
     if not model:
         return jsonify({'error': 'No Ollama model selected — choose one in Settings.'}), 400
-    started_at = time.monotonic()
     try:
-        raw = _ollama_api_json(url, '/api/chat', payload={
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': 'Return only valid JSON with the exact shape {"ok":true}.'},
-                {'role': 'user', 'content': 'Confirm that this model can answer Cinema Paradiso.'},
-            ],
-            'stream': False,
-            'format': 'json',
-            'options': {'temperature': 0},
-        })
-        content = str(raw.get('message', {}).get('content', '') or '')
-        parsed = _ollama_json_content(content)
-        if not isinstance(parsed, dict) or parsed.get('ok') is not True:
-            raise ValueError('model did not return the required JSON')
-        return jsonify({
-            'success': True,
-            'model': model,
-            'elapsed_ms': round((time.monotonic() - started_at) * 1000),
-        })
-    except (socket.timeout, TimeoutError):
-        return jsonify({'error': f'Ollama model {model} timed out while generating a test response.'}), 504
-    except urllib.error.HTTPError as error:
-        return jsonify({'error': f'Ollama model {model} returned HTTP {error.code}'}), 502
-    except urllib.error.URLError as error:
-        if isinstance(error.reason, (socket.timeout, TimeoutError)):
-            return jsonify({'error': f'Ollama model {model} timed out while generating a test response.'}), 504
-        return jsonify({'error': f'Cannot reach Ollama: {error.reason}'}), 502
-    except (_json.JSONDecodeError, ValueError, KeyError):
-        return jsonify({'error': f'Ollama model {model} did not return the required JSON response.'}), 502
-    except Exception as e:
-        return jsonify({'error': f'Cannot reach Ollama: {e}'}), 502
+        return jsonify(_ollama_validate_model(url, model))
+    except Exception as error:
+        message, status = _ollama_validation_error(error, model)
+        return jsonify({'error': message}), status
 
 
 def _ollama_enrich_with_tmdb(title, year):

@@ -61,7 +61,7 @@ const emptySettingsState = {
     update_available: false
   },
   tmdb: { key: '', includeAdult: false },
-  youtube: { key: '', configured: false, keyHint: '' },
+  youtube: { key: '', configured: false, keyHint: '', trailerRegion: 'EG' },
   streaming: {
     enabled: true,
     label: 'Stream',
@@ -147,6 +147,14 @@ const emptyPlayerRuntime = {
   os_fallback_available: true
 };
 
+function languageListText(values) {
+  return (Array.isArray(values) ? values : []).join(', ');
+}
+
+function parseLanguageListText(value) {
+  return String(value || '').split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
 function playerForm(payload = {}) {
   const providers = payload.providers || {};
   const opensubtitles = providers.opensubtitles || {};
@@ -211,13 +219,18 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
   const [aiControlIndexerDialogOpen, setAiControlIndexerDialogOpen] = useState(false);
   const [ollamaModelCatalog, setOllamaModelCatalog] = useState({
     configured_model: '',
-    free_cloud_models: [],
+    cloud_models: [],
     local_models: [],
-    warnings: []
+    warnings: [],
+    access_scan: null
   });
   const [ollamaCustomModel, setOllamaCustomModel] = useState(false);
   const [ollamaExactModel, setOllamaExactModel] = useState('');
   const [playerRuntime, setPlayerRuntime] = useState(emptyPlayerRuntime);
+  const [playerLanguageDrafts, setPlayerLanguageDrafts] = useState(() => ({
+    audio: languageListText(emptySettingsState.player.preferred_audio_languages),
+    subtitles: languageListText(emptySettingsState.player.preferred_subtitle_languages)
+  }));
   const editedFieldsRef = useRef(new Set());
   const ollamaModelGroups = buildOllamaModelGroups(ollamaModelCatalog, forms.ollama.model);
 
@@ -227,9 +240,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       setLoading(true);
       const ollamaModelsRequest = fetchJson('/api/ollama/models').catch((error) => ({
         configured_model: '',
-        free_cloud_models: [],
+        cloud_models: [],
         local_models: [],
-        warnings: [error.message]
+        warnings: [error.message],
+        access_scan: null
       }));
       const requests = await Promise.allSettled([
         fetchJson('/api/config'),
@@ -278,7 +292,8 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         youtube: youtube.status === 'fulfilled' ? {
           key: '',
           configured: Boolean(youtube.value.configured),
-          keyHint: youtube.value.key_hint || ''
+          keyHint: youtube.value.key_hint || '',
+          trailerRegion: youtube.value.trailer_region || 'EG'
         } : emptySettingsState.youtube,
         streaming: streaming.status === 'fulfilled' ? {
           enabled: streaming.value.enabled !== false,
@@ -323,6 +338,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           merged[section] = { ...merged[section], [field]: current[section][field] };
         });
         return merged;
+      });
+      setPlayerLanguageDrafts({
+        audio: languageListText(loadedForms.player.preferred_audio_languages),
+        subtitles: languageListText(loadedForms.player.preferred_subtitle_languages)
       });
       if (ollamaModels.status === 'fulfilled') {
         setOllamaModelCatalog(ollamaModels.value);
@@ -413,6 +432,34 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       setCardStatus('ollama', 'error', 'Ollama could not use that exact model.', error.message);
     } finally {
       setActionState('ollama-model-lookup', false);
+    }
+  }
+
+  async function scanOllamaCloudAccess() {
+    if (!forms.ollama.url?.trim()) {
+      setCardStatus('ollama', 'error', 'Enter the Ollama URL before scanning cloud access.');
+      return;
+    }
+    setActionState('ollama-model-scan', true);
+    setCardStatus('ollama', 'neutral', 'Scanning Ollama cloud access.', 'CP is sending one minimal response request to each catalog model.');
+    try {
+      const catalog = await fetchJson('/api/ollama/models/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: forms.ollama.url.trim() })
+      });
+      setOllamaModelCatalog(catalog);
+      const scan = catalog.access_scan || {};
+      setCardStatus(
+        'ollama',
+        scan.accessible_count ? 'success' : 'error',
+        `${formatCount(scan.accessible_count || 0)} accessible cloud model${scan.accessible_count === 1 ? '' : 's'} found.`,
+        `${formatCount(scan.blocked_count || 0)} subscription-blocked · ${formatCount(scan.unknown_count || 0)} could not be confirmed.`
+      );
+    } catch (error) {
+      setCardStatus('ollama', 'error', 'Cloud access scan failed.', error.message);
+    } finally {
+      setActionState('ollama-model-scan', false);
     }
   }
 
@@ -567,7 +614,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         download_indexer_mode: forms.prowlarr.download_indexer_mode || 'release'
       },
       tmdb: { key: forms.tmdb.key, include_adult: Boolean(forms.tmdb.includeAdult) },
-      youtube: { key: forms.youtube.key },
+      youtube: { key: forms.youtube.key, trailer_region: forms.youtube.trailerRegion || 'EG' },
       streaming: {
         enabled: Boolean(forms.streaming.enabled),
         label: forms.streaming.label,
@@ -617,7 +664,12 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
       if (service === 'youtube') {
         setForms((state) => ({
           ...state,
-          youtube: { key: '', configured: Boolean(saved.configured), keyHint: saved.key_hint || '' }
+          youtube: {
+            key: '',
+            configured: Boolean(saved.configured),
+            keyHint: saved.key_hint || '',
+            trailerRegion: saved.trailer_region || 'EG'
+          }
         }));
       }
       if (service === 'ollama') {
@@ -627,7 +679,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         }));
         setOllamaCustomModel(false);
       }
-      setCardStatus(service, 'success', `${serviceLabel(service)} settings saved.`, 'Run Test to verify the saved connection.');
+      const savedDetail = service === 'ollama' && saved.model_test
+        ? `${saved.model_test.model} returned valid JSON in ${formatCount(saved.model_test.elapsed_ms)} ms.`
+        : 'Run Test to verify the saved connection.';
+      setCardStatus(service, 'success', `${serviceLabel(service)} settings saved.`, savedDetail);
       notify(`${serviceLabel(service)} settings saved`);
       return true;
     } catch (error) {
@@ -779,8 +834,8 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: player.mode,
-          preferred_audio_languages: player.preferred_audio_languages,
-          preferred_subtitle_languages: player.preferred_subtitle_languages,
+          preferred_audio_languages: parseLanguageListText(playerLanguageDrafts.audio),
+          preferred_subtitle_languages: parseLanguageListText(playerLanguageDrafts.subtitles),
           prefer_forced_subtitles: Boolean(player.prefer_forced_subtitles),
           prefer_hearing_impaired_subtitles: Boolean(player.prefer_hearing_impaired_subtitles),
           resume_enabled: Boolean(player.resume_enabled),
@@ -816,6 +871,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         })
       });
       setForms((state) => ({ ...state, player: playerForm(saved) }));
+      setPlayerLanguageDrafts({
+        audio: languageListText(saved.preferred_audio_languages),
+        subtitles: languageListText(saved.preferred_subtitle_languages)
+      });
       setCardStatus(
         'player',
         'success',
@@ -861,6 +920,10 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         body: JSON.stringify({ reset: true })
       });
       setForms((state) => ({ ...state, player: playerForm(saved) }));
+      setPlayerLanguageDrafts({
+        audio: languageListText(saved.preferred_audio_languages),
+        subtitles: languageListText(saved.preferred_subtitle_languages)
+      });
       setCardStatus('player', 'success', 'Player preferences reset.', 'Operating-system default playback is active and provider credentials were removed.');
       notify('Player preferences reset');
     } catch (error) {
@@ -983,7 +1046,15 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clear: true })
       });
-      setForms((state) => ({ ...state, youtube: { key: '', configured: false, keyHint: data.key_hint || '' } }));
+      setForms((state) => ({
+        ...state,
+        youtube: {
+          key: '',
+          configured: false,
+          keyHint: data.key_hint || '',
+          trailerRegion: data.trailer_region || state.youtube.trailerRegion || 'EG'
+        }
+      }));
       setCardStatus('youtube', 'success', 'YouTube key removed.', 'Public 15-video channel feeds remain available.');
       notify('YouTube API key removed');
     } catch (error) {
@@ -1216,16 +1287,16 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
             <label className="dialog-field">
               <span>Preferred audio languages, in order</span>
               <input
-                value={(forms.player.preferred_audio_languages || []).join(', ')}
-                onChange={(event) => updateField('player', 'preferred_audio_languages', event.target.value.split(',').map((value) => value.trim()).filter(Boolean))}
+                value={playerLanguageDrafts.audio}
+                onChange={(event) => setPlayerLanguageDrafts((drafts) => ({ ...drafts, audio: event.target.value }))}
                 placeholder="original, ar, en"
               />
             </label>
             <label className="dialog-field">
               <span>Preferred subtitle languages, in order</span>
               <input
-                value={(forms.player.preferred_subtitle_languages || []).join(', ')}
-                onChange={(event) => updateField('player', 'preferred_subtitle_languages', event.target.value.split(',').map((value) => value.trim()).filter(Boolean))}
+                value={playerLanguageDrafts.subtitles}
+                onChange={(event) => setPlayerLanguageDrafts((drafts) => ({ ...drafts, subtitles: event.target.value }))}
                 placeholder="ar, en"
               />
             </label>
@@ -1719,6 +1790,18 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                   ? `A local key is configured${forms.youtube.keyHint ? ` (${forms.youtube.keyHint})` : ''}. The full value is never returned to this page.`
                   : 'Without a key, Home uses the public 15-video feeds and missing-trailer search stays unavailable.'}
               </p>
+              <label className="settings-field">
+                <span>Trailer availability country</span>
+                <input
+                  value={forms.youtube.trailerRegion || 'EG'}
+                  onChange={(event) => updateField('youtube', 'trailerRegion', event.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 2))}
+                  placeholder="EG"
+                  maxLength={2}
+                  autoComplete="country"
+                  aria-describedby="youtube-trailer-region-help"
+                />
+                <small id="youtube-trailer-region-help">Two-letter country code used to avoid trailers YouTube blocks there. Egypt is EG.</small>
+              </label>
             </>
           )}
           actions={(
@@ -1865,10 +1948,12 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                   {ollamaModelGroups.selected && (
                     <option value={ollamaModelGroups.selected.model}>{ollamaModelGroups.selected.model} — Verified selection</option>
                   )}
-                  <optgroup label="Free cloud models">
-                    {ollamaModelGroups.freeCloud.length ? ollamaModelGroups.freeCloud.map((item) => (
-                      <option key={item.model} value={item.model}>{item.model} — Free Cloud</option>
-                    )) : <option disabled>No free cloud models reported</option>}
+                  <optgroup label={ollamaModelGroups.accessScan ? 'Accessible cloud models' : 'Cloud catalog (not access-tested)'}>
+                    {ollamaModelGroups.cloud.length ? ollamaModelGroups.cloud.map((item) => (
+                      <option key={item.model} value={item.model}>
+                        {item.model}{item.requiredPlan ? ` — ${item.requiredPlan === 'free' ? 'Free' : item.requiredPlan}` : ''}
+                      </option>
+                    )) : <option disabled>{ollamaModelGroups.accessScan ? 'No accessible cloud models found' : 'No cloud models reported'}</option>}
                   </optgroup>
                   {ollamaModelGroups.local.length ? (
                     <optgroup label="Local models">
@@ -1902,7 +1987,12 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
                     />
                   </span>
                 ) : null}
-                <small>Ollama reports only a short recommendation list, not its full cloud catalog. If a cloud model is missing, enter its exact name and CP will test it before selecting it.</small>
+                <small>CP loads Ollama's complete cloud catalog. Scan Cloud Access sends one minimal request per cloud model, then keeps only models your current account can use. Accessible does not necessarily mean permanently free.</small>
+                {ollamaModelCatalog.access_scan ? (
+                  <small>
+                    Last scan: {formatCount(ollamaModelCatalog.access_scan.accessible_count || 0)} accessible of {formatCount(ollamaModelCatalog.access_scan.catalog_count || 0)} · {formatCount(ollamaModelCatalog.access_scan.blocked_count || 0)} subscription-blocked · {formatCount(ollamaModelCatalog.access_scan.unknown_count || 0)} unknown
+                  </small>
+                ) : null}
                 {(ollamaModelCatalog.warnings || []).length ? (
                   <small>Model list warning: {ollamaModelCatalog.warnings.join(' ')}</small>
                 ) : null}
@@ -1924,6 +2014,7 @@ export default function SettingsWorkspace({ notify, onReviewUnmatched, onReviewI
           actions={(
             <>
               <ActionButton loading={saving['ollama-save']} icon={Save} label="Save Ollama" onClick={() => saveIntegration('ollama')} primary />
+              <ActionButton loading={saving['ollama-model-scan']} icon={RefreshCcw} label="Scan Cloud Access" onClick={scanOllamaCloudAccess} />
               <ActionButton loading={saving['ollama-test']} icon={PlugZap} label="Test Model" onClick={() => testIntegration('ollama')} />
             </>
           )}

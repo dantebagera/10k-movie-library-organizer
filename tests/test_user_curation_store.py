@@ -449,6 +449,7 @@ class UserCurationStoreTest(unittest.TestCase):
                 store = app._curation_store()
                 store.follow_movie({
                     "tmdb_id": "1368337",
+                    "imdb_id": "tt33764258",
                     "title": "The Odyssey",
                     "year": "2026",
                     "poster_url": "poster-a",
@@ -464,6 +465,21 @@ class UserCurationStoreTest(unittest.TestCase):
         self.assertEqual(checked["movies"][0]["release_date"], "2026-07-15")
         self.assertEqual(checked["movies"][0]["status"], "watching")
 
+    def test_follow_post_persists_tmdb_resolved_imdb_identity(self):
+        original_user_data_dir = app._user_data_dir
+        with tempfile.TemporaryDirectory() as tmp:
+            app._user_data_dir = tmp
+            try:
+                with patch("app._movie_tmdb_metadata_for_source_search", return_value={"imdb_id": "tt33764258"}):
+                    response = app.app.test_client().post("/api/user/followed-releases", json={
+                        "movie": {"tmdb_id": "1368337", "title": "The Odyssey", "year": "2026"},
+                    })
+            finally:
+                app._user_data_dir = original_user_data_dir
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["movie"]["imdb_id"], "tt33764258")
+
     def test_followed_scan_only_searches_released_due_watching_movies(self):
         original_user_data_dir = app._user_data_dir
         now = app.time.mktime((2026, 8, 12, 12, 0, 0, 0, 0, -1))
@@ -471,10 +487,10 @@ class UserCurationStoreTest(unittest.TestCase):
             app._user_data_dir = tmp
             try:
                 store = app._curation_store()
-                available = store.follow_movie({"tmdb_id": "1", "title": "Already Found", "year": "2026", "release_date": "2026-01-01"})
-                future = store.follow_movie({"tmdb_id": "2", "title": "Future Movie", "year": "2026", "release_date": "2026-09-01"})
-                recent = store.follow_movie({"tmdb_id": "3", "title": "Recently Checked", "year": "2026", "release_date": "2026-01-01"})
-                due = store.follow_movie({"tmdb_id": "4", "title": "Due Movie", "year": "2026", "release_date": "2026-01-01"})
+                available = store.follow_movie({"tmdb_id": "1", "imdb_id": "tt00000001", "title": "Already Found", "year": "2026", "release_date": "2026-01-01"})
+                future = store.follow_movie({"tmdb_id": "2", "imdb_id": "tt00000002", "title": "Future Movie", "year": "2026", "release_date": "2026-09-01"})
+                recent = store.follow_movie({"tmdb_id": "3", "imdb_id": "tt00000003", "title": "Recently Checked", "year": "2026", "release_date": "2026-01-01"})
+                due = store.follow_movie({"tmdb_id": "4", "imdb_id": "tt00000004", "title": "Due Movie", "year": "2026", "release_date": "2026-01-01"})
                 available.update({"status": "available", "best_release": {"title": "saved"}})
                 recent["next_check_at"] = now + 3600
                 store.save_followed_all([available, future, recent, due])
@@ -492,7 +508,7 @@ class UserCurationStoreTest(unittest.TestCase):
         self.assertEqual(probe.call_count, 1)
         self.assertEqual(probe.call_args.args[0]["title"], "Due Movie")
         self.assertEqual(checked["scan_stats"]["eligible"], 1)
-        self.assertEqual(checked["scan_stats"]["skipped"], {"available": 1, "unreleased": 1, "not_due": 1})
+        self.assertEqual(checked["scan_stats"]["skipped"], {"available": 1, "unreleased": 1, "not_due": 1, "unverified_identity": 0})
         by_title = {movie["title"]: movie for movie in checked["movies"]}
         self.assertEqual(by_title["Already Found"]["best_release"], {"title": "saved"})
         self.assertGreaterEqual(by_title["Future Movie"]["next_check_at"], now)
@@ -514,9 +530,9 @@ class UserCurationStoreTest(unittest.TestCase):
             app._user_data_dir = tmp
             try:
                 store = app._curation_store()
-                store.follow_movie({"tmdb_id": "10", "title": "RSS Match", "year": "2026", "release_date": "2026-09-01"})
-                store.follow_movie({"tmdb_id": "20", "title": "Prowlarr Fallback", "year": "2026", "release_date": "2026-01-01"})
-                store.follow_movie({"tmdb_id": "30", "title": "Future RSS Miss", "year": "2026", "release_date": "2026-10-01"})
+                store.follow_movie({"tmdb_id": "10", "imdb_id": "tt00000010", "title": "RSS Match", "year": "2026", "release_date": "2026-09-01"})
+                store.follow_movie({"tmdb_id": "20", "imdb_id": "tt00000020", "title": "Prowlarr Fallback", "year": "2026", "release_date": "2026-01-01"})
+                store.follow_movie({"tmdb_id": "30", "imdb_id": "tt00000030", "title": "Future RSS Miss", "year": "2026", "release_date": "2026-10-01"})
                 context = {"ready": True, "indexers": [{"id": "1", "name": "YTS"}], "indexer_ids": ["1"], "indexer_names": {"YTS"}}
 
                 with patch("app.time.time", return_value=now), \
@@ -524,6 +540,7 @@ class UserCurationStoreTest(unittest.TestCase):
                      patch("app._movie_with_source_title_aliases", side_effect=lambda movie, **_kwargs: {**movie, "title_aliases": [movie["title"]], "release_years": [movie["year"]]}), \
                      patch("app._followed_release_search_context", return_value=context), \
                      patch("app._fetch_yts_rss_latest", return_value=rss_rows) as rss_fetch, \
+                     patch("app._yts_source_imdb_id", return_value="tt00000010"), \
                      patch("app._probe_followed_release", return_value={"searched": True, "release": None}) as probe:
                     checked = app._check_followed_releases()
             finally:
@@ -567,7 +584,7 @@ class UserCurationStoreTest(unittest.TestCase):
             app._user_data_dir = tmp
             try:
                 store = app._curation_store()
-                store.follow_movie({"tmdb_id": "77", "title": "Retry Later", "year": "2026", "release_date": "2026-01-01"})
+                store.follow_movie({"tmdb_id": "77", "imdb_id": "tt00000077", "title": "Retry Later", "year": "2026", "release_date": "2026-01-01"})
                 context = {"ready": True, "indexers": [{"id": "9", "name": "Trusted"}], "indexer_ids": ["9"], "indexer_names": {"Trusted"}}
                 with patch("app.time.time", return_value=now), \
                      patch("app._find_owned_movies", return_value=[None]), \
@@ -607,6 +624,7 @@ class UserCurationStoreTest(unittest.TestCase):
                 for index in range(6):
                     store.follow_movie({
                         "tmdb_id": str(800 + index),
+                        "imdb_id": f"tt{800 + index:08d}",
                         "title": f"Parallel {index}",
                         "year": "2020",
                         "release_date": "2020-01-01",
@@ -815,8 +833,9 @@ class UserCurationStoreTest(unittest.TestCase):
             ])
 
         try:
-            with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
-                release = app._find_best_followed_release({"title": "Disclosure Day", "year": "2026"})
+            with patch("app.urllib.request.urlopen", side_effect=fake_urlopen), \
+                 patch("app._yts_source_imdb_id", return_value="tt33764258"):
+                release = app._find_best_followed_release({"title": "Disclosure Day", "year": "2026", "imdb_id": "tt33764258"})
         finally:
             (
                 app._prowlarr_url,

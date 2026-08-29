@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ADVANCED_SEARCH_LIMITS, criteriaForScope, criterionFor } from './advancedSearchRegistry.js';
 import {
   createEmptyQuery, normalizeAdvancedQuery, queryGroup, withCriterion,
-  withGroupJoin, withoutCriterionValue
+  withGenreValueRelation, withGroupJoin, withoutCriterionValue, parseYearDraft, yearRangeDraft
 } from './advancedSearchModel.js';
 
 const fixedOptions = {
@@ -83,6 +83,34 @@ function IdentityPicker({ scope, type, searchIdentities, onPick }) {
 
 function NumericEditor({ type, value, onChange }) {
   const between = value.operator === 'between';
+  const [yearDraft, setYearDraft] = useState(() => ({
+    from: String(value.from ?? ''),
+    to: String(value.to ?? ''),
+    value: String(value.value ?? '')
+  }));
+  useEffect(() => {
+    setYearDraft({
+      from: String(value.from ?? ''),
+      to: String(value.to ?? ''),
+      value: String(value.value ?? '')
+    });
+  }, [type, value.from, value.operator, value.to, value.value]);
+  const yearValidation = type === 'year'
+    ? (between ? yearRangeDraft(yearDraft.from, yearDraft.to) : parseYearDraft(yearDraft.value))
+    : null;
+  function updateYearDraft(field, nextValue) {
+    const nextDraft = { ...yearDraft, [field]: nextValue };
+    setYearDraft(nextDraft);
+    if (between) {
+      const range = yearRangeDraft(nextDraft.from, nextDraft.to);
+      if (range.ready && range.from && range.to) {
+        onChange({ ...value, from: Number(range.from), to: Number(range.to) });
+      }
+      return;
+    }
+    const parsed = parseYearDraft(nextDraft.value);
+    if (parsed.state === 'valid') onChange({ ...value, value: parsed.value });
+  }
   return (
     <div className="advanced-inline-editor">
       <select value={value.operator} onChange={(event) => {
@@ -94,10 +122,11 @@ function NumericEditor({ type, value, onChange }) {
         <option value="exactly">Exactly</option><option value="at_least">At least</option><option value="at_most">At most</option><option value="between">Between</option>
       </select>
       {between ? <>
-        <input type="number" value={value.from} min={type === 'year' ? 1888 : 0} max={type === 'year' ? 2100 : 10} step={type === 'year' ? 1 : 0.1} onChange={(event) => onChange({ ...value, from: Number(event.target.value) })} aria-label={`${type} from`} />
+        <input type={type === 'year' ? 'text' : 'number'} value={type === 'year' ? yearDraft.from : value.from} min={type === 'year' ? undefined : 0} max={type === 'year' ? undefined : 10} maxLength={type === 'year' ? 4 : undefined} inputMode={type === 'year' ? 'numeric' : undefined} step={type === 'year' ? undefined : 0.1} onChange={(event) => type === 'year' ? updateYearDraft('from', event.target.value) : onChange({ ...value, from: Number(event.target.value) })} aria-label={`${type} from`} aria-invalid={type === 'year' && Boolean(yearValidation?.error)} />
         <span>to</span>
-        <input type="number" value={value.to} min={type === 'year' ? 1888 : 0} max={type === 'year' ? 2100 : 10} step={type === 'year' ? 1 : 0.1} onChange={(event) => onChange({ ...value, to: Number(event.target.value) })} aria-label={`${type} to`} />
-      </> : <input type="number" value={value.value} min={type === 'year' ? 1888 : 0} max={type === 'year' ? 2100 : 10} step={type === 'year' ? 1 : 0.1} onChange={(event) => onChange({ ...value, value: Number(event.target.value) })} aria-label={type} />}
+        <input type={type === 'year' ? 'text' : 'number'} value={type === 'year' ? yearDraft.to : value.to} min={type === 'year' ? undefined : 0} max={type === 'year' ? undefined : 10} maxLength={type === 'year' ? 4 : undefined} inputMode={type === 'year' ? 'numeric' : undefined} step={type === 'year' ? undefined : 0.1} onChange={(event) => type === 'year' ? updateYearDraft('to', event.target.value) : onChange({ ...value, to: Number(event.target.value) })} aria-label={`${type} to`} aria-invalid={type === 'year' && Boolean(yearValidation?.error)} />
+      </> : <input type={type === 'year' ? 'text' : 'number'} value={type === 'year' ? yearDraft.value : value.value} min={type === 'year' ? undefined : 0} max={type === 'year' ? 4 : undefined} maxLength={type === 'year' ? 4 : undefined} inputMode={type === 'year' ? 'numeric' : undefined} step={type === 'year' ? undefined : 0.1} onChange={(event) => type === 'year' ? updateYearDraft('value', event.target.value) : onChange({ ...value, value: Number(event.target.value) })} aria-label={type} aria-invalid={type === 'year' && Boolean(yearValidation?.error)} />}
+      {type === 'year' && yearValidation?.error && <span className="year-draft-error" role="alert">{yearValidation.error}</span>}
     </div>
   );
 }
@@ -205,7 +234,6 @@ export default function AdvancedSearchBuilder({
           const editableNumeric = ['year', 'rating'].includes(group.type);
           const singletonValue = group.values[0];
           const joinOptions = definition.joinOptions || ['and', 'or'];
-          const nextJoin = joinOptions[(joinOptions.indexOf(group.join) + 1) % joinOptions.length];
           return <div className="advanced-criterion-cluster" key={group.type}>
             {groupIndex > 0 && <span className="advanced-type-join">AND</span>}
             <div className="advanced-criterion-block">
@@ -217,20 +245,29 @@ export default function AdvancedSearchBuilder({
                 : group.type === 'minimum_votes' ? <div className="advanced-single-editor"><input type="number" value={singletonValue.value} min="0" max="10000000" step="100" onChange={(event) => updateGroup(group.type, [{ value: Number(event.target.value) }])} aria-label="Minimum votes" /><button type="button" onClick={() => removeValue(group.type)} aria-label="Remove minimum votes"><X size={13} /></button></div>
                   : group.type === 'runtime' ? <div className="advanced-single-editor"><RuntimeEditor value={singletonValue} onChange={(value) => updateGroup(group.type, [value])} /><button type="button" onClick={() => removeValue(group.type)} aria-label="Remove runtime"><X size={13} /></button></div>
                     : <div className="advanced-value-list">
-              {group.values.map((value, index) => <span className="advanced-value-unit" key={`${group.type}-${valueLabel(group.type, value)}-${index}`}>
-                {index > 0 && (joinOptions.length > 1
+              {group.values.map((value, index) => {
+                const relation = value.exclude ? 'not' : group.join;
+                const relationOptions = definition.supportsNot ? ['and', 'or', 'not'] : joinOptions;
+                const nextRelation = relationOptions[(relationOptions.indexOf(relation) + 1) % relationOptions.length];
+                const showRelation = index > 0 || value.exclude;
+                return <span className="advanced-value-unit" key={`${group.type}-${valueLabel(group.type, value)}-${index}`}>
+                {showRelation && (relationOptions.length > 1
                   ? <button
                     type="button"
                     className="advanced-join-toggle"
-                    onClick={() => onChange(withGroupJoin(normalized, group.type, nextJoin))}
-                    aria-label={`Combine ${definition.label} values with ${group.join.toUpperCase()}; click to use ${nextJoin.toUpperCase()}`}
-                  >{group.join.toUpperCase()}</button>
-                  : <span className="advanced-join-fixed">{group.join.toUpperCase()}</span>)}
+                    data-relation={relation}
+                    onClick={() => onChange(definition.supportsNot
+                      ? withGenreValueRelation(normalized, index, nextRelation)
+                      : withGroupJoin(normalized, group.type, nextRelation))}
+                    aria-label={`${relation === 'not' ? `Exclude ${valueLabel(group.type, value)}` : `Combine ${definition.label} values with ${relation.toUpperCase()}`}; click to use ${nextRelation.toUpperCase()}`}
+                  >{relation.toUpperCase()}</button>
+                  : <span className="advanced-join-fixed">{relation.toUpperCase()}</span>)}
                 <span className="advanced-value-chip">
                   {group.type === 'person' ? <><span>{value.label}</span><select value={value.role} onChange={(event) => updateGroup(group.type, group.values.map((item, valueIndex) => valueIndex === index ? { ...item, role: event.target.value } : item))} aria-label={`Role for ${value.label}`}><option value="actor">Actor</option><option value="director">Director</option><option value="writer">Writer</option></select></> : valueLabel(group.type, value)}
                   <button type="button" onClick={() => removeValue(group.type, index)} aria-label={`Remove ${definition.label.toLowerCase()} ${valueLabel(group.type, value)}`}><X size={13} /></button>
                 </span>
-              </span>)}
+              </span>;
+              })}
             </div>}
             </div>
           </div>;
@@ -243,7 +280,7 @@ export default function AdvancedSearchBuilder({
       </div>
       {addOpen && <div className="advanced-add-popover">
         <div className="advanced-popover-heading">
-          <div><strong>Add criterion</strong><span>Different types use AND. Repeated values use the clickable AND/OR connector.</span></div>
+          <div><strong>Add criterion</strong><span>Different types use AND. Repeated Genre values can cycle through AND, OR, and NOT.</span></div>
           <div className="advanced-popover-actions">
             <button type="button" className="btn btn-secondary" onClick={() => (onReset ? onReset() : onChange(createEmptyQuery(scope)))}><RotateCcw size={14} /> Reset</button>
             <button type="button" className="advanced-popover-close" onClick={() => setAddOpen(false)} aria-label="Close criterion picker"><X size={15} /></button>

@@ -600,14 +600,17 @@ test('Downloads shows qBittorrent without migration-only review records', async 
   await expect(page.getByText('deferred completed imports')).toHaveCount(0);
 });
 
-test('Settings selects a free Ollama cloud model and tests that exact model', async ({ page }) => {
+test('Settings scans accessible Ollama cloud models and validates the saved selection', async ({ page }) => {
   let savedModel = '';
   let testedModel = '';
 
   await page.route('**/api/ollama/config', async (route) => {
     if (route.request().method() === 'POST') {
       savedModel = (await route.request().postDataJSON()).model;
-      await route.fulfill({ json: { success: true } });
+      await route.fulfill({ json: {
+        success: true,
+        model_test: { success: true, model: savedModel, elapsed_ms: 900 }
+      } });
       return;
     }
     await route.fulfill({ json: {
@@ -618,12 +621,25 @@ test('Settings selects a free Ollama cloud model and tests that exact model', as
   });
   await page.route('**/api/ollama/models', (route) => route.fulfill({ json: {
     configured_model: 'gemma4:31b-cloud',
-    free_cloud_models: [
+    cloud_models: [
       { model: 'minimax-m3:cloud', description: 'Free cloud model', required_plan: 'free' },
-      { model: 'nemotron-3-super:cloud', description: 'Free cloud model', required_plan: 'free' }
+      { model: 'nemotron-3-super:cloud', description: 'Cloud model' },
+      { model: 'glm-5.2:cloud', description: 'Subscription model', required_plan: 'pro' }
     ],
     local_models: [{ model: 'gemma3:12b', description: '12B' }],
-    warnings: []
+    warnings: [],
+    access_scan: null
+  } }));
+  await page.route('**/api/ollama/models/scan', (route) => route.fulfill({ json: {
+    configured_model: 'gemma4:31b-cloud',
+    cloud_models: [
+      { model: 'minimax-m3:cloud', required_plan: 'free', access_status: 'accessible' },
+      { model: 'nemotron-3-super:cloud', access_status: 'accessible' },
+      { model: 'glm-5.2:cloud', required_plan: 'pro', access_status: 'blocked' }
+    ],
+    local_models: [{ model: 'gemma3:12b', description: '12B' }],
+    warnings: [],
+    access_scan: { catalog_count: 3, accessible_count: 2, blocked_count: 1, unknown_count: 0 }
   } }));
   await page.route('**/api/ollama/test?*', async (route) => {
     testedModel = new URL(route.request().url()).searchParams.get('model') || '';
@@ -634,10 +650,15 @@ test('Settings selects a free Ollama cloud model and tests that exact model', as
 
   const modelSelector = page.getByLabel('Ollama model');
   await expect(modelSelector).toHaveValue('gemma4:31b-cloud');
-  await expect(modelSelector.locator('optgroup[label="Free cloud models"] option')).toHaveCount(2);
+  await expect(modelSelector.locator('optgroup[label="Cloud catalog (not access-tested)"] option')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Scan Cloud Access' }).click();
+  await expect(modelSelector.locator('optgroup[label="Accessible cloud models"] option')).toHaveCount(2);
+  await expect(modelSelector.locator('option[value="glm-5.2:cloud"]')).toHaveCount(0);
+  await expect(page.getByText('2 accessible cloud models found.')).toBeVisible();
   await modelSelector.selectOption('minimax-m3:cloud');
   await page.getByRole('button', { name: 'Save Ollama' }).click();
   await expect.poll(() => savedModel).toBe('minimax-m3:cloud');
+  await expect(page.getByText('minimax-m3:cloud returned valid JSON in 900 ms.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Test Model' }).click();
   await expect.poll(() => testedModel).toBe('minimax-m3:cloud');
@@ -850,6 +871,30 @@ test('Advanced Search shares normalized Library and Discover execution without l
   expect(discoverQueries).toHaveLength(discoverRequestsBeforeEquivalentModeSwitch);
   await captureAdvancedEvidence(page, 'gate7-discover-advanced-empty');
   await page.getByRole('button', { name: 'Add advanced search criterion' }).click();
+  for (const genre of ['Horror', 'Sci-Fi', 'Animation', 'Comedy']) {
+    await page.getByLabel('Criterion to add').selectOption('genre');
+    await page.getByLabel('Genre value', { exact: true }).selectOption({ label: genre });
+    await page.getByRole('button', { name: 'Add criterion' }).click();
+  }
+  const animationUnit = page.locator('.advanced-value-unit').filter({ hasText: 'Animation' });
+  const comedyUnit = page.locator('.advanced-value-unit').filter({ hasText: 'Comedy' });
+  const sciFiUnit = page.locator('.advanced-value-unit').filter({ hasText: 'Sci-Fi' });
+  await animationUnit.getByRole('button', { name: /Combine Genre values with OR/ }).click();
+  await comedyUnit.getByRole('button', { name: /Combine Genre values with OR/ }).click();
+  await sciFiUnit.getByRole('button', { name: /Combine Genre values with OR/ }).click();
+  await sciFiUnit.getByRole('button', { name: /Exclude Sci-Fi; click to use AND/ }).click();
+  await expect(animationUnit.getByRole('button', { name: /Exclude Animation/ })).toHaveText('NOT');
+  await expect(comedyUnit.getByRole('button', { name: /Exclude Comedy/ })).toHaveText('NOT');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect.poll(() => discoverQueries.at(-1)?.groups?.find((group) => group.type === 'genre')).toMatchObject({
+    join: 'and',
+    values: [
+      { id: '27', label: 'Horror' },
+      { id: '878', label: 'Sci-Fi' },
+      { id: '16', label: 'Animation', exclude: true },
+      { id: '35', label: 'Comedy', exclude: true }
+    ]
+  });
   await page.getByLabel('Criterion to add').selectOption('person');
   await page.getByLabel('Find person').fill('Advanced');
   await expect(page.getByRole('option', { name: 'Advanced Performer' })).toBeVisible();
@@ -890,6 +935,39 @@ test('Advanced Search shares normalized Library and Discover execution without l
   await captureAdvancedEvidence(page, 'gate7-discover-advanced-empty-result');
   expect(pageErrors).toEqual([]);
   expect(consoleErrors.filter((message) => !message.startsWith('Failed to load resource:'))).toEqual([]);
+});
+
+test('year filter drafts stay editable without taking down Discover, Library, or advanced search', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  const discoverYearFrom = page.getByPlaceholder('Year from');
+  await discoverYearFrom.fill('1');
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.getByText('Cinema Paradiso hit a display error.')).toHaveCount(0);
+  await discoverYearFrom.fill('1800');
+  await expect(page.getByText('Year must be between 1888 and 2100')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+
+  await page.goto('/library', { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Open filters' }).click();
+  const libraryYearFrom = page.getByPlaceholder('Year from');
+  await libraryYearFrom.fill('2');
+  await expect(page.getByRole('heading', { name: 'Movie View', exact: true })).toBeVisible();
+  await expect(page.getByText('Cinema Paradiso hit a display error.')).toHaveCount(0);
+
+  await page.goto('/discover', { waitUntil: 'domcontentloaded' });
+  await page.getByLabel('TMDB search type').selectOption('advanced');
+  await page.getByRole('button', { name: 'Add advanced search criterion' }).click();
+  await page.getByLabel('Criterion to add').selectOption('year');
+  await page.getByRole('button', { name: 'Add criterion' }).click();
+  await page.getByLabel('year from').fill('1');
+  await expect(page.getByRole('heading', { name: 'Discover', exact: true })).toBeVisible();
+  await expect(page.getByText('Cinema Paradiso hit a display error.')).toHaveCount(0);
+  await page.getByLabel('year from').fill('1800');
+  await expect(page.getByText('Year must be between 1888 and 2100')).toBeVisible();
+  expect(pageErrors).toEqual([]);
 });
 
 test('Library switches between canonical movie and raw file views', async ({ page }) => {

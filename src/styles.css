@@ -6652,6 +6652,39 @@ kbd {
   border: 0;
 }
 
+.trailer-alternative-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: #101114;
+  padding: 10px 12px;
+}
+
+.trailer-alternative-panel > div:first-child {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 280px;
+  gap: 3px;
+  color: var(--text-strong);
+}
+
+.trailer-alternative-panel small {
+  color: var(--text-muted);
+}
+
+.trailer-alternative-panel .trailer-fallback-candidates {
+  flex-basis: 100%;
+}
+
+.trailer-alternative-error {
+  flex-basis: 100%;
+  color: var(--danger, #e26b70);
+}
+
 .trailer-session-recommendations {
   margin-top: 12px;
 }
@@ -10073,6 +10106,8 @@ kbd {
 .advanced-join-fixed { border: 1px solid #d4af3760; border-radius: 999px; background: #d4af3710; color: var(--projector-gold); padding: 2px 5px; font-size: .6rem; font-weight: 950; line-height: 1; }
 .advanced-join-toggle { cursor: pointer; }
 .advanced-join-toggle:hover { background: #d4af3725; }
+.advanced-join-toggle[data-relation="not"] { border-color: #ff5b7170; background: #ff5b7115; color: #ff8796; }
+.advanced-join-toggle[data-relation="not"]:hover { background: #ff5b7128; }
 .advanced-overflow-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; border: 0; background: none; color: var(--projector-gold); padding: 3px; font-size: .7rem; font-weight: 850; }
 .advanced-reset-trigger { display: inline-grid; flex: 0 0 28px; width: 28px; height: 28px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-muted); cursor: pointer; }
 .advanced-reset-trigger:hover { background: #ffffff0c; color: var(--text-primary); }
@@ -10126,6 +10161,7 @@ kbd {
 .advanced-builder-footer label { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .advanced-inline-editor { flex-wrap: wrap; gap: 4px; }
 .advanced-inline-editor input { width: 78px; }
+.year-draft-error { flex: 0 0 100%; color: #ffbac4; font-size: 11px; }
 .advanced-single-editor { gap: 4px; min-width: 0; }
 .advanced-single-editor > input { width: 150px; min-width: 0; }
 .advanced-value-chip select { width: auto; min-width: 74px; padding: 0 6px; font-size: .7rem; }

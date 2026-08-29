@@ -157,14 +157,10 @@ def resolve_player_bundle_source(project_root, player_source=None):
     return (runtime_root / "versions" / bundle_version).resolve()
 
 
-def copy_player_runtime(source, destination, app_version=None):
+def copy_player_runtime(source, destination):
     source = Path(source).resolve()
     destination = Path(destination).resolve()
-    manifest = validate_player_manifest(
-        source,
-        app_version=app_version or read_project_version(),
-        verify_hashes=True,
-    )
+    manifest = validate_player_manifest(source, verify_hashes=True)
     bundle_version = manifest["bundle_version"]
     version_destination = destination / "versions" / bundle_version
     if version_destination.exists():
@@ -189,11 +185,7 @@ def copy_player_runtime(source, destination, app_version=None):
         json.dumps(selector, indent=2) + "\n",
         encoding="utf-8",
     )
-    validate_player_manifest(
-        version_destination,
-        app_version=app_version or read_project_version(),
-        verify_hashes=True,
-    )
+    validate_player_manifest(version_destination, verify_hashes=True)
     return manifest
 
 
@@ -240,7 +232,6 @@ def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_
     copy_player_runtime(
         player_source,
         staging / "runtime" / "player",
-        app_version=app_version,
     )
     if ffmpeg_source:
         copy_ffmpeg_runtime(

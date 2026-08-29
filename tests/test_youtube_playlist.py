@@ -148,18 +148,54 @@ class YouTubePlaylistTests(unittest.TestCase):
         self.assertNotIn(["rt", "rt", "rt"], [source_order[index:index + 3] for index in range(len(source_order) - 2)])
 
     def test_search_returns_picker_when_candidates_are_equally_confident(self):
-        response = {
+        search_response = {
             "items": [
                 {"id": {"videoId": "candidate001"}, "snippet": {"title": "Example (2027) Official Trailer", "channelTitle": "A", "publishedAt": "2026-08-09T00:00:00Z", "thumbnails": {}}},
                 {"id": {"videoId": "candidate002"}, "snippet": {"title": "Example (2027) Official Trailer", "channelTitle": "B", "publishedAt": "2026-08-08T00:00:00Z", "thumbnails": {}}},
             ]
         }
+        details_response = {
+            "items": [
+                {"id": "candidate001", "status": {"embeddable": True}, "contentDetails": {}},
+                {"id": "candidate002", "status": {"embeddable": True}, "contentDetails": {}},
+            ]
+        }
+        def opener(request, timeout):
+            response = details_response if "/videos?" in request.full_url else search_response
+            return FakeResponse(json.dumps(response))
         service = YouTubeService([
             {"id": "rt", "name": "RT", "playlist_id": "playlist-a", "source_url": "https://youtube.test/rt"},
-        ], api_key="configured", opener=lambda _request, timeout: FakeResponse(json.dumps(response)))
+        ], api_key="configured", opener=opener)
         result = service.search_trailers("Example", "2027")
         self.assertEqual(result["status"], "choose")
         self.assertEqual(len(result["candidates"]), 2)
+
+    def test_search_filters_explicitly_blocked_country_and_non_embeddable_candidates(self):
+        search_response = {
+            "items": [
+                {"id": {"videoId": "blocked001"}, "snippet": {"title": "Example (2027) Official Trailer", "thumbnails": {}}},
+                {"id": {"videoId": "unembed002"}, "snippet": {"title": "Example (2027) Official Trailer 2", "thumbnails": {}}},
+                {"id": {"videoId": "usable0003"}, "snippet": {"title": "Example (2027) Official Trailer Final", "thumbnails": {}}},
+            ]
+        }
+        details_response = {
+            "items": [
+                {"id": "blocked001", "status": {"embeddable": True}, "contentDetails": {"regionRestriction": {"blocked": ["EG"]}}},
+                {"id": "unembed002", "status": {"embeddable": False}, "contentDetails": {}},
+                {"id": "usable0003", "status": {"embeddable": True}, "contentDetails": {"regionRestriction": {"allowed": ["EG", "US"]}}},
+            ]
+        }
+        def opener(request, timeout):
+            response = details_response if "/videos?" in request.full_url else search_response
+            return FakeResponse(json.dumps(response))
+
+        service = YouTubeService([
+            {"id": "rt", "name": "RT", "playlist_id": "playlist-a", "source_url": "https://youtube.test/rt"},
+        ], api_key="configured", trailer_region="eg", opener=opener)
+        result = service.search_trailers("Example", "2027")
+
+        self.assertEqual(result["trailer_region"], "EG")
+        self.assertEqual([item["video_id"] for item in result["candidates"]], ["usable0003"])
 
     def test_finished_source_is_not_restarted_while_another_source_has_more_pages(self):
         calls = []

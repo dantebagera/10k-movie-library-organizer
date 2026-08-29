@@ -495,6 +495,34 @@ class CatalogStoreTest(unittest.TestCase):
         self.assertEqual([Path(path).name for path in keyword_and], ["003 - Movie's Test.mkv"])
         self.assertEqual(len(listed), 2)
 
+    def test_advanced_library_genre_not_vetoes_matching_comedy_and_animation(self):
+        documents = self._paging_documents(4)
+        movies = documents["app_metadata/tmdb_metadata.json"]["movies"]
+        movies["1000"]["genres"] = ["Horror", "Science Fiction"]
+        movies["1001"]["genres"] = ["Horror", "Science Fiction", "Comedy"]
+        movies["1002"]["genres"] = ["Horror", "Science Fiction", "Animation"]
+        movies["1003"]["genres"] = ["Horror"]
+        query = {
+            "version": 1, "scope": "library", "mode": "advanced",
+            "groups": [{
+                "type": "genre", "join": "and", "values": [
+                    {"id": "Horror", "label": "Horror"},
+                    {"id": "Science Fiction", "label": "Science Fiction"},
+                    {"id": "Animation", "label": "Animation", "exclude": True},
+                    {"id": "Comedy", "label": "Comedy", "exclude": True},
+                ],
+            }],
+            "sort": {"key": "title", "direction": "asc"},
+        }
+        with tempfile.TemporaryDirectory() as root:
+            store = CatalogStore(Path(root) / "catalog.sqlite")
+            store.import_documents(documents, {})
+            page = store.library_page(query=query, page=1, page_size=20)
+            selection = store.library_selection_paths(query=query)
+
+        self.assertEqual([Path(path).name for path in selection], ["000 - Movie's Test.mkv"])
+        self.assertEqual([row["path"] for row in page["candidates"]], selection)
+
     def test_advanced_library_runtime_boundaries_exclude_unknown_facts(self):
         documents = self._paging_documents(4)
         documents["app_metadata/tmdb_metadata.json"]["movies"]["1000"]["runtime"] = None

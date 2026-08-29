@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from services.qbittorrent import (
     BUNDLED_QBT_VERSION,
+    QBittorrentClient,
     QBittorrentError,
     QBittorrentJobStore,
     QBittorrentManager,
+    TorrentIdentityMismatch,
     bundled_runtime_root,
     build_downloads_html,
     is_allowed_prowlarr_url,
@@ -17,11 +19,40 @@ from services.qbittorrent import (
     normalize_architecture,
     process_launch_kwargs,
     select_release_asset,
+    validate_torrent_manifest,
     validate_magnet_url,
 )
 
 
+def movie_manifest(name="Movie.2026.mkv", size=1024 * 1024 * 1024, extras=None, info_hash=""):
+    files = [{"path": name, "length": size}, *(extras or [])]
+    manifest = {"info": {"name": "Movie 2026", "length": sum(item["length"] for item in files), "files": files}}
+    if info_hash:
+        manifest["hash"] = info_hash
+    return [manifest]
+
+
 class QBittorrentPlatformTests(unittest.TestCase):
+    def test_magnet_metadata_handoff_stops_before_payload_download_and_can_resume(self):
+        client = QBittorrentClient("http://127.0.0.1:8686")
+        client.request = MagicMock()
+
+        client.add_magnet("magnet:?xt=urn:btih:abc", "C:/staging", stop_after_metadata=True)
+        client.resume("abc")
+
+        self.assertEqual(client.request.call_args_list[0].args, (
+            "/api/v2/torrents/add",
+            {
+                "urls": "magnet:?xt=urn:btih:abc",
+                "savepath": "C:/staging",
+                "tags": "cinema-paradiso",
+                "paused": "false",
+                "root_folder": "true",
+                "stopCondition": "MetadataReceived",
+            },
+        ))
+        self.assertEqual(client.request.call_args_list[1].args, ("/api/v2/torrents/start", {"hashes": "abc"}))
+
     def test_normalizes_supported_architectures(self):
         self.assertEqual(normalize_architecture("AMD64"), "x86_64")
         self.assertEqual(normalize_architecture("x86_64"), "x86_64")
@@ -232,6 +263,56 @@ class QBittorrentSafetyTests(unittest.TestCase):
             self.assertTrue(is_path_within(child, root))
             self.assertFalse(is_path_within(sibling, root))
 
+    def test_manifest_accepts_a_movie_with_small_supporting_files(self):
+        result = validate_torrent_manifest(movie_manifest(
+            size=1_000_000_000,
+            extras=[{"path": "Movie.2026.srt", "length": 100_000}],
+        ), expected_size=1_000_100_000)
+
+        self.assertEqual(result["video_size"], 1_000_000_000)
+        self.assertEqual(result["file_count"], 2)
+
+    def test_manifest_allows_a_harmless_support_file_with_a_dangerous_intermediate_suffix(self):
+        result = validate_torrent_manifest(movie_manifest(
+            size=1_000_000_000,
+            extras=[{"path": "YTSProxies.com.txt", "length": 100_000}],
+        ), expected_size=1_000_100_000)
+
+        self.assertEqual(result["video_size"], 1_000_000_000)
+        self.assertEqual(result["file_count"], 2)
+
+    def test_manifest_rejects_executable_payload_before_submission(self):
+        with self.assertRaisesRegex(QBittorrentError, "unsafe torrent payload"):
+            validate_torrent_manifest([{"info": {
+                "name": "random",
+                "files": [{"path": "0088F5556.exe", "length": 877_597_184}],
+            }}])
+
+    def test_manifest_rejects_a_substituted_hash_before_inspecting_its_payload(self):
+        expected_hash = "a" * 40
+        with self.assertRaisesRegex(TorrentIdentityMismatch, "does not match the selected release"):
+            validate_torrent_manifest([{
+                "hash": "b" * 40,
+                "info": {
+                    "name": "random",
+                    "files": [{"path": "0088F5556.exe", "length": 877_597_184}],
+                },
+            }], expected_hash=expected_hash)
+
+    def test_manifest_accepts_matching_release_identity_and_safe_movie_payload(self):
+        info_hash = "d4b719ed66754116dc6c656303172ba96abfcae1"
+        result = validate_torrent_manifest(movie_manifest(info_hash=info_hash), expected_hash=info_hash.upper())
+
+        self.assertEqual(result["info_hash"], info_hash)
+
+    def test_manifest_rejects_materially_substituted_size(self):
+        with self.assertRaisesRegex(QBittorrentError, "does not match the advertised size"):
+            validate_torrent_manifest(movie_manifest(size=877_597_184), expected_size=1_717_986_918)
+
+    def test_manifest_rejects_paths_that_escape_the_torrent_root(self):
+        with self.assertRaisesRegex(QBittorrentError, "unsafe file path"):
+            validate_torrent_manifest(movie_manifest(name="../Movie.2026.mkv"))
+
 
 class QBittorrentJobStoreTests(unittest.TestCase):
     def test_persists_jobs_atomically(self):
@@ -368,6 +449,87 @@ class QBittorrentJobStoreTests(unittest.TestCase):
             self.assertTrue(target.exists())
             self.assertEqual((source / "movie.mkv").read_bytes(), b"new movie")
             self.assertEqual((target / "movie.mkv").read_bytes(), b"different movie")
+
+    def test_upgrade_import_uses_numbered_sibling_when_existing_content_differs(self):
+        with tempfile.TemporaryDirectory() as root:
+            staging = Path(root) / "incomplete"
+            destination = Path(root) / "library"
+            source = staging / "Movie.2026.1080p-GROUP"
+            target = destination / source.name
+            source.mkdir(parents=True)
+            target.mkdir(parents=True)
+            (source / "movie.mkv").write_bytes(b"new movie")
+            (target / "movie.mkv").write_bytes(b"old movie")
+            store = QBittorrentJobStore(Path(root) / "jobs.json")
+            store.upsert("abc", {
+                "state": "finalizing",
+                "upgrade": True,
+                "payload_paths": [str(source)],
+                "destination": str(destination),
+            })
+
+            result = store.move_completed_payload("abc", allowed_staging_root=staging)
+
+            numbered = destination / f"{source.name} (2)"
+            self.assertEqual(result["state"], "payload_imported")
+            self.assertEqual(result["resolved_targets"][str(source)], str(numbered))
+            self.assertEqual((numbered / "movie.mkv").read_bytes(), b"new movie")
+            self.assertEqual((target / "movie.mkv").read_bytes(), b"old movie")
+
+    def test_upgrade_single_file_places_number_before_video_extension(self):
+        with tempfile.TemporaryDirectory() as root:
+            staging = Path(root) / "incomplete"
+            destination = Path(root) / "library"
+            source = staging / "Movie.2026.mkv"
+            target = destination / source.name
+            source.parent.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            source.write_bytes(b"new movie")
+            target.write_bytes(b"old movie")
+            store = QBittorrentJobStore(Path(root) / "jobs.json")
+            store.upsert("abc", {
+                "state": "finalizing",
+                "upgrade": True,
+                "payload_paths": [str(source)],
+                "destination": str(destination),
+            })
+
+            result = store.move_completed_payload("abc", allowed_staging_root=staging)
+
+            self.assertEqual(result["state"], "payload_imported")
+            self.assertTrue((destination / "Movie.2026 (2).mkv").is_file())
+
+    def test_upgrade_import_reuses_a_journaled_numbered_target(self):
+        with tempfile.TemporaryDirectory() as root:
+            staging = Path(root) / "incomplete"
+            destination = Path(root) / "library"
+            source = staging / "Movie.2026.1080p-GROUP"
+            default_target = destination / source.name
+            numbered_target = destination / f"{source.name} (2)"
+            source.mkdir(parents=True)
+            default_target.mkdir(parents=True)
+            (source / "movie.mkv").write_bytes(b"new movie")
+            (default_target / "movie.mkv").write_bytes(b"old movie")
+            store = QBittorrentJobStore(Path(root) / "jobs.json")
+            store.upsert("abc", {
+                "state": "move_failed",
+                "upgrade": True,
+                "payload_paths": [str(source)],
+                "destination": str(destination),
+                "resolved_targets": {str(source): str(numbered_target)},
+                "transfer_plan": [{
+                    "source": str(source),
+                    "target": str(numbered_target),
+                    "action": "move",
+                    "status": "started",
+                }],
+            })
+
+            result = store.move_completed_payload("abc", allowed_staging_root=staging)
+
+            self.assertEqual(result["state"], "payload_imported")
+            self.assertTrue((numbered_target / "movie.mkv").is_file())
+            self.assertFalse((destination / f"{source.name} (3)").exists())
 
     def test_manager_recovers_finalizing_job_after_torrent_was_removed(self):
         with tempfile.TemporaryDirectory() as root:
@@ -706,11 +868,10 @@ class QBittorrentJobStoreTests(unittest.TestCase):
 
             result = manager.submit_magnet(magnet, {"title": "Movie", "year": "2026"})
 
-            self.assertEqual(result["state"], "downloading")
+            self.assertEqual(result["state"], "validating")
             self.assertFalse(result.get("already_exists", False))
             self.assertTrue(result["resubmitted_at"])
-            self.assertEqual(result["last_error"], "")
-            manager.client.add_magnet.assert_called_once_with(magnet, str(staging))
+            manager.client.add_magnet.assert_called_once_with(magnet, str(staging), stop_after_metadata=True)
 
     def test_manager_resubmission_resets_cancelled_terminal_state(self):
         with tempfile.TemporaryDirectory() as root:
@@ -735,12 +896,90 @@ class QBittorrentJobStoreTests(unittest.TestCase):
                 "identity_handoff": {"state": "pending"},
             })
 
-            self.assertEqual(result["state"], "downloading")
+            self.assertEqual(result["state"], "validating")
             self.assertIsNone(result["cancelled_at"])
             self.assertIsNone(result["missing_since"])
             self.assertEqual(result["missing_checks"], 0)
             self.assertEqual(result["terminal_reason"], "")
             self.assertEqual(result["identity_handoff"]["state"], "pending")
+
+    def test_manager_blocks_unsafe_torrent_before_qbittorrent_adds_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = QBittorrentManager(root, {}, [])
+            manager.ensure_running = MagicMock(return_value=True)
+            manager.client.parse_torrent_metadata = MagicMock(return_value=[{"info": {
+                "name": "random",
+                "files": [{"path": "random.exe", "length": 877_597_184}],
+            }}])
+            manager.client.add_torrent = MagicMock()
+
+            with self.assertRaisesRegex(QBittorrentError, "unsafe torrent payload"):
+                manager.submit_torrent(b"torrent", "movie.torrent", {"expected_size": 1_700_000_000})
+
+            manager.client.add_torrent.assert_not_called()
+
+    def test_manager_adds_magnet_immediately_then_resumes_after_manifest_validation(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = QBittorrentManager(root, {}, [])
+            magnet = "magnet:?xt=urn:btih:58373C3569751AA5C51072E826DD43FFB350BA84&dn=Movie"
+            torrent_hash = "58373c3569751aa5c51072e826dd43ffb350ba84"
+            manager.ensure_running = MagicMock(return_value=True)
+            manager.client.torrents = MagicMock(return_value=[{"hash": torrent_hash, "name": "Movie 2026"}])
+            manager.client.files = MagicMock(return_value=[{"name": "Movie.2026.mkv", "size": 1_000_000_000}])
+            manager.client.add_magnet = MagicMock()
+            manager.client.resume = MagicMock()
+
+            queued = manager.submit_magnet(magnet, {"title": "Movie", "expected_size": 1_000_000_000})
+            processed = manager.process_completed()
+
+            self.assertEqual(queued["state"], "validating")
+            self.assertEqual(processed[0]["state"], "downloading")
+            self.assertEqual(processed[0]["validated_manifest"]["total_size"], 1_000_000_000)
+            manager.client.add_magnet.assert_called_once_with(magnet, str(manager.staging_dir), stop_after_metadata=True)
+            manager.client.resume.assert_called_once_with(torrent_hash)
+
+    def test_manager_keeps_an_added_magnet_stopped_until_its_metadata_is_available(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = QBittorrentManager(root, {}, [])
+            torrent_hash = "68373c3569751aa5c51072e826dd43ffb350ba84"
+            magnet = f"magnet:?xt=urn:btih:{torrent_hash}&dn=Movie"
+            manager.ensure_running = MagicMock(return_value=True)
+            manager.client.torrents = MagicMock(return_value=[{"hash": torrent_hash, "name": "Movie 2026"}])
+            manager.client.files = MagicMock(side_effect=[[], [{"name": "Movie.2026.mkv", "size": 1_000_000_000}]])
+            manager.client.add_magnet = MagicMock()
+            manager.client.resume = MagicMock()
+
+            queued = manager.submit_magnet(magnet, {"title": "Movie", "expected_size": 1_000_000_000})
+            waiting = manager.process_completed()
+            processed = manager.process_completed()
+
+            self.assertEqual(queued["state"], "validating")
+            self.assertEqual(waiting[0]["state"], "validating")
+            self.assertEqual(processed[0]["state"], "downloading")
+            self.assertEqual(manager.jobs.get(torrent_hash)["state"], "downloading")
+            manager.client.add_magnet.assert_called_once_with(magnet, str(manager.staging_dir), stop_after_metadata=True)
+            manager.client.resume.assert_called_once_with(torrent_hash)
+
+    def test_manager_removes_an_unsafe_magnet_before_resuming_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = QBittorrentManager(root, {}, [])
+            torrent_hash = "78373c3569751aa5c51072e826dd43ffb350ba84"
+            magnet = f"magnet:?xt=urn:btih:{torrent_hash}&dn=Movie"
+            manager.ensure_running = MagicMock(return_value=True)
+            manager.client.torrents = MagicMock(return_value=[{"hash": torrent_hash, "name": "random"}])
+            manager.client.files = MagicMock(return_value=[{"name": "random.exe", "size": 877_597_184}])
+            manager.client.add_magnet = MagicMock()
+            manager.client.remove_without_files = MagicMock()
+            manager.client.resume = MagicMock()
+
+            manager.submit_magnet(magnet, {"title": "Movie"})
+            processed = manager.process_completed()
+
+            self.assertEqual(processed[0]["state"], "validation_failed")
+            self.assertIn("unsafe torrent payload", processed[0]["last_error"])
+            manager.client.add_magnet.assert_called_once_with(magnet, str(manager.staging_dir), stop_after_metadata=True)
+            manager.client.remove_without_files.assert_called_once_with(torrent_hash)
+            manager.client.resume.assert_not_called()
 
     def test_manager_keeps_active_job_when_qbittorrent_confirms_hash(self):
         with tempfile.TemporaryDirectory() as root:

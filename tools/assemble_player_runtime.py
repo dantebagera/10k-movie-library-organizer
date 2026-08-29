@@ -125,7 +125,6 @@ def assemble_player_runtime(staged_runtime, output_root, metadata_path):
                 "qt_version",
                 "architecture",
                 "build_flags",
-                "compatible_cp_versions",
                 "sources",
                 "licenses",
             )
@@ -140,12 +139,7 @@ def assemble_player_runtime(staged_runtime, output_root, metadata_path):
             json.dumps(manifest, indent=2) + "\n",
             encoding="utf-8",
         )
-        for app_version in manifest["compatible_cp_versions"]:
-            validate_player_manifest(
-                working_destination,
-                app_version=app_version,
-                verify_hashes=True,
-            )
+        validate_player_manifest(working_destination, verify_hashes=True)
         working_destination.replace(destination)
     finally:
         shutil.rmtree(temporary_parent, ignore_errors=True)

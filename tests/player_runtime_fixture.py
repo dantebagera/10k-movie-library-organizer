@@ -34,7 +34,6 @@ def create_player_runtime_bundle(root, app_version="9.9.9", bundle_version="play
         "qt_version": "6.10.3",
         "architecture": "x86_64",
         "build_flags": ["-Dgpl=false", "--disable-gpl", "dynamic Qt linking"],
-        "compatible_cp_versions": [app_version],
         "sources": [
             {
                 "name": "mpv",

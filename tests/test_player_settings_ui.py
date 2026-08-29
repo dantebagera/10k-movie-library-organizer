@@ -33,6 +33,27 @@ class PlayerSettingsUiTests(unittest.TestCase):
         ):
             self.assertIn(endpoint, self.settings)
 
+    def test_language_fields_preserve_typing_until_player_settings_are_saved(self):
+        self.assertIn("function parseLanguageListText(value)", self.settings)
+        self.assertIn("const [playerLanguageDrafts, setPlayerLanguageDrafts]", self.settings)
+        self.assertIn("value={playerLanguageDrafts.audio}", self.settings)
+        self.assertIn("value={playerLanguageDrafts.subtitles}", self.settings)
+        self.assertIn(
+            "preferred_audio_languages: parseLanguageListText(playerLanguageDrafts.audio)",
+            self.settings,
+        )
+        self.assertIn(
+            "preferred_subtitle_languages: parseLanguageListText(playerLanguageDrafts.subtitles)",
+            self.settings,
+        )
+        language_fields = self.settings.split(
+            "Preferred audio languages, in order", 1
+        )[1].split("Hardware decoding", 1)[0]
+        self.assertNotIn(
+            "event.target.value.split(',').map((value) => value.trim()).filter(Boolean)",
+            language_fields,
+        )
+
     def test_runtime_status_exposes_versions_not_local_paths(self):
         for label in ("CP Player", "libmpv", "Qt", "Architecture", "Verify player"):
             self.assertIn(label, self.settings)

@@ -620,6 +620,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         original_genres = app._tmdb_genres
         app._tmdb_key = "tmdb-key"
         app._tmdb_genres = {}
+        app._tmdb_discover_snapshot_cache.clear()
         requested_pages = []
 
         def fake_urlopen(request, timeout=0):
@@ -653,6 +654,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         finally:
             app._tmdb_key = original_key
             app._tmdb_genres = original_genres
+            app._tmdb_discover_snapshot_cache.clear()
 
         self.assertEqual(middle_response.status_code, 200)
         middle_payload = middle_response.get_json()
@@ -687,6 +689,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         original_genres = app._tmdb_genres
         app._tmdb_key = "tmdb-key"
         app._tmdb_genres = {}
+        app._tmdb_discover_snapshot_cache.clear()
         requested_pages = []
 
         def fake_urlopen(request, timeout=0):
@@ -721,6 +724,7 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         finally:
             app._tmdb_key = original_key
             app._tmdb_genres = original_genres
+            app._tmdb_discover_snapshot_cache.clear()
 
         self.assertEqual(first_response.status_code, 200)
         self.assertEqual(second_response.status_code, 200)
@@ -730,6 +734,62 @@ class TmdbDetailsTransformTest(unittest.TestCase):
         self.assertEqual(second_ids, list(range(40, 79)))
         self.assertFalse(set(first_ids) & set(second_ids))
         self.assertEqual(requested_pages, [1, 2, 2, 3, 4])
+
+    def test_discover_removes_overlapping_provider_movies_without_extra_fetches(self):
+        original_key = app._tmdb_key
+        original_genres = app._tmdb_genres
+        app._tmdb_key = "tmdb-key"
+        app._tmdb_genres = {}
+        app._tmdb_discover_snapshot_cache.clear()
+        requested_pages = []
+
+        def provider_movie(movie_id):
+            return {
+                "id": movie_id,
+                "title": f"Movie {movie_id}",
+                "release_date": "2024-01-01",
+                "genre_ids": [],
+                "vote_average": 7.0,
+                "vote_count": 100,
+                "original_language": "en",
+            }
+
+        def fake_urlopen(request, timeout=0):
+            query = app.urllib.parse.parse_qs(app.urllib.parse.urlparse(request.full_url).query)
+            provider_page = int(query["page"][0])
+            requested_pages.append(provider_page)
+            first_id = {1: 1, 2: 20, 3: 40, 4: 59}[provider_page]
+            return JsonResponse({
+                "page": provider_page,
+                "total_pages": 25,
+                "total_results": 500,
+                "results": [provider_movie(movie_id) for movie_id in range(first_id, first_id + 20)],
+            })
+
+        try:
+            with patch("app._ensure_tmdb_genres"), \
+                    patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+                first_response = app.app.test_client().get(
+                    "/api/tmdb/discover?list=popular&page=1&page_size=40"
+                )
+                second_response = app.app.test_client().get(
+                    "/api/tmdb/discover?list=popular&page=2&page_size=40"
+                )
+        finally:
+            app._tmdb_key = original_key
+            app._tmdb_genres = original_genres
+            app._tmdb_discover_snapshot_cache.clear()
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        first_ids = [movie["tmdb_id"] for movie in first_response.get_json()["results"]]
+        second_ids = [movie["tmdb_id"] for movie in second_response.get_json()["results"]]
+        self.assertEqual(len(first_ids), 39)
+        self.assertEqual(len(second_ids), 39)
+        self.assertEqual(len(first_ids), len(set(first_ids)))
+        self.assertEqual(len(second_ids), len(set(second_ids)))
+        self.assertFalse(set(first_ids) & set(second_ids))
+        self.assertEqual(requested_pages, [1, 2, 3, 4])
 
     def test_tmdb_pagination_improves_existing_routes_without_duplicate_owners(self):
         route_counts = {}

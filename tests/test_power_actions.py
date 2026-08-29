@@ -43,6 +43,19 @@ class PowerActionCoordinatorTests(unittest.TestCase):
         self.assertFalse(self.coordinator.evaluate())
         self.assertFalse(self.dispatched.is_set())
 
+    def test_after_download_treats_pending_manifest_validation_as_active_work(self):
+        self.jobs["abc"] = {"hash": "abc", "title": "Movie", "state": "validating"}
+
+        status = self.coordinator.request("device", after_download=True)
+
+        self.assertEqual(status["plan"]["state"], "armed")
+        self.assertFalse(self.coordinator.evaluate())
+        self.assertIn("still active", self.coordinator.snapshot()["plan"]["target_status"][0]["detail"])
+
+        self.jobs["abc"].update({"state": "validation_failed", "last_error": "unsafe torrent payload"})
+        self.assertTrue(self.coordinator.evaluate())
+        self.assertTrue(self.dispatched.wait(2))
+
     def test_imported_failed_match_is_a_recoverable_checkpoint_and_dispatches_once(self):
         self.jobs["abc"] = {
             "hash": "abc",

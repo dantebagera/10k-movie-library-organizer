@@ -58,7 +58,7 @@ qt_add_qml_module(cp-player
 )
 
 set(CP_PLAYER_ICON_PNG
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../static/cinema-paradiso-icon-preview.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/cp-player-icon.png"
 )
 set_source_files_properties("${CP_PLAYER_ICON_PNG}" PROPERTIES
     QT_RESOURCE_ALIAS "cp-player.png"

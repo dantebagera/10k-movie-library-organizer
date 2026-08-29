@@ -19,10 +19,12 @@ class FakeResponse:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def read(self):
+    def read(self, size=-1):
         if self.raw:
-            return self.payload.encode("utf-8")
-        return json.dumps(self.payload).encode("utf-8")
+            data = self.payload.encode("utf-8")
+        else:
+            data = json.dumps(self.payload).encode("utf-8")
+        return data if size is None or size < 0 else data[:size]
 
 
 class YtsOption2Tests(unittest.TestCase):
@@ -124,7 +126,7 @@ class YtsOption2Tests(unittest.TestCase):
         self.assertEqual(requested_queries[:2], ["tt37287335", "Obsession 2025"])
         self.assertEqual(response.get_json()["variants"][0]["title"], "Obsession (2025) 1080p WEBRip 5.1 x264 -YTS")
 
-    def test_explore_search_converts_prowlarr_redirect_magnet_to_real_magnet(self):
+    def test_explore_search_keeps_a_prowlarr_redirect_as_a_download_url(self):
         def fake_urlopen(request, timeout=0):
             url = request.full_url
             if url.endswith("/api/v1/indexer"):
@@ -151,8 +153,9 @@ class YtsOption2Tests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         variant = response.get_json()["variants"][0]
-        self.assertTrue(variant["magnet_url"].startswith("magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567"))
+        self.assertEqual(variant["magnet_url"], "")
         self.assertEqual(variant["download_url"], "http://prowlarr.test/prowlarr/6/download?id=1")
+        self.assertEqual(variant["info_hash"], "0123456789abcdef0123456789abcdef01234567")
 
     def test_explore_search_falls_back_to_tmdb_alternative_title(self):
         app._tmdb_key = "tmdb-key"
@@ -323,6 +326,7 @@ class YtsOption2Tests(unittest.TestCase):
         variants = app._torrent_variants_from_prowlarr_results(outcome["results"])
         self.assertEqual(len(outcome["results"]), 2)
         self.assertEqual([row["resolution"] for row in variants], ["1080p", "720p"])
+        self.assertEqual(variants[0]["info_hash"], "a" * 40)
 
     def test_movie_search_stops_when_global_deadline_is_exhausted(self):
         requested_timeouts = []
@@ -455,7 +459,8 @@ class YtsOption2Tests(unittest.TestCase):
                 return FakeResponse([])
             raise AssertionError(f"Unexpected URL: {url}")
 
-        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen), \
+             patch("app._yts_source_imdb_id", return_value="tt37287335"):
             release = app._find_best_followed_release({
                 "title": "Obsession",
                 "year": "2025",
@@ -465,11 +470,119 @@ class YtsOption2Tests(unittest.TestCase):
         self.assertEqual(requested_queries[0], "tt37287335")
         self.assertEqual(release["title"], "Obsession (2025) 1080p WEBRip 5.1 x264 -YTS")
 
+    def test_yts_source_page_identity_is_cached_and_uses_the_movie_imdb_link(self):
+        source_url = "https://yts.mx/movies/the-odyssey-2-2026"
+        calls = []
+
+        def fake_urlopen(request, timeout=0):
+            calls.append((request.full_url, timeout))
+            return FakeResponse(
+                '<a href="https://www.imdb.com/title/tt33764258/">IMDb</a>',
+                raw=True,
+            )
+
+        app._yts_source_identity_cache.clear()
+        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+            first = app._yts_source_imdb_id(source_url)
+            second = app._yts_source_imdb_id(source_url)
+
+        self.assertEqual(first, "tt33764258")
+        self.assertEqual(second, "tt33764258")
+        self.assertEqual(len(calls), 1)
+
+    def test_source_search_rejects_yts_page_that_proves_a_different_movie(self):
+        def fake_search(*, query, **_kwargs):
+            return [
+                {
+                    "title": "The Odyssey (2026) 1080p WEBRip 5.1 x264 -YTS",
+                    "indexer": "YTS",
+                    "infoUrl": "https://yts.gg/movies/the-odyssey-2026",
+                    "infoHash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                },
+                {
+                    "title": "The Odyssey (2026) 1080p WEBRip 5.1 x264 -YTS",
+                    "indexer": "YTS",
+                    "infoUrl": "https://yts.gg/movies/the-odyssey-2-2026",
+                    "infoHash": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                },
+            ]
+
+        def source_imdb(url, **_kwargs):
+            return "tt41605854" if url.endswith("the-odyssey-2026") else "tt33764258"
+
+        with patch("app._prowlarr_search", side_effect=fake_search), \
+             patch("app._yts_source_imdb_id", side_effect=source_imdb):
+            results = app._prowlarr_search_movie(
+                ["1"],
+                {"title": "The Odyssey", "year": "2026", "imdb_id": "tt33764258"},
+                enriched=True,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["infoUrl"].endswith("the-odyssey-2-2026"))
+        self.assertTrue(results[0]["source_identity_verified"])
+
+    def test_followed_rss_requires_verified_yts_identity_when_the_movie_has_imdb(self):
+        rows = [{
+            "variants": [{
+                "title": "The Odyssey (2026) 1080p WEBRip 5.1 x264 -YTS",
+                "resolution": "1080p",
+                "magnet_url": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "info_url": "https://yts.gg/movies/the-odyssey-2026",
+                "indexer": "YTS RSS",
+            }, {
+                "title": "The Odyssey (2026) 1080p WEBRip 5.1 x264 -YTS",
+                "resolution": "1080p",
+                "magnet_url": "magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                "info_url": "https://yts.gg/movies/the-odyssey-2-2026",
+                "indexer": "YTS RSS",
+            }],
+        }]
+
+        def source_imdb(url, **_kwargs):
+            return "tt41605854" if url.endswith("the-odyssey-2026") else "tt33764258"
+
+        with patch("app._yts_source_imdb_id", side_effect=source_imdb):
+            release = app._followed_rss_release(
+                {"title": "The Odyssey", "year": "2026", "imdb_id": "tt33764258"},
+                rows,
+            )
+
+        self.assertIsNotNone(release)
+        self.assertTrue(release["info_url"].endswith("the-odyssey-2-2026"))
+
+    def test_followed_rss_never_auto_accepts_a_title_only_match(self):
+        release = app._followed_rss_release(
+            {"title": "The Odyssey", "year": "2026"},
+            [{"variants": [{
+                "title": "The Odyssey (2026) 1080p WEBRip -YTS",
+                "resolution": "1080p",
+                "magnet_url": "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "info_url": "https://yts.gg/movies/the-odyssey-2026",
+            }]}],
+        )
+
+        self.assertIsNone(release)
+
+    def test_available_followed_yts_release_is_rechecked_only_when_its_page_proves_a_mismatch(self):
+        movie = {
+            "imdb_id": "tt33764258",
+            "best_release": {
+                "indexer": "YTS RSS",
+                "info_url": "https://yts.gg/movies/the-odyssey-2026",
+            },
+        }
+        with patch("app._yts_source_imdb_id", return_value="tt41605854"):
+            self.assertTrue(app._followed_release_has_mismatched_yts_identity(movie))
+        with patch("app._yts_source_imdb_id", return_value=""):
+            self.assertFalse(app._followed_release_has_mismatched_yts_identity(movie))
+
     def test_yts_browse_latest_supplements_prowlarr_with_rss_freshness(self):
         rss = """<?xml version="1.0" encoding="UTF-8"?>
 <rss><channel>
   <item>
     <title><![CDATA[Dos Manzanas (2023) [1080p] [WEBRip] [5.1] [YTS.GG-YTS.BZ]]]></title>
+    <description><![CDATA[Dos Manzanas is an RSS metadata fixture.]]></description>
     <link>https://yts.gg/movies/dos-manzanas-2023</link>
     <guid>https://yts.gg/movies/dos-manzanas-2023#1080p.web</guid>
     <pubDate>Mon, 29 Jun 2026 23:52:18 +0200</pubDate>
@@ -497,6 +610,12 @@ class YtsOption2Tests(unittest.TestCase):
         self.assertEqual(data["results"][0]["parsed_title"], "Dos Manzanas")
         self.assertEqual(data["results"][0]["variants"][0]["indexer"], "YTS RSS")
         self.assertTrue(data["results"][0]["variants"][0]["magnet_url"].startswith("magnet:?xt=urn:btih:"))
+        self.assertEqual(
+            data["results"][0]["variants"][0]["info_hash"],
+            "69e81483386084cb786d5b9e3e9692de72a446c5",
+        )
+        self.assertIn("Dos Manzanas", data["results"][0]["variants"][0]["rss_description"])
+        self.assertEqual(data["results"][0]["variants"][0]["rss_published_at"], "Mon, 29 Jun 2026 23:52:18 +0200")
         self.assertIn("https://yts.gg/rss", requested_urls)
 
 

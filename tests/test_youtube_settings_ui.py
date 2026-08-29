@@ -19,9 +19,14 @@ class YouTubeSettingsUiTests(unittest.TestCase):
         self.assertIn("The full value is never returned to this page.", self.settings)
 
     def test_blank_save_preserves_and_clear_is_explicit(self):
-        self.assertIn("youtube: { key: forms.youtube.key }", self.settings)
+        self.assertIn("youtube: { key: forms.youtube.key, trailer_region: forms.youtube.trailerRegion || 'EG' }", self.settings)
         self.assertIn("body: JSON.stringify({ clear: true })", self.settings)
         self.assertIn('label="Clear key"', self.settings)
+
+    def test_settings_controls_the_country_used_for_trailer_availability(self):
+        self.assertIn("Trailer availability country", self.settings)
+        self.assertIn("youtube.value.trailer_region || 'EG'", self.settings)
+        self.assertIn("saved.trailer_region || 'EG'", self.settings)
 
 
 if __name__ == "__main__":

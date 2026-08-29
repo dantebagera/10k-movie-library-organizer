@@ -38,7 +38,6 @@ class PlayerRuntimeAssemblyTests(unittest.TestCase):
             "qt_version": "6.10.3",
             "architecture": "x86_64",
             "build_flags": ["-Dgpl=false"],
-            "compatible_cp_versions": ["9.9.9"],
             "sources": [{
                 "name": "test",
                 "url": "https://example.test/source",
@@ -68,11 +67,7 @@ class PlayerRuntimeAssemblyTests(unittest.TestCase):
 
             self.assertFalse((bundle / "config.json").exists())
             self.assertFalse((bundle / "cp-player.pdb").exists())
-            manifest = validate_player_manifest(
-                bundle,
-                app_version="9.9.9",
-                verify_hashes=True,
-            )
+            manifest = validate_player_manifest(bundle, verify_hashes=True)
             self.assertEqual(manifest["bundle_version"], "assembled-test-1")
             selector = json.loads((output / "current.json").read_text(encoding="utf-8"))
             self.assertEqual(selector["bundle_version"], "assembled-test-1")
@@ -119,17 +114,13 @@ class PlayerRuntimeAssemblyTests(unittest.TestCase):
             self.assertIn(required, paths)
             self.assertTrue((license_root / required).is_file())
 
-    def test_production_metadata_supports_current_package_version(self):
+    def test_production_metadata_has_no_cp_version_allowlist(self):
         project = Path(__file__).resolve().parents[1]
         metadata = json.loads(
             (project / "native" / "player" / "runtime-metadata.json")
             .read_text(encoding="utf-8")
         )
-        package = json.loads(
-            (project / "package.json").read_text(encoding="utf-8")
-        )
-
-        self.assertIn(package["version"], metadata["compatible_cp_versions"])
+        self.assertNotIn("compatible_cp_versions", metadata)
 
     def test_assembler_uses_inherited_permissions_for_windows_runtime(self):
         project = Path(__file__).resolve().parents[1]

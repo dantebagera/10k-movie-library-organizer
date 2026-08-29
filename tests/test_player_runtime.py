@@ -15,7 +15,7 @@ from tests.player_runtime_fixture import create_player_runtime_bundle
 class PlayerRuntimeTests(unittest.TestCase):
     def test_missing_runtime_keeps_os_fallback_available(self):
         with tempfile.TemporaryDirectory() as root:
-            status = PlayerRuntime(root, "9.9.9").status()
+            status = PlayerRuntime(root).status()
 
         self.assertEqual(status["state"], "missing")
         self.assertFalse(status["ready"])
@@ -36,7 +36,7 @@ class PlayerRuntimeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            status = PlayerRuntime(runtime_root, "9.9.9").status(verify_hashes=True)
+            status = PlayerRuntime(runtime_root).status(verify_hashes=True)
 
         self.assertEqual(status["state"], "ready")
         self.assertEqual(status["player_version"], "0.1.0")
@@ -57,14 +57,14 @@ class PlayerRuntimeTests(unittest.TestCase):
             )
             (bundle / "cp-player.exe").write_bytes(b"tampered")
 
-            quick = PlayerRuntime(runtime_root, "9.9.9").status(verify_hashes=False)
-            verified = PlayerRuntime(runtime_root, "9.9.9").status(verify_hashes=True)
+            quick = PlayerRuntime(runtime_root).status(verify_hashes=False)
+            verified = PlayerRuntime(runtime_root).status(verify_hashes=True)
 
         self.assertEqual(quick["state"], "ready")
         self.assertEqual(verified["state"], "damaged")
         self.assertIn("damaged", verified["detail"].lower())
 
-    def test_incompatible_cp_version_is_reported(self):
+    def test_runtime_does_not_depend_on_the_cp_app_version(self):
         with tempfile.TemporaryDirectory() as root:
             runtime_root = Path(root)
             bundle = create_player_runtime_bundle(runtime_root / "versions")
@@ -76,10 +76,10 @@ class PlayerRuntimeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            status = PlayerRuntime(runtime_root, "2.8.1").status()
+            status = PlayerRuntime(runtime_root).status()
 
-        self.assertEqual(status["state"], "incompatible")
-        self.assertTrue(status["os_fallback_available"])
+        self.assertEqual(status["state"], "ready")
+        self.assertTrue(status["ready"])
 
     def test_manifest_rejects_unsafe_and_incomplete_file_inventory(self):
         with tempfile.TemporaryDirectory() as root:
@@ -91,7 +91,7 @@ class PlayerRuntimeTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             with self.assertRaises(PlayerRuntimeError):
-                validate_player_manifest(bundle, app_version="9.9.9")
+                validate_player_manifest(bundle)
 
 
 if __name__ == "__main__":

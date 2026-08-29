@@ -43,6 +43,10 @@ class FakeJsonResponse:
 
 
 class OllamaRecommendTest(unittest.TestCase):
+    def setUp(self):
+        with app._ollama_access_scan_cache_lock:
+            app._ollama_access_scan_cache.clear()
+
     def test_config_exposes_and_saves_candidate_limit(self):
         original_url = app._ollama_url
         original_model = app._ollama_model
@@ -57,7 +61,10 @@ class OllamaRecommendTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["candidate_limit"], 15)
 
-            with patch("app._save_config"):
+            with patch("app._save_config"), patch(
+                "app._ollama_validate_model",
+                return_value={"success": True, "model": "new-model", "elapsed_ms": 10},
+            ) as validate:
                 response = client.post(
                     "/api/ollama/config",
                     json={"url": "http://new-ollama.test/", "model": "new-model", "candidate_limit": 7}
@@ -66,6 +73,8 @@ class OllamaRecommendTest(unittest.TestCase):
             self.assertEqual(app._ollama_url, "http://new-ollama.test")
             self.assertEqual(app._ollama_model, "new-model")
             self.assertEqual(app._ollama_candidate_limit, 7)
+            validate.assert_called_once_with("http://new-ollama.test", "new-model")
+            self.assertEqual(response.get_json()["model_test"]["model"], "new-model")
         finally:
             app._ollama_url = original_url
             app._ollama_model = original_model
@@ -94,7 +103,10 @@ class OllamaRecommendTest(unittest.TestCase):
         app._ollama_candidate_limit = 6
 
         try:
-            with patch("app._save_config"):
+            with patch("app._save_config"), patch(
+                "app._ollama_validate_model",
+                return_value={"success": True, "model": "new-model", "elapsed_ms": 10},
+            ):
                 response = app.app.test_client().post(
                     "/api/ollama/config",
                     json={"url": "http://new-ollama.test", "model": "new-model"}
@@ -106,18 +118,49 @@ class OllamaRecommendTest(unittest.TestCase):
             app._ollama_model = original_model
             app._ollama_candidate_limit = original_limit
 
-    def test_model_choices_include_only_free_cloud_recommendations_and_local_models(self):
+    def test_config_does_not_mutate_saved_values_when_model_validation_fails(self):
+        original_url = app._ollama_url
+        original_model = app._ollama_model
+        original_limit = app._ollama_candidate_limit
+        app._ollama_url = "http://working.test"
+        app._ollama_model = "working-model"
+        app._ollama_candidate_limit = 6
+        try:
+            with patch("app._ollama_validate_model", side_effect=ValueError("bad JSON")), \
+                 patch("app._save_config") as save:
+                response = app.app.test_client().post(
+                    "/api/ollama/config",
+                    json={"url": "http://broken.test", "model": "broken-model", "candidate_limit": 9},
+                )
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(app._ollama_url, "http://working.test")
+            self.assertEqual(app._ollama_model, "working-model")
+            self.assertEqual(app._ollama_candidate_limit, 6)
+            save.assert_not_called()
+        finally:
+            app._ollama_url = original_url
+            app._ollama_model = original_model
+            app._ollama_candidate_limit = original_limit
+
+    def test_model_choices_merge_full_cloud_catalog_plan_metadata_and_local_models(self):
         original_model = app._ollama_model
         app._ollama_model = "gemma4:31b-cloud"
 
         def fake_urlopen(request, timeout=0):
-            if request.full_url.endswith("/api/tags"):
+            if request.full_url == "http://ollama.test/api/tags":
                 return FakeJsonResponse({
                     "models": [
                         {"model": "gemma3:12b", "details": {"parameter_size": "12B"}},
                         {"name": "gemma3:12b", "details": {"parameter_size": "12B"}},
                         {"model": "pulled-cloud:cloud"},
-                        {"model": "gemma4:31b-cloud"},
+                    ]
+                })
+            if request.full_url == "https://ollama.com/api/tags":
+                return FakeJsonResponse({
+                    "models": [
+                        {"model": "gemma4:31b"},
+                        {"model": "glm-5.2"},
+                        {"model": "deepseek-v4-flash:0731"},
                     ]
                 })
             if request.full_url.endswith("/api/experimental/model-recommendations"):
@@ -141,18 +184,28 @@ class OllamaRecommendTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data["configured_model"], "gemma4:31b-cloud")
         self.assertEqual(
-            [item["model"] for item in data["free_cloud_models"]],
-            ["gemma4:31b-cloud", "minimax-m3:cloud"],
+            [item["model"] for item in data["cloud_models"]],
+            [
+                "deepseek-v4-flash:0731-cloud",
+                "gemma4:31b-cloud",
+                "glm-5.2:cloud",
+                "minimax-m3:cloud",
+                "pulled-cloud:cloud",
+            ],
         )
+        plans = {item["model"]: item["required_plan"] for item in data["cloud_models"]}
+        self.assertEqual(plans["gemma4:31b-cloud"], "free")
+        self.assertEqual(plans["glm-5.2:cloud"], "pro")
         self.assertEqual([item["model"] for item in data["local_models"]], ["gemma3:12b"])
         self.assertEqual(data["warnings"], [])
+        self.assertIsNone(data["access_scan"])
         self.assertTrue(data["reachable"])
 
     def test_model_choices_preserve_partial_results_when_cloud_discovery_fails(self):
         def fake_urlopen(request, timeout=0):
-            if request.full_url.endswith("/api/tags"):
+            if request.full_url == "http://ollama.test/api/tags":
                 return FakeJsonResponse({"models": [{"model": "gemma3:4b"}]})
-            raise OSError("experimental endpoint unavailable")
+            raise OSError("cloud endpoint unavailable")
 
         with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
             response = app.app.test_client().get("/api/ollama/models?url=http://ollama.test")
@@ -160,9 +213,52 @@ class OllamaRecommendTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertEqual([item["model"] for item in data["local_models"]], ["gemma3:4b"])
-        self.assertEqual(data["free_cloud_models"], [])
-        self.assertIn("Free cloud model list unavailable", data["warnings"][0])
+        self.assertEqual(data["cloud_models"], [])
+        self.assertTrue(any("Cloud model catalog unavailable" in warning for warning in data["warnings"]))
+        self.assertTrue(any("Cloud plan metadata unavailable" in warning for warning in data["warnings"]))
         self.assertTrue(data["reachable"])
+
+    def test_cloud_access_scan_filters_subscription_blocks_and_caches_result(self):
+        catalog = {
+            "configured_model": "",
+            "cloud_models": [
+                {"model": "free-model:cloud", "description": "", "required_plan": "free"},
+                {"model": "paid-model:cloud", "description": "", "required_plan": "pro"},
+                {"model": "unclear-model:cloud", "description": "", "required_plan": ""},
+            ],
+            "local_models": [],
+            "warnings": [],
+            "reachable": True,
+            "access_scan": None,
+        }
+
+        def probe(_url, model):
+            status = {
+                "free-model:cloud": "accessible",
+                "paid-model:cloud": "blocked",
+                "unclear-model:cloud": "unknown",
+            }[model]
+            return {"model": model, "status": status, "http_status": 200 if status == "accessible" else 403}
+
+        with patch("app._ollama_model_choices", return_value=catalog), \
+             patch("app._ollama_probe_model_access", side_effect=probe):
+            response = app.app.test_client().post(
+                "/api/ollama/models/scan",
+                json={"url": "http://ollama.test"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["access_scan"]["catalog_count"], 3)
+        self.assertEqual(data["access_scan"]["accessible_count"], 1)
+        self.assertEqual(data["access_scan"]["blocked_count"], 1)
+        self.assertEqual(data["access_scan"]["unknown_count"], 1)
+        statuses = {item["model"]: item["access_status"] for item in data["cloud_models"]}
+        self.assertEqual(statuses["free-model:cloud"], "accessible")
+        self.assertEqual(statuses["paid-model:cloud"], "blocked")
+        with app._ollama_access_scan_cache_lock:
+            cached = app._ollama_access_scan_cache["http://ollama.test"]
+        self.assertEqual(cached["scan"]["accessible_count"], 1)
 
     def test_model_test_generates_and_validates_json_with_selected_model(self):
         captured = {}

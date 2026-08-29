@@ -18,10 +18,10 @@ class PowerActionCoordinator:
     ACTIONS = {"cp", "device", "restart"}
     ACTIVE_PLAN_STATES = {"armed", "draining"}
     TRACKED_JOB_STATES = {
-        "downloading", "finalizing", "moving", "payload_imported",
+        "validating", "downloading", "finalizing", "moving", "payload_imported",
         "cleanup_failed", "move_failed", "destination_conflict",
     }
-    WAITING_JOB_STATES = {"downloading", "finalizing", "moving", "payload_imported"}
+    WAITING_JOB_STATES = {"validating", "downloading", "finalizing", "moving", "payload_imported"}
     CHECKPOINT_HANDOFF_STATES = {"applied", "queued", "failed", "deferred", "not_required"}
 
     def __init__(self, path, jobs_provider, execute_callback, *, clock=time.time, id_factory=None):
@@ -96,6 +96,8 @@ class PowerActionCoordinator:
             return bool(evidence), str(job.get("last_error") or "The move problem is safely journaled")
         if state in {"cancelled", "abandoned"}:
             return True, str(job.get("terminal_reason") or state)
+        if state == "validation_failed":
+            return True, str(job.get("last_error") or "torrent validation failed safely")
         if state in {"imported", "cleanup_failed"}:
             handoff_state = str((job.get("identity_handoff") or {}).get("state") or "")
             ready = handoff_state in cls.CHECKPOINT_HANDOFF_STATES

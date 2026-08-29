@@ -460,3 +460,421 @@
 2026-08-20 20:40:22,535 - aqt.installer - INFO - installer 20292 Finished installation of qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 66.79449980
 2026-08-20 20:40:22,609 - aqt.main - INFO - installer 39428 Finished installation
 2026-08-20 20:40:22,609 - aqt.main - INFO - installer 39428 Time elapsed: 71.12217780 second
+2026-08-30 01:31:54,242 - aqt.main - INFO - installer 19260 aqtinstall(aqt) v3.3.0 on Python 3.12.8 [CPython MSC v.1942 64 bit (AMD64)]
+2026-08-30 01:31:54,243 - aqt.helper - DEBUG - helper 19260 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/Updates.xml.sha256
+2026-08-30 01:31:55,669 - aqt.helper - DEBUG - helper 19260 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtwebengine/6103/msvc2022_64/Updates.xml.sha256
+2026-08-30 01:31:56,944 - aqt.archives - INFO - archives 19260 Found extension qtwebengine
+2026-08-30 01:31:56,944 - aqt.helper - DEBUG - helper 19260 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtpdf/6103/msvc2022_64/Updates.xml.sha256
+2026-08-30 01:31:58,835 - aqt.archives - INFO - archives 19260 Found extension qtpdf
+2026-08-30 01:31:59,301 - aqt.helper - DEBUG - helper 26288 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:31:59,314 - aqt.helper - DEBUG - helper 56492 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:31:59,332 - aqt.helper - DEBUG - helper 42980 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:31:59,346 - aqt.helper - DEBUG - helper 43892 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:00,132 - aqt.helper - INFO - helper 26288 Downloading qtbase...
+2026-08-30 01:32:00,133 - aqt.installer - DEBUG - installer 26288 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,147 - aqt.helper - INFO - helper 42980 Downloading qtdeclarative...
+2026-08-30 01:32:00,147 - aqt.installer - DEBUG - installer 42980 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,149 - aqt.helper - INFO - helper 56492 Downloading qtsvg...
+2026-08-30 01:32:00,149 - aqt.installer - DEBUG - installer 56492 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,161 - aqt.helper - INFO - helper 43892 Downloading qttools...
+2026-08-30 01:32:00,161 - aqt.installer - DEBUG - installer 43892 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,921 - aqt.helper - DEBUG - helper 26288 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,921 - aqt.helper - INFO - helper 26288 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:00,937 - aqt.helper - DEBUG - helper 42980 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,938 - aqt.helper - INFO - helper 42980 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:00,941 - aqt.helper - DEBUG - helper 56492 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,941 - aqt.helper - INFO - helper 56492 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:00,980 - aqt.helper - DEBUG - helper 43892 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:00,980 - aqt.helper - INFO - helper 43892 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:03,636 - aqt.installer - INFO - installer 56492 Finished installation of qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 4.32396000
+2026-08-30 01:32:03,652 - aqt.helper - DEBUG - helper 56492 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:04,658 - aqt.helper - INFO - helper 56492 Downloading qttranslations...
+2026-08-30 01:32:04,658 - aqt.installer - DEBUG - installer 56492 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:05,668 - aqt.helper - DEBUG - helper 56492 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:05,668 - aqt.helper - INFO - helper 56492 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:09,673 - aqt.installer - INFO - installer 56492 Finished installation of qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 6.02323710
+2026-08-30 01:32:09,685 - aqt.helper - DEBUG - helper 56492 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z.sha256
+2026-08-30 01:32:10,775 - aqt.helper - INFO - helper 56492 Downloading d3dcompiler_47...
+2026-08-30 01:32:10,775 - aqt.installer - DEBUG - installer 56492 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z
+2026-08-30 01:32:11,722 - aqt.helper - DEBUG - helper 56492 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z
+2026-08-30 01:32:11,722 - aqt.helper - INFO - helper 56492 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:12,604 - aqt.installer - INFO - installer 43892 Finished installation of qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 13.25960730
+2026-08-30 01:32:12,619 - aqt.helper - DEBUG - helper 43892 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z.sha256
+2026-08-30 01:32:13,604 - aqt.helper - INFO - helper 43892 Downloading opengl32sw...
+2026-08-30 01:32:13,604 - aqt.installer - DEBUG - installer 43892 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z
+2026-08-30 01:32:14,575 - aqt.helper - DEBUG - helper 43892 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z
+2026-08-30 01:32:14,575 - aqt.helper - INFO - helper 43892 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:15,709 - aqt.installer - INFO - installer 56492 Finished installation of d3dcompiler_47-x64.7z in 6.02689100
+2026-08-30 01:32:18,282 - aqt.installer - INFO - installer 43892 Finished installation of opengl32sw-64-mesa_11_2_2-signed_sha256.7z in 5.66501730
+2026-08-30 01:32:20,049 - aqt.main - INFO - installer 25648 aqtinstall(aqt) v3.3.0 on Python 3.12.8 [CPython MSC v.1942 64 bit (AMD64)]
+2026-08-30 01:32:20,049 - aqt.helper - DEBUG - helper 25648 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/Updates.xml.sha256
+2026-08-30 01:32:21,423 - aqt.helper - DEBUG - helper 25648 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtwebengine/6103/msvc2022_64/Updates.xml.sha256
+2026-08-30 01:32:22,687 - aqt.archives - INFO - archives 25648 Found extension qtwebengine
+2026-08-30 01:32:22,687 - aqt.helper - DEBUG - helper 25648 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/extensions/qtpdf/6103/msvc2022_64/Updates.xml.sha256
+2026-08-30 01:32:24,639 - aqt.archives - INFO - archives 25648 Found extension qtpdf
+2026-08-30 01:32:25,124 - aqt.helper - DEBUG - helper 44192 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:25,149 - aqt.helper - DEBUG - helper 45076 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:25,156 - aqt.helper - DEBUG - helper 42276 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:25,181 - aqt.helper - DEBUG - helper 25700 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:25,917 - aqt.helper - INFO - helper 44192 Downloading qtbase...
+2026-08-30 01:32:25,917 - aqt.installer - DEBUG - installer 44192 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:25,963 - aqt.helper - INFO - helper 42276 Downloading qtdeclarative...
+2026-08-30 01:32:25,963 - aqt.installer - DEBUG - installer 42276 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:25,980 - aqt.helper - INFO - helper 45076 Downloading qtsvg...
+2026-08-30 01:32:25,980 - aqt.installer - DEBUG - installer 45076 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:25,991 - aqt.helper - INFO - helper 25700 Downloading qttools...
+2026-08-30 01:32:25,991 - aqt.installer - DEBUG - installer 25700 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:26,700 - aqt.helper - DEBUG - helper 44192 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:26,700 - aqt.helper - INFO - helper 44192 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:26,775 - aqt.helper - DEBUG - helper 42276 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:26,775 - aqt.helper - INFO - helper 42276 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:26,843 - aqt.helper - DEBUG - helper 45076 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:26,843 - aqt.helper - INFO - helper 45076 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:26,901 - aqt.helper - DEBUG - helper 25700 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:26,901 - aqt.helper - INFO - helper 25700 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:29,385 - aqt.installer - INFO - installer 45076 Finished installation of qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 4.23707570
+2026-08-30 01:32:29,399 - aqt.helper - DEBUG - helper 45076 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z.sha256
+2026-08-30 01:32:30,347 - aqt.helper - INFO - helper 45076 Downloading qttranslations...
+2026-08-30 01:32:30,347 - aqt.installer - DEBUG - installer 45076 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:31,321 - aqt.helper - DEBUG - helper 45076 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z
+2026-08-30 01:32:31,321 - aqt.helper - INFO - helper 45076 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:31,762 - aqt.installer - INFO - installer 26288 Finished installation of qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 32.46180610
+2026-08-30 01:32:35,871 - aqt.installer - INFO - installer 45076 Finished installation of qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 6.47456740
+2026-08-30 01:32:35,884 - aqt.helper - DEBUG - helper 45076 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z.sha256
+2026-08-30 01:32:36,839 - aqt.helper - INFO - helper 45076 Downloading d3dcompiler_47...
+2026-08-30 01:32:36,839 - aqt.installer - DEBUG - installer 45076 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z
+2026-08-30 01:32:37,828 - aqt.helper - DEBUG - helper 45076 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407d3dcompiler_47-x64.7z
+2026-08-30 01:32:37,828 - aqt.helper - INFO - helper 45076 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:39,140 - aqt.installer - INFO - installer 25700 Finished installation of qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 13.96007120
+2026-08-30 01:32:39,153 - aqt.helper - DEBUG - helper 25700 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z.sha256
+2026-08-30 01:32:40,228 - aqt.helper - INFO - helper 25700 Downloading opengl32sw...
+2026-08-30 01:32:40,229 - aqt.installer - DEBUG - installer 25700 Download URL: https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z
+2026-08-30 01:32:40,350 - aqt.installer - INFO - installer 45076 Finished installation of d3dcompiler_47-x64.7z in 4.46999340
+2026-08-30 01:32:41,205 - aqt.helper - DEBUG - helper 25700 Asked to redirect(302) to: https://qtproject.mirror.liquidtelecom.com/online/qtsdkrepository/windows_x86/desktop/qt6_6103/qt6_6103/qt.qt6.6103.win64_msvc2022_64/6.10.3-0-202603310407opengl32sw-64-mesa_11_2_2-signed_sha256.7z
+2026-08-30 01:32:41,205 - aqt.helper - INFO - helper 25700 Redirected: qtproject.mirror.liquidtelecom.com
+2026-08-30 01:32:44,654 - aqt.installer - INFO - installer 25700 Finished installation of opengl32sw-64-mesa_11_2_2-signed_sha256.7z in 5.50387520
+2026-08-30 01:32:59,445 - aqt.installer - INFO - installer 44192 Finished installation of qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 34.32230390
+2026-08-30 01:33:11,915 - aqt.installer - INFO - installer 42980 Finished installation of qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 72.58488430
+2026-08-30 01:33:12,191 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\bin\qmake.exe
+2026-08-30 01:33:12,196 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Concurrent.prl
+2026-08-30 01:33:12,198 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Concurrentd.prl
+2026-08-30 01:33:12,199 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Core.prl
+2026-08-30 01:33:12,201 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Cored.prl
+2026-08-30 01:33:12,203 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DBus.prl
+2026-08-30 01:33:12,205 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DBusd.prl
+2026-08-30 01:33:12,207 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Designer.prl
+2026-08-30 01:33:12,208 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DesignerComponents.prl
+2026-08-30 01:33:12,210 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DesignerComponentsd.prl
+2026-08-30 01:33:12,211 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Designerd.prl
+2026-08-30 01:33:12,214 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DeviceDiscoverySupport.prl
+2026-08-30 01:33:12,215 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DeviceDiscoverySupportd.prl
+2026-08-30 01:33:12,218 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6EntryPoint.prl
+2026-08-30 01:33:12,219 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6EntryPointd.prl
+2026-08-30 01:33:12,221 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExampleIcons.prl
+2026-08-30 01:33:12,222 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExampleIconsd.prl
+2026-08-30 01:33:12,225 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExamplesAssetDownloader.prl
+2026-08-30 01:33:12,226 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExamplesAssetDownloaderd.prl
+2026-08-30 01:33:12,228 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6FbSupport.prl
+2026-08-30 01:33:12,231 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6FbSupportd.prl
+2026-08-30 01:33:12,232 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Gui.prl
+2026-08-30 01:33:12,234 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Guid.prl
+2026-08-30 01:33:12,235 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Help.prl
+2026-08-30 01:33:12,237 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Helpd.prl
+2026-08-30 01:33:12,238 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsAnimation.prl
+2026-08-30 01:33:12,240 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsAnimationd.prl
+2026-08-30 01:33:12,240 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsFolderListModel.prl
+2026-08-30 01:33:12,242 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsFolderListModeld.prl
+2026-08-30 01:33:12,243 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsPlatform.prl
+2026-08-30 01:33:12,245 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsPlatformd.prl
+2026-08-30 01:33:12,246 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsQmlModels.prl
+2026-08-30 01:33:12,247 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsQmlModelsd.prl
+2026-08-30 01:33:12,248 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSettings.prl
+2026-08-30 01:33:12,250 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSettingsd.prl
+2026-08-30 01:33:12,252 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSharedImage.prl
+2026-08-30 01:33:12,254 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSharedImaged.prl
+2026-08-30 01:33:12,256 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSynchronizer.prl
+2026-08-30 01:33:12,257 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSynchronizerd.prl
+2026-08-30 01:33:12,260 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsWavefrontMesh.prl
+2026-08-30 01:33:12,263 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsWavefrontMeshd.prl
+2026-08-30 01:33:12,264 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Network.prl
+2026-08-30 01:33:12,267 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Networkd.prl
+2026-08-30 01:33:12,269 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGL.prl
+2026-08-30 01:33:12,271 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLd.prl
+2026-08-30 01:33:12,272 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLWidgets.prl
+2026-08-30 01:33:12,275 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLWidgetsd.prl
+2026-08-30 01:33:12,278 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PacketProtocol.prl
+2026-08-30 01:33:12,279 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PacketProtocold.prl
+2026-08-30 01:33:12,281 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PrintSupport.prl
+2026-08-30 01:33:12,282 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PrintSupportd.prl
+2026-08-30 01:33:12,284 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Qml.prl
+2026-08-30 01:33:12,286 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlAssetDownloader.prl
+2026-08-30 01:33:12,288 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlAssetDownloaderd.prl
+2026-08-30 01:33:12,289 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCompiler.prl
+2026-08-30 01:33:12,292 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCompilerd.prl
+2026-08-30 01:33:12,294 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCore.prl
+2026-08-30 01:33:12,296 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCored.prl
+2026-08-30 01:33:12,298 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Qmld.prl
+2026-08-30 01:33:12,300 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDebug.prl
+2026-08-30 01:33:12,301 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDebugd.prl
+2026-08-30 01:33:12,304 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDom.prl
+2026-08-30 01:33:12,305 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDomd.prl
+2026-08-30 01:33:12,308 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlFormat.prl
+2026-08-30 01:33:12,309 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlFormatd.prl
+2026-08-30 01:33:12,311 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLocalStorage.prl
+2026-08-30 01:33:12,313 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLocalStoraged.prl
+2026-08-30 01:33:12,315 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLS.prl
+2026-08-30 01:33:12,317 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLSd.prl
+2026-08-30 01:33:12,319 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlMeta.prl
+2026-08-30 01:33:12,320 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlMetad.prl
+2026-08-30 01:33:12,322 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlModels.prl
+2026-08-30 01:33:12,324 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlModelsd.prl
+2026-08-30 01:33:12,327 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlNetwork.prl
+2026-08-30 01:33:12,328 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlNetworkd.prl
+2026-08-30 01:33:12,331 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlToolingSettings.prl
+2026-08-30 01:33:12,332 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlToolingSettingsd.prl
+2026-08-30 01:33:12,335 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlTypeRegistrar.prl
+2026-08-30 01:33:12,336 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlTypeRegistrard.prl
+2026-08-30 01:33:12,338 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlWorkerScript.prl
+2026-08-30 01:33:12,339 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlWorkerScriptd.prl
+2026-08-30 01:33:12,342 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlXmlListModel.prl
+2026-08-30 01:33:12,344 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlXmlListModeld.prl
+2026-08-30 01:33:12,346 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Quick.prl
+2026-08-30 01:33:12,347 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2.prl
+2026-08-30 01:33:12,349 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Basic.prl
+2026-08-30 01:33:12,350 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Basicd.prl
+2026-08-30 01:33:12,353 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2BasicStyleImpl.prl
+2026-08-30 01:33:12,354 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2BasicStyleImpld.prl
+2026-08-30 01:33:12,356 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2d.prl
+2026-08-30 01:33:12,358 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FluentWinUI3StyleImpl.prl
+2026-08-30 01:33:12,360 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FluentWinUI3StyleImpld.prl
+2026-08-30 01:33:12,362 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Fusion.prl
+2026-08-30 01:33:12,364 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Fusiond.prl
+2026-08-30 01:33:12,365 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FusionStyleImpl.prl
+2026-08-30 01:33:12,367 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FusionStyleImpld.prl
+2026-08-30 01:33:12,369 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Imagine.prl
+2026-08-30 01:33:12,370 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Imagined.prl
+2026-08-30 01:33:12,372 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2ImagineStyleImpl.prl
+2026-08-30 01:33:12,374 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2ImagineStyleImpld.prl
+2026-08-30 01:33:12,376 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Impl.prl
+2026-08-30 01:33:12,378 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Impld.prl
+2026-08-30 01:33:12,379 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Material.prl
+2026-08-30 01:33:12,381 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Materiald.prl
+2026-08-30 01:33:12,382 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2MaterialStyleImpl.prl
+2026-08-30 01:33:12,384 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2MaterialStyleImpld.prl
+2026-08-30 01:33:12,385 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Universal.prl
+2026-08-30 01:33:12,387 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Universald.prl
+2026-08-30 01:33:12,388 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2UniversalStyleImpl.prl
+2026-08-30 01:33:12,390 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2UniversalStyleImpld.prl
+2026-08-30 01:33:12,392 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2WindowsStyleImpl.prl
+2026-08-30 01:33:12,394 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2WindowsStyleImpld.prl
+2026-08-30 01:33:12,395 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControlsTestUtils.prl
+2026-08-30 01:33:12,397 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControlsTestUtilsd.prl
+2026-08-30 01:33:12,398 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Quickd.prl
+2026-08-30 01:33:12,400 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2.prl
+2026-08-30 01:33:12,402 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2d.prl
+2026-08-30 01:33:12,403 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2QuickImpl.prl
+2026-08-30 01:33:12,405 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2QuickImpld.prl
+2026-08-30 01:33:12,408 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2Utils.prl
+2026-08-30 01:33:12,409 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2Utilsd.prl
+2026-08-30 01:33:12,412 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickEffects.prl
+2026-08-30 01:33:12,413 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickEffectsd.prl
+2026-08-30 01:33:12,416 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickLayouts.prl
+2026-08-30 01:33:12,417 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickLayoutsd.prl
+2026-08-30 01:33:12,419 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickParticles.prl
+2026-08-30 01:33:12,421 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickParticlesd.prl
+2026-08-30 01:33:12,423 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapes.prl
+2026-08-30 01:33:12,424 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesd.prl
+2026-08-30 01:33:12,427 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesDesignHelpers.prl
+2026-08-30 01:33:12,428 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesDesignHelpersd.prl
+2026-08-30 01:33:12,431 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTemplates2.prl
+2026-08-30 01:33:12,432 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTemplates2d.prl
+2026-08-30 01:33:12,435 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTest.prl
+2026-08-30 01:33:12,436 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestd.prl
+2026-08-30 01:33:12,439 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestUtils.prl
+2026-08-30 01:33:12,440 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestUtilsd.prl
+2026-08-30 01:33:12,442 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImage.prl
+2026-08-30 01:33:12,444 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImaged.prl
+2026-08-30 01:33:12,446 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageGenerator.prl
+2026-08-30 01:33:12,447 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageGeneratord.prl
+2026-08-30 01:33:12,449 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageHelpers.prl
+2026-08-30 01:33:12,450 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageHelpersd.prl
+2026-08-30 01:33:12,452 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickWidgets.prl
+2026-08-30 01:33:12,453 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickWidgetsd.prl
+2026-08-30 01:33:12,458 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Sql.prl
+2026-08-30 01:33:12,459 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Sqld.prl
+2026-08-30 01:33:12,462 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Svg.prl
+2026-08-30 01:33:12,463 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Svgd.prl
+2026-08-30 01:33:12,467 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6SvgWidgets.prl
+2026-08-30 01:33:12,469 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6SvgWidgetsd.prl
+2026-08-30 01:33:12,470 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Test.prl
+2026-08-30 01:33:12,472 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Testd.prl
+2026-08-30 01:33:12,473 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6UiTools.prl
+2026-08-30 01:33:12,475 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6UiToolsd.prl
+2026-08-30 01:33:12,476 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Widgets.prl
+2026-08-30 01:33:12,478 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Widgetsd.prl
+2026-08-30 01:33:12,481 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Xml.prl
+2026-08-30 01:33:12,483 - aqt.updater - INFO - updater 19260 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Xmld.prl
+2026-08-30 01:33:12,496 - aqt.main - INFO - installer 19260 Finished installation
+2026-08-30 01:33:12,496 - aqt.main - INFO - installer 19260 Time elapsed: 78.25353430 second
+2026-08-30 01:33:41,257 - aqt.installer - INFO - installer 42276 Finished installation of qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z in 76.10266560
+2026-08-30 01:33:41,414 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\bin\qmake.exe
+2026-08-30 01:33:41,423 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Concurrent.prl
+2026-08-30 01:33:41,426 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Concurrentd.prl
+2026-08-30 01:33:41,427 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Core.prl
+2026-08-30 01:33:41,428 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Cored.prl
+2026-08-30 01:33:41,429 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DBus.prl
+2026-08-30 01:33:41,431 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DBusd.prl
+2026-08-30 01:33:41,432 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Designer.prl
+2026-08-30 01:33:41,434 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DesignerComponents.prl
+2026-08-30 01:33:41,435 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DesignerComponentsd.prl
+2026-08-30 01:33:41,437 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Designerd.prl
+2026-08-30 01:33:41,438 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DeviceDiscoverySupport.prl
+2026-08-30 01:33:41,440 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6DeviceDiscoverySupportd.prl
+2026-08-30 01:33:41,441 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6EntryPoint.prl
+2026-08-30 01:33:41,443 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6EntryPointd.prl
+2026-08-30 01:33:41,444 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExampleIcons.prl
+2026-08-30 01:33:41,446 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExampleIconsd.prl
+2026-08-30 01:33:41,447 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExamplesAssetDownloader.prl
+2026-08-30 01:33:41,448 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6ExamplesAssetDownloaderd.prl
+2026-08-30 01:33:41,450 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6FbSupport.prl
+2026-08-30 01:33:41,451 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6FbSupportd.prl
+2026-08-30 01:33:41,453 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Gui.prl
+2026-08-30 01:33:41,454 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Guid.prl
+2026-08-30 01:33:41,456 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Help.prl
+2026-08-30 01:33:41,457 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Helpd.prl
+2026-08-30 01:33:41,459 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsAnimation.prl
+2026-08-30 01:33:41,461 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsAnimationd.prl
+2026-08-30 01:33:41,463 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsFolderListModel.prl
+2026-08-30 01:33:41,465 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsFolderListModeld.prl
+2026-08-30 01:33:41,466 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsPlatform.prl
+2026-08-30 01:33:41,468 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsPlatformd.prl
+2026-08-30 01:33:41,469 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsQmlModels.prl
+2026-08-30 01:33:41,470 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsQmlModelsd.prl
+2026-08-30 01:33:41,472 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSettings.prl
+2026-08-30 01:33:41,473 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSettingsd.prl
+2026-08-30 01:33:41,475 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSharedImage.prl
+2026-08-30 01:33:41,476 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSharedImaged.prl
+2026-08-30 01:33:41,478 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSynchronizer.prl
+2026-08-30 01:33:41,480 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsSynchronizerd.prl
+2026-08-30 01:33:41,482 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsWavefrontMesh.prl
+2026-08-30 01:33:41,483 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6LabsWavefrontMeshd.prl
+2026-08-30 01:33:41,485 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Network.prl
+2026-08-30 01:33:41,487 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Networkd.prl
+2026-08-30 01:33:41,488 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGL.prl
+2026-08-30 01:33:41,489 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLd.prl
+2026-08-30 01:33:41,491 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLWidgets.prl
+2026-08-30 01:33:41,492 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6OpenGLWidgetsd.prl
+2026-08-30 01:33:41,493 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PacketProtocol.prl
+2026-08-30 01:33:41,495 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PacketProtocold.prl
+2026-08-30 01:33:41,497 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PrintSupport.prl
+2026-08-30 01:33:41,498 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6PrintSupportd.prl
+2026-08-30 01:33:41,500 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Qml.prl
+2026-08-30 01:33:41,501 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlAssetDownloader.prl
+2026-08-30 01:33:41,503 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlAssetDownloaderd.prl
+2026-08-30 01:33:41,505 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCompiler.prl
+2026-08-30 01:33:41,507 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCompilerd.prl
+2026-08-30 01:33:41,508 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCore.prl
+2026-08-30 01:33:41,510 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlCored.prl
+2026-08-30 01:33:41,511 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Qmld.prl
+2026-08-30 01:33:41,513 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDebug.prl
+2026-08-30 01:33:41,515 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDebugd.prl
+2026-08-30 01:33:41,516 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDom.prl
+2026-08-30 01:33:41,518 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlDomd.prl
+2026-08-30 01:33:41,520 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlFormat.prl
+2026-08-30 01:33:41,522 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlFormatd.prl
+2026-08-30 01:33:41,523 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLocalStorage.prl
+2026-08-30 01:33:41,526 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLocalStoraged.prl
+2026-08-30 01:33:41,527 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLS.prl
+2026-08-30 01:33:41,529 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlLSd.prl
+2026-08-30 01:33:41,530 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlMeta.prl
+2026-08-30 01:33:41,532 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlMetad.prl
+2026-08-30 01:33:41,533 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlModels.prl
+2026-08-30 01:33:41,535 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlModelsd.prl
+2026-08-30 01:33:41,536 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlNetwork.prl
+2026-08-30 01:33:41,538 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlNetworkd.prl
+2026-08-30 01:33:41,539 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlToolingSettings.prl
+2026-08-30 01:33:41,541 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlToolingSettingsd.prl
+2026-08-30 01:33:41,543 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlTypeRegistrar.prl
+2026-08-30 01:33:41,545 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlTypeRegistrard.prl
+2026-08-30 01:33:41,547 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlWorkerScript.prl
+2026-08-30 01:33:41,548 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlWorkerScriptd.prl
+2026-08-30 01:33:41,550 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlXmlListModel.prl
+2026-08-30 01:33:41,551 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QmlXmlListModeld.prl
+2026-08-30 01:33:41,552 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Quick.prl
+2026-08-30 01:33:41,554 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2.prl
+2026-08-30 01:33:41,555 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Basic.prl
+2026-08-30 01:33:41,556 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Basicd.prl
+2026-08-30 01:33:41,558 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2BasicStyleImpl.prl
+2026-08-30 01:33:41,559 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2BasicStyleImpld.prl
+2026-08-30 01:33:41,561 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2d.prl
+2026-08-30 01:33:41,562 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FluentWinUI3StyleImpl.prl
+2026-08-30 01:33:41,563 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FluentWinUI3StyleImpld.prl
+2026-08-30 01:33:41,565 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Fusion.prl
+2026-08-30 01:33:41,566 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Fusiond.prl
+2026-08-30 01:33:41,567 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FusionStyleImpl.prl
+2026-08-30 01:33:41,569 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2FusionStyleImpld.prl
+2026-08-30 01:33:41,571 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Imagine.prl
+2026-08-30 01:33:41,572 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Imagined.prl
+2026-08-30 01:33:41,573 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2ImagineStyleImpl.prl
+2026-08-30 01:33:41,575 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2ImagineStyleImpld.prl
+2026-08-30 01:33:41,576 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Impl.prl
+2026-08-30 01:33:41,578 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Impld.prl
+2026-08-30 01:33:41,579 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Material.prl
+2026-08-30 01:33:41,580 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Materiald.prl
+2026-08-30 01:33:41,582 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2MaterialStyleImpl.prl
+2026-08-30 01:33:41,583 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2MaterialStyleImpld.prl
+2026-08-30 01:33:41,584 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Universal.prl
+2026-08-30 01:33:41,586 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2Universald.prl
+2026-08-30 01:33:41,587 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2UniversalStyleImpl.prl
+2026-08-30 01:33:41,590 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2UniversalStyleImpld.prl
+2026-08-30 01:33:41,591 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2WindowsStyleImpl.prl
+2026-08-30 01:33:41,592 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControls2WindowsStyleImpld.prl
+2026-08-30 01:33:41,594 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControlsTestUtils.prl
+2026-08-30 01:33:41,596 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickControlsTestUtilsd.prl
+2026-08-30 01:33:41,597 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Quickd.prl
+2026-08-30 01:33:41,598 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2.prl
+2026-08-30 01:33:41,600 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2d.prl
+2026-08-30 01:33:41,602 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2QuickImpl.prl
+2026-08-30 01:33:41,604 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2QuickImpld.prl
+2026-08-30 01:33:41,605 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2Utils.prl
+2026-08-30 01:33:41,607 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickDialogs2Utilsd.prl
+2026-08-30 01:33:41,609 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickEffects.prl
+2026-08-30 01:33:41,611 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickEffectsd.prl
+2026-08-30 01:33:41,613 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickLayouts.prl
+2026-08-30 01:33:41,614 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickLayoutsd.prl
+2026-08-30 01:33:41,616 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickParticles.prl
+2026-08-30 01:33:41,619 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickParticlesd.prl
+2026-08-30 01:33:41,620 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapes.prl
+2026-08-30 01:33:41,622 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesd.prl
+2026-08-30 01:33:41,623 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesDesignHelpers.prl
+2026-08-30 01:33:41,625 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickShapesDesignHelpersd.prl
+2026-08-30 01:33:41,626 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTemplates2.prl
+2026-08-30 01:33:41,628 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTemplates2d.prl
+2026-08-30 01:33:41,630 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTest.prl
+2026-08-30 01:33:41,631 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestd.prl
+2026-08-30 01:33:41,632 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestUtils.prl
+2026-08-30 01:33:41,634 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickTestUtilsd.prl
+2026-08-30 01:33:41,636 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImage.prl
+2026-08-30 01:33:41,637 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImaged.prl
+2026-08-30 01:33:41,639 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageGenerator.prl
+2026-08-30 01:33:41,640 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageGeneratord.prl
+2026-08-30 01:33:41,642 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageHelpers.prl
+2026-08-30 01:33:41,646 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickVectorImageHelpersd.prl
+2026-08-30 01:33:41,647 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickWidgets.prl
+2026-08-30 01:33:41,649 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6QuickWidgetsd.prl
+2026-08-30 01:33:41,650 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Sql.prl
+2026-08-30 01:33:41,652 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Sqld.prl
+2026-08-30 01:33:41,653 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Svg.prl
+2026-08-30 01:33:41,655 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Svgd.prl
+2026-08-30 01:33:41,656 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6SvgWidgets.prl
+2026-08-30 01:33:41,658 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6SvgWidgetsd.prl
+2026-08-30 01:33:41,659 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Test.prl
+2026-08-30 01:33:41,660 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Testd.prl
+2026-08-30 01:33:41,661 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6UiTools.prl
+2026-08-30 01:33:41,663 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6UiToolsd.prl
+2026-08-30 01:33:41,665 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Widgets.prl
+2026-08-30 01:33:41,666 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Widgetsd.prl
+2026-08-30 01:33:41,667 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Xml.prl
+2026-08-30 01:33:41,669 - aqt.updater - INFO - updater 25648 Patching C:\Users\dante\AppData\Local\Temp\cp-player-icon-toolchain-20260830\qt\6.10.3\msvc2022_64\lib\Qt6Xmld.prl
+2026-08-30 01:33:41,686 - aqt.main - INFO - installer 25648 Finished installation
+2026-08-30 01:33:41,686 - aqt.main - INFO - installer 25648 Time elapsed: 81.63790340 second

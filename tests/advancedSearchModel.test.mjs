@@ -6,10 +6,13 @@ import {
   compileLibrarySimpleQuery,
   createEmptyQuery,
   normalizeAdvancedQuery,
+  parseYearDraft,
   querySignature,
   withCriterion,
+  withGenreValueRelation,
   withGroupJoin,
-  withoutCriterionValue
+  withoutCriterionValue,
+  yearRangeDraft
 } from '../src/features/search/advancedSearchModel.js';
 import { ADVANCED_SEARCH_LIMITS, criteriaForScope } from '../src/features/search/advancedSearchRegistry.js';
 
@@ -43,6 +46,29 @@ test('different person roles remain distinct and same-type join is explicit', ()
   assert.equal(query.groups[0].values[0].role, 'director');
 });
 
+test('Genre values cycle through AND, OR, and individual NOT exclusions', () => {
+  let query = createEmptyQuery('discover');
+  query = withCriterion(query, 'genre', { id: '27', label: 'Horror' });
+  query = withCriterion(query, 'genre', { id: '878', label: 'Sci-Fi' });
+  query = withCriterion(query, 'genre', { id: '16', label: 'Animation' });
+  query = withCriterion(query, 'genre', { id: '35', label: 'Comedy' });
+  assert.deepEqual(query.groups[0].values.map((value) => value.label), ['Horror', 'Sci-Fi', 'Animation', 'Comedy']);
+
+  query = withGenreValueRelation(query, 2, 'not');
+  query = withGenreValueRelation(query, 3, 'not');
+  query = withGroupJoin(query, 'genre', 'and');
+  assert.equal(query.groups[0].join, 'and');
+  assert.deepEqual(
+    query.groups[0].values.map((value) => [value.label, Boolean(value.exclude)]),
+    [['Horror', false], ['Sci-Fi', false], ['Animation', true], ['Comedy', true]]
+  );
+
+  const animationIndex = query.groups[0].values.findIndex((value) => value.label === 'Animation');
+  query = withGenreValueRelation(query, animationIndex, 'and');
+  assert.equal(query.groups[0].values.find((value) => value.label === 'Animation').exclude, undefined);
+  assert.equal(query.groups[0].join, 'and');
+});
+
 test('simple Library state compiles to the shared model', () => {
   const query = compileLibrarySimpleQuery({
     query: 'Alien', resolution: '1080p', source: 'Blu-ray', genre: 'Horror', language: 'English', country: 'US',
@@ -60,6 +86,25 @@ test('simple Discover state keeps its feed and bounded criteria', () => {
   });
   assert.equal(query.feed, 'catalog');
   assert.equal(query.groups.find((group) => group.type === 'availability').values[0].id, 'owned');
+});
+
+test('year drafts stay out of strict query execution until they are complete and valid', () => {
+  assert.equal(parseYearDraft('1').state, 'incomplete');
+  assert.equal(parseYearDraft('199').state, 'incomplete');
+  assert.deepEqual(parseYearDraft('1999'), { raw: '1999', state: 'valid', value: 1999, error: '' });
+  assert.equal(parseYearDraft('1800').error, 'Year must be between 1888 and 2100');
+  assert.equal(yearRangeDraft('2025', '2024').error, 'Year range cannot be reversed');
+
+  for (const compile of [compileLibrarySimpleQuery, compileDiscoverSimpleQuery]) {
+    assert.equal(compile({ yearFrom: '1' }).groups.some((group) => group.type === 'year'), false);
+    assert.equal(compile({ yearFrom: '1800' }).groups.some((group) => group.type === 'year'), false);
+    assert.equal(compile({ yearFrom: '2025', yearTo: '2024' }).groups.some((group) => group.type === 'year'), false);
+    assert.equal(compile({ yearFrom: '1999' }).groups.find((group) => group.type === 'year').values[0].value, 1999);
+  }
+  assert.throws(() => normalizeAdvancedQuery({
+    ...createEmptyQuery('library'),
+    groups: [{ type: 'year', values: [{ operator: 'exactly', value: 1 }] }]
+  }), /between 1888 and 2100/);
 });
 
 test('malformed, unsupported, excessive, and reversed requests fail', () => {

@@ -60,8 +60,12 @@ def _controlled_id(value, label, pattern):
     return identity
 
 
-def _joined_ids(group, label):
-    values = [_controlled_id(value, label, r"[1-9]\d*") for value in group["values"]]
+def _joined_ids(group, label, *, excluded=False):
+    values = [
+        _controlled_id(value, label, r"[1-9]\d*")
+        for value in group["values"]
+        if bool(value.get("exclude")) == excluded
+    ]
     return ("," if group.get("join") == "and" else "|").join(values)
 
 
@@ -114,7 +118,12 @@ def build_discover_plan(query):
 
     provider_params = {}
     if "genre" in groups:
-        provider_params["with_genres"] = _joined_ids(groups["genre"], "Genre")
+        included_genres = _joined_ids(groups["genre"], "Genre")
+        excluded_genres = _joined_ids(groups["genre"], "Genre", excluded=True)
+        if included_genres:
+            provider_params["with_genres"] = included_genres
+        if excluded_genres:
+            provider_params["without_genres"] = excluded_genres.replace("|", ",")
     if "keyword" in groups:
         provider_params["with_keywords"] = _joined_ids(groups["keyword"], "Keyword")
     if "language" in groups:
@@ -217,11 +226,14 @@ def movie_matches_summary(movie, summary_groups, language_country_fallback=None)
         criterion = group["type"]
         value = group["values"][0]
         if criterion == "genre":
-            wanted = {entry["id"] for entry in group["values"]}
-            matched = wanted & genre_ids
-            if group.get("join") == "and" and matched != wanted:
+            included = {entry["id"] for entry in group["values"] if not entry.get("exclude")}
+            excluded = {entry["id"] for entry in group["values"] if entry.get("exclude")}
+            if excluded & genre_ids:
                 return False
-            if group.get("join") != "and" and not matched:
+            matched = included & genre_ids
+            if included and group.get("join") == "and" and matched != included:
+                return False
+            if included and group.get("join") != "and" and not matched:
                 return False
         elif criterion == "language" and language != value["id"].lower():
             return False

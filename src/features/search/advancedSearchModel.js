@@ -44,6 +44,10 @@ function identityValue(value, type) {
   const label = text(value?.label, 160);
   if (!id || !label) fail(`${type} requires a controlled identity`);
   const normalized = { id, label };
+  if (type === 'genre' && value?.exclude != null) {
+    if (typeof value.exclude !== 'boolean') fail('Genre exclusion must be true or false');
+    if (value.exclude) normalized.exclude = true;
+  }
   if (type === 'person') {
     const role = text(value?.role, 20).toLowerCase();
     if (!roles.has(role)) fail('Person role must be actor, director, or writer');
@@ -118,16 +122,20 @@ function normalizeGroup(scope, group) {
   if (!incoming.length) fail(`${type} requires at least one value`);
   if (incoming.length > ADVANCED_SEARCH_LIMITS.valuesPerGroup) fail(`${type} exceeds the per-group limit`);
   const values = [];
-  const seen = new Set();
+  const seen = new Map();
   for (const candidate of incoming) {
     const value = normalizeValue(type, candidate);
     const key = valueKey(type, value);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seen.has(key)) {
+      if (type === 'genre' && Boolean(seen.get(key).exclude) !== Boolean(value.exclude)) {
+        fail('A genre cannot be both included and excluded');
+      }
+      continue;
+    }
+    seen.set(key, value);
     values.push(value);
   }
   if (!definition.repeatable && values.length !== 1) fail(`${type} accepts one value`);
-  values.sort((left, right) => valueKey(type, left).localeCompare(valueKey(type, right)));
   const allowedJoins = definition.joinOptions || ['and', 'or'];
   const requestedJoin = text(group?.join || 'or', 10).toLowerCase();
   const join = allowedJoins.includes(requestedJoin) ? requestedJoin : allowedJoins[0];
@@ -188,7 +196,12 @@ export function querySignature(query) {
     scope: normalized.scope,
     groups: normalized.groups.map((group) => ({
       ...group,
-      values: group.values.map(({ label: _label, ...value }) => value)
+      values: [...group.values]
+        .sort((left, right) => (
+          Number(Boolean(left.exclude)) - Number(Boolean(right.exclude))
+          || valueKey(group.type, left).localeCompare(valueKey(group.type, right))
+        ))
+        .map(({ label: _label, ...value }) => value)
     })),
     sort: normalized.sort,
     ...(normalized.scope === 'discover' ? { feed: normalized.feed } : {})
@@ -204,9 +217,45 @@ function singleIdentity(type, id, label = id) {
   return value ? { type, values: [{ id: value, label: text(label) || value }] } : null;
 }
 
+export function parseYearDraft(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { raw, state: 'empty', value: null, error: '' };
+  if (!/^\d+$/.test(raw)) return { raw, state: 'invalid', value: null, error: 'Enter a 4-digit year' };
+  if (raw.length < 4) return { raw, state: 'incomplete', value: null, error: '' };
+  if (raw.length > 4) return { raw, state: 'invalid', value: null, error: 'Enter a 4-digit year' };
+  const number = Number(raw);
+  if (number < 1888 || number > 2100) {
+    return { raw, state: 'invalid', value: null, error: 'Year must be between 1888 and 2100' };
+  }
+  return { raw, state: 'valid', value: number, error: '' };
+}
+
+export function yearRangeDraft(from, to) {
+  const fromDraft = parseYearDraft(from);
+  const toDraft = parseYearDraft(to);
+  const error = fromDraft.error || toDraft.error;
+  const incomplete = fromDraft.state === 'incomplete' || toDraft.state === 'incomplete';
+  if (error || incomplete) {
+    return { from: '', to: '', ready: false, error, fromDraft, toDraft };
+  }
+  if (fromDraft.value != null && toDraft.value != null && fromDraft.value > toDraft.value) {
+    return { from: '', to: '', ready: false, error: 'Year range cannot be reversed', fromDraft, toDraft };
+  }
+  return {
+    from: fromDraft.value == null ? '' : String(fromDraft.value),
+    to: toDraft.value == null ? '' : String(toDraft.value),
+    ready: true,
+    error: '',
+    fromDraft,
+    toDraft
+  };
+}
+
 function rangeGroup(type, from, to) {
-  const cleanFrom = text(from);
-  const cleanTo = text(to);
+  const range = type === 'year' ? yearRangeDraft(from, to) : null;
+  if (range && !range.ready) return null;
+  const cleanFrom = text(range ? range.from : from);
+  const cleanTo = text(range ? range.to : to);
   if (cleanFrom && cleanTo) return { type, values: [{ operator: 'between', from: Number(cleanFrom), to: Number(cleanTo) }] };
   if (cleanFrom) return { type, values: [{ operator: 'at_least', value: Number(cleanFrom) }] };
   if (cleanTo) return { type, values: [{ operator: 'at_most', value: Number(cleanTo) }] };
@@ -297,5 +346,24 @@ export function withGroupJoin(query, type, join) {
   return normalizeAdvancedQuery({
     ...normalized,
     groups: normalized.groups.map((group) => group.type === type ? { ...group, join } : group)
+  }, normalized.scope);
+}
+
+export function withGenreValueRelation(query, index, relation) {
+  const normalized = normalizeAdvancedQuery(query, query?.scope);
+  const requested = text(relation, 10).toLowerCase();
+  if (!['and', 'or', 'not'].includes(requested)) fail('Genre relation must be and, or, or not');
+  return normalizeAdvancedQuery({
+    ...normalized,
+    groups: normalized.groups.map((group) => {
+      if (group.type !== 'genre') return group;
+      const values = group.values.map((value, valueIndex) => {
+        if (valueIndex !== index) return value;
+        if (requested === 'not') return { ...value, exclude: true };
+        const { exclude: _exclude, ...included } = value;
+        return included;
+      });
+      return { ...group, join: requested === 'not' ? group.join : requested, values };
+    })
   }, normalized.scope);
 }

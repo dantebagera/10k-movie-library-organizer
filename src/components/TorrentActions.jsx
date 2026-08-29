@@ -6,8 +6,12 @@ import { cx, torrentPrimaryAction } from '../utils/appUtils.js';
 
 export default function TorrentActions({ variant, movieTitle, movieYear, tmdbId = '', imdbId = '', upgrade = false, notify, primary = false }) {
   const action = torrentPrimaryAction(variant);
-  const magnetUrl = action.kind === 'magnet' ? action.url : '';
-  const downloadUrl = action.kind === 'torrent' ? action.url : '';
+  const magnetUrl = String(variant?.magnet_url || '').trim().toLowerCase().startsWith('magnet:')
+    ? String(variant.magnet_url).trim()
+    : '';
+  const downloadUrl = /^https?:\/\//i.test(String(variant?.download_url || '').trim())
+    ? String(variant.download_url).trim()
+    : '';
   const hasStableIdentity = Boolean(tmdbId || imdbId);
   const [mode, setMode] = useState('embedded');
   const [busy, setBusy] = useState(false);
@@ -44,14 +48,21 @@ export default function TorrentActions({ variant, movieTitle, movieYear, tmdbId 
           imdb_id: imdbId || '',
           upgrade: Boolean(upgrade),
           release_title: variant.title || '',
-          indexer: variant.indexer || ''
+          indexer: variant.indexer || '',
+          expected_size: Number(variant.size_bytes || variant.size || 0),
+          info_hash: variant.info_hash || variant.infoHash || ''
         })
       });
       if (job.already_exists) {
-        notify(`${variant.title || movieTitle} ${job.state === 'imported' ? 'already imported' : 'already added'}`);
+        const status = job.state === 'imported'
+          ? 'already imported'
+          : job.state === 'validating'
+            ? 'is already validating'
+            : 'already added';
+        notify(`${variant.title || movieTitle} ${status}`);
         return;
       }
-      notify(`${variant.title || movieTitle} download added`);
+      notify(`${variant.title || movieTitle} ${job.state === 'validating' ? 'is validating before download' : 'download added'}`);
     } catch (error) {
       notify(`qBittorrent submission failed: ${error.message}`, 'error');
     } finally {

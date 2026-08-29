@@ -47,7 +47,7 @@ def _load_json(path, label):
     return data
 
 
-def validate_player_manifest(bundle_root, app_version=None, verify_hashes=True):
+def validate_player_manifest(bundle_root, verify_hashes=True):
     bundle_root = Path(bundle_root).resolve()
     manifest_path = bundle_root / "cinema-paradiso-player.json"
     manifest = _load_json(manifest_path, "Player runtime manifest")
@@ -68,12 +68,6 @@ def validate_player_manifest(bundle_root, app_version=None, verify_hashes=True):
         raise PlayerRuntimeError("Player IPC protocol is incompatible")
     if str(manifest["bundle_version"]).strip() != bundle_root.name:
         raise PlayerRuntimeError("Player bundle directory does not match its manifest")
-
-    compatible_versions = manifest.get("compatible_cp_versions")
-    if not isinstance(compatible_versions, list) or not compatible_versions:
-        raise PlayerRuntimeError("Compatible Cinema Paradiso versions are missing")
-    if app_version and app_version not in compatible_versions:
-        raise PlayerRuntimeError("Player runtime is not compatible with this Cinema Paradiso version")
 
     architecture = str(manifest["architecture"]).lower()
     machine = platform.machine().lower()
@@ -161,9 +155,8 @@ def validate_player_manifest(bundle_root, app_version=None, verify_hashes=True):
 
 
 class PlayerRuntime:
-    def __init__(self, runtime_root, app_version):
+    def __init__(self, runtime_root):
         self.runtime_root = Path(runtime_root).resolve()
-        self.app_version = str(app_version)
 
     @property
     def selector_path(self):
@@ -225,7 +218,6 @@ class PlayerRuntime:
         bundle_root = self.runtime_root / "versions" / bundle_version
         manifest = validate_player_manifest(
             bundle_root,
-            app_version=self.app_version,
             verify_hashes=verify_hashes,
         )
         return {

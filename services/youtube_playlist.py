@@ -13,11 +13,20 @@ ATOM_NS = "http://www.w3.org/2005/Atom"
 MEDIA_NS = "http://search.yahoo.com/mrss/"
 YOUTUBE_NS = "http://www.youtube.com/xml/schemas/2015"
 VIDEO_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
+REGION_CODE_PATTERN = re.compile(r"^[A-Z]{2}$")
 YOUTUBE_API_ROOT = "https://www.googleapis.com/youtube/v3"
 
 
 class YouTubePlaylistError(RuntimeError):
     pass
+
+
+def normalize_region_code(value, default="EG"):
+    """Return a safe ISO 3166-1 alpha-2 region code for trailer availability."""
+    candidate = str(value or "").strip().upper()
+    if REGION_CODE_PATTERN.fullmatch(candidate):
+        return candidate
+    return str(default or "EG").strip().upper()
 
 
 def parse_youtube_playlist_feed(xml_text, expected_playlist_id):
@@ -177,6 +186,7 @@ class YouTubeService:
         sources,
         *,
         api_key="",
+        trailer_region="EG",
         cache_ttl_seconds=1800,
         timeout_seconds=8,
         opener=None,
@@ -190,6 +200,7 @@ class YouTubeService:
         if not self.sources:
             raise ValueError("at least one YouTube source is required")
         self.api_key = str(api_key or "").strip()
+        self.trailer_region = normalize_region_code(trailer_region)
         self.cache_ttl_seconds = max(1, int(cache_ttl_seconds))
         self.timeout_seconds = max(1, int(timeout_seconds))
         self._opener = opener or urllib.request.urlopen
@@ -204,6 +215,13 @@ class YouTubeService:
             if api_key != self.api_key:
                 self.api_key = api_key
                 self._cache = {}
+                self._search_cache = {}
+
+    def set_trailer_region(self, trailer_region):
+        trailer_region = normalize_region_code(trailer_region, self.trailer_region)
+        with self._lock:
+            if trailer_region != self.trailer_region:
+                self.trailer_region = trailer_region
                 self._search_cache = {}
 
     def _request_json(self, path, params, *, api_key=None):
@@ -393,7 +411,7 @@ class YouTubeService:
             raise YouTubePlaylistError("Movie title is required")
         if not self.api_key:
             raise YouTubePlaylistError("Configure a YouTube API key in Settings to search for missing trailers")
-        search_key = (title.casefold(), year)
+        search_key = (title.casefold(), year, self.trailer_region)
         now = self._clock()
         with self._lock:
             cached = self._search_cache.get(search_key)
@@ -423,14 +441,45 @@ class YouTubeService:
                 "url": f"https://www.youtube.com/watch?v={video_id}",
                 "score": self._search_score(title, year, video_title),
             })
+        if candidates:
+            details = self._request_json("videos", {
+                "part": "contentDetails,status",
+                "id": ",".join(candidate["video_id"] for candidate in candidates),
+                "maxResults": len(candidates),
+            })
+            details_by_video_id = {
+                str(item.get("id") or "").strip(): item
+                for item in details.get("items", []) or []
+                if str(item.get("id") or "").strip()
+            }
+            candidates = [
+                candidate
+                for candidate in candidates
+                if self._is_region_embeddable(details_by_video_id.get(candidate["video_id"]))
+            ]
         candidates.sort(key=lambda item: (item["score"], item["published_at"]), reverse=True)
         confident = bool(candidates and candidates[0]["score"] >= 70 and (len(candidates) == 1 or candidates[0]["score"] - candidates[1]["score"] >= 15))
         result = {
             "status": "matched" if confident else "choose" if candidates else "unmatched",
             "movie": {"title": title, "year": year},
+            "trailer_region": self.trailer_region,
             "video": candidates[0] if confident else None,
             "candidates": candidates,
         }
         with self._lock:
             self._search_cache[search_key] = (now, copy.deepcopy(result))
         return result
+
+    def _is_region_embeddable(self, details):
+        """Reject deleted, non-embeddable, and explicitly region-blocked search results."""
+        if not isinstance(details, dict):
+            return False
+        status = details.get("status") or {}
+        if status.get("embeddable") is False:
+            return False
+        restriction = (details.get("contentDetails") or {}).get("regionRestriction") or {}
+        allowed = {str(code).strip().upper() for code in restriction.get("allowed", []) or []}
+        blocked = {str(code).strip().upper() for code in restriction.get("blocked", []) or []}
+        if allowed and self.trailer_region not in allowed:
+            return False
+        return self.trailer_region not in blocked

@@ -1100,27 +1100,34 @@ class IPTVMovieService:
 
     def _merge_control_status(self, control, *, status_stale=False):
         """Publish the exact provider-local transactional summary."""
-        merged = dict(control or {})
+        merged = self._public_worker_status(control)
         merged["summary_available"] = True
         merged["status_stale"] = bool(status_stale)
         return merged
 
+    @staticmethod
+    def _public_worker_status(status):
+        """Keep durable worker diagnostics out of the API error envelope."""
+        public = dict(status or {})
+        public["worker_error"] = public.pop("error", "")
+        return public
+
     def enrichment_status(self):
         if not self.database_path.is_file():
             return {
-                "state": "idle", "command": "idle", "pid": 0, "error": "",
+                "state": "idle", "command": "idle", "pid": 0, "worker_error": "",
                 "started_at": 0, "finished_at": 0, "generation": 0,
                 "source_generation": 0, "sources": 0, "queue": {}, "matches": {},
                 "batch_limit": self.WORKER_BATCH_LIMIT,
             }
         try:
-            status = {
+            status = self._public_worker_status({
                 **self.store.worker_control_status(),
                 "batch_limit": self.WORKER_BATCH_LIMIT,
                 "projection": self.projection_status(),
                 "summary_available": True,
                 "status_stale": False,
-            }
+            })
         except sqlite3.Error:
             raise RuntimeError("IPTV Movies status is temporarily busy")
         return status

@@ -65,21 +65,26 @@ class HomeTrailersApiTests(unittest.TestCase):
 
     def test_youtube_config_never_returns_the_saved_key(self):
         original = app._youtube_api_key
+        original_region = app._youtube_trailer_region
         try:
             with patch.object(app, "_save_config"):
-                response = self.client.post("/api/youtube/config", json={"key": "test-secret-value"})
+                response = self.client.post("/api/youtube/config", json={"key": "test-secret-value", "trailer_region": "eg"})
                 self.assertEqual(response.status_code, 200)
                 saved = response.get_json()
                 self.assertTrue(saved["configured"])
                 self.assertNotIn("test-secret-value", str(saved))
+                self.assertEqual(saved["trailer_region"], "EG")
 
                 loaded = self.client.get("/api/youtube/config").get_json()
                 self.assertTrue(loaded["configured"])
                 self.assertNotIn("test-secret-value", str(loaded))
                 self.assertNotIn("key", loaded)
+                self.assertEqual(loaded["trailer_region"], "EG")
         finally:
             app._youtube_api_key = original
+            app._youtube_trailer_region = original_region
             app._youtube_service.set_api_key(original)
+            app._youtube_service.set_trailer_region(original_region)
 
     def test_missing_trailer_search_uses_the_authoritative_youtube_service(self):
         result = {"status": "choose", "video": None, "candidates": [{"video_id": "abc123DEF45"}]}

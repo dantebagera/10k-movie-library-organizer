@@ -21,7 +21,7 @@ import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import AdvancedSearchBuilder from '../search/AdvancedSearchBuilder.jsx';
 import {
-  compileDiscoverSimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature
+  compileDiscoverSimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature, yearRangeDraft
 } from '../search/advancedSearchModel.js';
 import {
   DiscoverMovieCard, MovieExpandedCuration, MovieExpandedDetails, MovieExpandedFacts, OwnedFileDetailsButton, PosterEditButton, PosterStateControls
@@ -261,6 +261,7 @@ export default function DiscoverWorkspace({
     pageSize: discoverPeoplePageSize
   } = useCardGridMetrics({ target: 20, max: 100, bias: 'lower' });
 
+  const discoverYearDraft = useMemo(() => yearRangeDraft(discoverYearFrom, discoverYearTo), [discoverYearFrom, discoverYearTo]);
   const simpleDiscoverQuery = useMemo(() => compileDiscoverSimpleQuery({
     query: tmdbQuery,
     genre: discoverGenre,
@@ -1471,9 +1472,9 @@ export default function DiscoverWorkspace({
   }
 
   useEffect(() => {
-    if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext) return;
+    if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext || !discoverYearDraft.ready) return;
     loadDiscover({ append: false, search: tmdbQuery });
-  }, [discoverList, discoverGenre, discoverLanguage, discoverCountry, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverOwnershipFilter, discoverMoviePageSize, discoverSearchKind, isNavigatingDiscoverContext]);
+  }, [discoverList, discoverGenre, discoverLanguage, discoverCountry, discoverMinVotes, discoverYearFrom, discoverYearTo, discoverMinRating, discoverSort, discoverOwnershipFilter, discoverMoviePageSize, discoverSearchKind, isNavigatingDiscoverContext, discoverYearDraft.ready]);
 
   useEffect(() => {
     if (discoverSearchKind !== 'advanced' || isNavigatingDiscoverContext || discoverContext) return undefined;
@@ -2065,8 +2066,9 @@ export default function DiscoverWorkspace({
               <option value="5000">5,000+ votes</option>
               <option value="10000">10,000+ votes</option>
             </select>
-            <input className="library-mini-input" value={discoverYearFrom} onChange={(event) => setDiscoverCriterion(setDiscoverYearFrom, event.target.value, '')} placeholder="Year from" inputMode="numeric" />
-            <input className="library-mini-input" value={discoverYearTo} onChange={(event) => setDiscoverCriterion(setDiscoverYearTo, event.target.value, '')} placeholder="Year to" inputMode="numeric" />
+            <input className="library-mini-input" value={discoverYearFrom} onChange={(event) => setDiscoverCriterion(setDiscoverYearFrom, event.target.value, '')} placeholder="Year from" inputMode="numeric" maxLength={4} aria-invalid={Boolean(discoverYearDraft.error)} />
+            <input className="library-mini-input" value={discoverYearTo} onChange={(event) => setDiscoverCriterion(setDiscoverYearTo, event.target.value, '')} placeholder="Year to" inputMode="numeric" maxLength={4} aria-invalid={Boolean(discoverYearDraft.error)} />
+            {discoverYearDraft.error && <span className="year-draft-error" role="alert">{discoverYearDraft.error}</span>}
             <select aria-label="Minimum rating" value={discoverMinRating} onChange={(event) => setDiscoverCriterion(setDiscoverMinRating, event.target.value, '0')}>
               <option value="0">Any rating</option>
               <option value="6">6+</option>
@@ -2082,7 +2084,7 @@ export default function DiscoverWorkspace({
               <option value="primary_release_date.desc">Release date</option>
               <option value="title.asc">Title A-Z</option>
             </select>
-            <button type="button" className="btn btn-secondary discover-toolbar-icon-button" onClick={() => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '' })} disabled={discoverLoading} aria-label="Refresh Discover results" title="Refresh">
+            <button type="button" className="btn btn-secondary discover-toolbar-icon-button" onClick={() => loadDiscover({ append: false, search: discoverMode === 'search' ? tmdbQuery : '' })} disabled={discoverLoading || !discoverYearDraft.ready} aria-label="Refresh Discover results" title="Refresh">
               <RefreshCcw size={17} />
             </button>
             {hasAdvancedDiscoverCriteria() && (

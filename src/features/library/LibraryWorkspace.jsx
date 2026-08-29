@@ -18,7 +18,7 @@ import SelectionCheckbox from '../../components/SelectionCheckbox.jsx';
 import SourceReviewDialog from '../../components/SourceReviewDialog.jsx';
 import AdvancedSearchBuilder from '../search/AdvancedSearchBuilder.jsx';
 import {
-  compileLibrarySimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature
+  compileLibrarySimpleQuery, createEmptyQuery, normalizeAdvancedQuery, querySignature, yearRangeDraft
 } from '../search/advancedSearchModel.js';
 
 async function preloadFinalPosters(items) {
@@ -292,6 +292,7 @@ export default function LibraryWorkspace({
     onFileDetailsRequestConsumed?.(fileDetailsRequest.id);
   }, [fileDetailsRequest, onFileDetailsRequestConsumed]);
 
+  const libraryYearDraft = useMemo(() => yearRangeDraft(yearFrom, yearTo), [yearFrom, yearTo]);
   const simpleLibraryQuery = useMemo(() => compileLibrarySimpleQuery({
     query,
     resolution: resolutionFilter,
@@ -299,15 +300,15 @@ export default function LibraryWorkspace({
     genre: genreFilter,
     language: languageFilter,
     country: countryFilter,
-    yearFrom,
-    yearTo,
+    yearFrom: libraryYearDraft.from,
+    yearTo: libraryYearDraft.to,
     minRating,
     sort: sortMode,
     viewingState: viewingStateFilter,
     person: roleFilter,
     keyword: keywordFilter,
     movieList: listFilter
-  }), [query, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
+  }), [query, resolutionFilter, sourceFilter, genreFilter, languageFilter, countryFilter, libraryYearDraft.from, libraryYearDraft.to, minRating, sortMode, viewingStateFilter, roleFilter, keywordFilter, listFilter]);
 
   useEffect(() => {
     if (librarySearchKind !== 'advanced') return undefined;
@@ -706,8 +707,8 @@ export default function LibraryWorkspace({
     sourceFilter,
     languageFilter,
     countryFilter,
-    yearFrom,
-    yearTo,
+    yearFrom: libraryYearDraft.from,
+    yearTo: libraryYearDraft.to,
     minRating,
     sizeFilter,
     mode,
@@ -718,7 +719,7 @@ export default function LibraryWorkspace({
     tmdbCache,
     showAdultMovies
     });
-  }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, yearFrom, yearTo, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
+  }, [activeItems, focusedFilePath, focusedMovieItem, items, libraryResult, query, identityFilter, sortMode, genreFilter, resolutionFilter, sourceFilter, languageFilter, countryFilter, libraryYearDraft.from, libraryYearDraft.to, minRating, sizeFilter, mode, roleFilter, listFilter, userLists, viewingStateFilter, tmdbCache, showAdultMovies, currentPage]);
 
   const activeSelectedPaths = mode === 'movie' ? selectedLibraryKeys : selectedFilePaths;
   const selectedPageItems = useMemo(() => {
@@ -1486,8 +1487,9 @@ export default function LibraryWorkspace({
               <option value="all">All countries</option>
               {optionSets.countries.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
-            <input className="library-mini-input" value={yearFrom} onChange={(event) => { setYearFrom(event.target.value); resetLibraryPage(); }} placeholder="Year from" inputMode="numeric" />
-            <input className="library-mini-input" value={yearTo} onChange={(event) => { setYearTo(event.target.value); resetLibraryPage(); }} placeholder="Year to" inputMode="numeric" />
+            <input className="library-mini-input" value={yearFrom} onChange={(event) => { setYearFrom(event.target.value); resetLibraryPage(); }} placeholder="Year from" inputMode="numeric" maxLength={4} aria-invalid={Boolean(libraryYearDraft.error)} />
+            <input className="library-mini-input" value={yearTo} onChange={(event) => { setYearTo(event.target.value); resetLibraryPage(); }} placeholder="Year to" inputMode="numeric" maxLength={4} aria-invalid={Boolean(libraryYearDraft.error)} />
+            {libraryYearDraft.error && <span className="year-draft-error" role="alert">{libraryYearDraft.error}</span>}
             <select value={minRating} onChange={(event) => { setMinRating(event.target.value); resetLibraryPage(); }}>
               <option value="all">Any rating</option>
               <option value="6">6+</option>

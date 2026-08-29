@@ -940,7 +940,7 @@ function ArchiveApp() {
   async function toggleFollow(movie) {
     const key = movieKey(movie);
     const existing = followed.find((item) => movieKey(item) === key);
-    const payload = { title: movie.title, year: movie.year, tmdb_id: movie.tmdb_id, poster_url: movie.poster_url, release_date: movie.release_date || '' };
+    const payload = { title: movie.title, year: movie.year, tmdb_id: movie.tmdb_id, imdb_id: movie.imdb_id || '', poster_url: movie.poster_url, release_date: movie.release_date || '' };
     try {
       const data = await fetchCurationJson('/api/user/followed-releases', {
         method: existing ? 'DELETE' : 'POST',
@@ -1612,6 +1612,7 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
   const [activeVideo, setActiveVideo] = useState(initialVideo);
   const [fallbackVideo, setFallbackVideo] = useState(null);
   const [trailerSearch, setTrailerSearch] = useState({ status: 'idle', candidates: [], error: '' });
+  const [playerError, setPlayerError] = useState('');
   const [showEndRecommendations, setShowEndRecommendations] = useState(false);
   const [movieResolution, setMovieResolution] = useState({ status: 'idle', hint: null, candidates: [], movie: null });
   const [manualMatchOpen, setManualMatchOpen] = useState(false);
@@ -1656,16 +1657,15 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
     setActiveVideo(initialVideo);
   }, [initialVideo]);
 
-  useEffect(() => {
-    setFallbackVideo(null);
-    setTrailerSearch({ status: 'idle', candidates: [], error: '' });
+  const requestTrailerAlternatives = useCallback(() => {
+    if (!isMovieTrailer || !requestedMovie?.title) return;
     trailerSearchAbortRef.current?.abort();
-    if (!isMovieTrailer || embedUrl || !requestedMovie?.title) return undefined;
     const controller = new AbortController();
     trailerSearchAbortRef.current = controller;
     setTrailerSearch({ status: 'loading', candidates: [], error: '' });
-    searchYouTubeMovieTrailers(requestedMovie, { signal: controller.signal })
+    searchYouTubeMovieTrailers({ title: requestedMovie.title, year: requestedMovie.year }, { signal: controller.signal })
       .then((result) => {
+        if (trailerSearchAbortRef.current !== controller) return;
         if (result.status === 'matched' && result.video) {
           setFallbackVideo(result.video);
           setTrailerSearch({ status: 'matched', candidates: result.candidates || [], error: '' });
@@ -1674,12 +1674,28 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
         }
       })
       .catch((error) => {
-        if (error?.name !== 'AbortError') {
+        if (error?.name !== 'AbortError' && trailerSearchAbortRef.current === controller) {
           setTrailerSearch({ status: 'error', candidates: [], error: error.message });
         }
+      })
+      .finally(() => {
+        if (trailerSearchAbortRef.current === controller) trailerSearchAbortRef.current = null;
       });
-    return () => controller.abort();
-  }, [embedUrl, isMovieTrailer, requestedMovie?.title, requestedMovie?.year]);
+  }, [isMovieTrailer, requestedMovie?.title, requestedMovie?.year]);
+
+  useEffect(() => {
+    setFallbackVideo(null);
+    setTrailerSearch({ status: 'idle', candidates: [], error: '' });
+    setPlayerError('');
+    trailerSearchAbortRef.current?.abort();
+    if (!isMovieTrailer || embedUrl || !requestedMovie?.title) return undefined;
+    requestTrailerAlternatives();
+    return () => trailerSearchAbortRef.current?.abort();
+  }, [embedUrl, isMovieTrailer, requestedMovie?.title, requestedMovie?.year, requestTrailerAlternatives]);
+
+  useEffect(() => {
+    setPlayerError('');
+  }, [activeEmbedUrl]);
 
   useEffect(() => {
     if (!isHomeTrailerSession) {
@@ -1736,7 +1752,7 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
 
   useEffect(() => {
     setShowEndRecommendations(false);
-    if (!activeEmbedUrl || !recommendations.length || !iframeRef.current) return undefined;
+    if (!activeEmbedUrl || !iframeRef.current) return undefined;
 
     let disposed = false;
     let pollId = 0;
@@ -1747,6 +1763,7 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
       player = new YouTube.Player(iframeRef.current, {
         events: {
           onReady: ({ target }) => {
+            if (!recommendations.length) return;
             pollId = window.setInterval(() => {
               const duration = Number(target.getDuration?.() || 0);
               const elapsed = Number(target.getCurrentTime?.() || 0);
@@ -1757,7 +1774,15 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
             }, 500);
           },
           onStateChange: ({ data }) => {
-            if (data === 0) setShowEndRecommendations(true);
+            if (data === 0 && recommendations.length) setShowEndRecommendations(true);
+          },
+          onError: ({ data }) => {
+            if (isMovieTrailer && requestedMovie?.title) {
+              setPlayerError('YouTube cannot play this upload in the embedded player. Try another official trailer.');
+              requestTrailerAlternatives();
+            } else if (recommendations.length) {
+              setShowEndRecommendations(true);
+            }
           }
         }
       });
@@ -1770,12 +1795,39 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
       if (playerRef.current === player) playerRef.current = null;
       player?.destroy?.();
     };
-  }, [activeEmbedUrl, recommendations.length]);
+  }, [activeEmbedUrl, isMovieTrailer, recommendations.length, requestTrailerAlternatives, requestedMovie?.title]);
 
   const selectRecommendation = (video) => {
     setShowEndRecommendations(false);
     setActiveVideo(video);
   };
+
+  const chooseTrailerAlternative = (video) => {
+    setPlayerError('');
+    setFallbackVideo(video);
+  };
+
+  const trailerAlternativePanel = isMovieTrailer && requestedMovie?.title ? (
+    <section className="trailer-alternative-panel" aria-live="polite">
+      <div>
+        {playerError ? <strong>{playerError}</strong> : <span>Having trouble with this trailer?</span>}
+        <small>Cinema Paradiso only keeps this choice for this open trailer session.</small>
+      </div>
+      <button type="button" className="btn btn-secondary" onClick={requestTrailerAlternatives} disabled={trailerSearch.status === 'loading'}>
+        {trailerSearch.status === 'loading' ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} Try another trailer
+      </button>
+      {trailerSearch.status === 'choose' && trailerSearch.candidates.length ? (
+        <div className="trailer-fallback-candidates">
+          {trailerSearch.candidates.map((video) => (
+            <button type="button" key={video.video_id} onClick={() => chooseTrailerAlternative(video)}>
+              <img src={video.thumbnail_url} alt="" />
+              <span><strong>{video.title}</strong><small>{video.channel_title || 'YouTube'}</small></span>
+            </button>
+          ))}
+        </div>
+      ) : trailerSearch.status === 'error' ? <small className="trailer-alternative-error">{trailerSearch.error}</small> : null}
+    </section>
+  ) : null;
 
   const openManualMatch = () => {
     setManualTitle(movieResolution.hint?.title || activeTitle);
@@ -1860,6 +1912,7 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
               />
             ) : null}
           </div>
+          {trailerAlternativePanel}
           {isHomeTrailerSession && (
             <section className="trailer-movie-match" aria-label="Matched movie actions">
               {movieResolution.status === 'loading' ? (
@@ -1952,7 +2005,7 @@ function TrailerModal({ state, followed = [], onFollow, onViewDetails, onClose }
                 <p>YouTube returned several possible matches. Nothing will be remembered permanently.</p>
                 <div className="trailer-fallback-candidates">
                   {trailerSearch.candidates.map((video) => (
-                    <button type="button" key={video.video_id} onClick={() => setFallbackVideo(video)}>
+                    <button type="button" key={video.video_id} onClick={() => chooseTrailerAlternative(video)}>
                       <img src={video.thumbnail_url} alt="" />
                       <span><strong>{video.title}</strong><small>{video.channel_title || 'YouTube'}</small></span>
                     </button>

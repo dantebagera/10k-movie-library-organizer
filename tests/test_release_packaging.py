@@ -156,7 +156,6 @@ class PortableReleasePackagingTests(unittest.TestCase):
             manifest = copy_player_runtime(
                 source,
                 destination,
-                app_version="9.9.9",
             )
 
             version_root = destination / "versions" / manifest["bundle_version"]

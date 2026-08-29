@@ -9,7 +9,9 @@ function normalizeModels(items, seen) {
     seen.add(key);
     result.push({
       model,
-      description: String(item?.description || '').trim()
+      description: String(item?.description || '').trim(),
+      requiredPlan: String(item?.required_plan || '').trim(),
+      accessStatus: String(item?.access_status || '').trim()
     });
   }
   return result;
@@ -17,7 +19,11 @@ function normalizeModels(items, seen) {
 
 export function buildOllamaModelGroups(catalog, configuredModel = '') {
   const seen = new Set();
-  const freeCloud = normalizeModels(catalog?.free_cloud_models, seen);
+  const accessScan = catalog?.access_scan || null;
+  const cloudSource = accessScan
+    ? (catalog?.cloud_models || []).filter((item) => item?.access_status === 'accessible')
+    : (catalog?.cloud_models || []);
+  const cloud = normalizeModels(cloudSource, seen);
   const local = normalizeModels(catalog?.local_models, seen);
   const currentModel = String(catalog?.configured_model || '').trim();
   const current = currentModel && !seen.has(currentModel.toLocaleLowerCase())
@@ -30,5 +36,5 @@ export function buildOllamaModelGroups(catalog, configuredModel = '') {
     ? { model: selectedModel, description: 'Selected model' }
     : null;
 
-  return { freeCloud, local, current, selected };
+  return { cloud, local, current, selected, accessScan };
 }

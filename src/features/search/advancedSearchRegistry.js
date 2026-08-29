@@ -9,7 +9,7 @@ export const ADVANCED_SEARCH_LIMITS = Object.freeze({
 
 const shared = [
   { type: 'title', label: 'Title', editor: 'title', repeatable: false },
-  { type: 'genre', label: 'Genre', editor: 'controlled', repeatable: true },
+  { type: 'genre', label: 'Genre', editor: 'controlled', repeatable: true, supportsNot: true },
   { type: 'person', label: 'Person', editor: 'person', repeatable: true, roles: ['actor', 'director', 'writer'] },
   { type: 'keyword', label: 'Keyword', editor: 'keyword', repeatable: true },
   { type: 'year', label: 'Release year', editor: 'number-range', repeatable: false },
