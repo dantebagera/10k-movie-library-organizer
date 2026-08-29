@@ -339,7 +339,10 @@ class UnifiedMovieCardUiTest(unittest.TestCase):
         ]
 
         self.assertIn("const [isNavigatingDiscoverContext, setIsNavigatingDiscoverContext]", discover_source)
-        self.assertIn("if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext) return;", discover_source)
+        self.assertIn(
+            "if (discoverSearchKind !== 'movies' || isNavigatingDiscoverContext || discoverContext || !discoverYearDraft.ready) return;",
+            discover_source,
+        )
         self.assertIn("function relationshipQuery(type, value)", discover_source)
         self.assertNotIn("context.query && !isPick", discover_source)
         self.assertIn("context.owner === 'advanced'", discover_source)

@@ -39,7 +39,13 @@ class IPTVMetadataSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             settings = IPTVMetadataSettings(temporary)
             self.assertFalse(settings.path.exists())
-            self.assertEqual(settings.public(), {"tmdb_configured": False, "credential_type": "bearer"})
+            self.assertEqual(settings.public(), {
+                "tmdb_configured": False,
+                "credential_type": "bearer",
+                "ollama_enabled": False,
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_model": "",
+            })
 
             saved = settings.save("fixture-secret-value", "bearer")
             before = settings.path.read_bytes()
@@ -48,7 +54,13 @@ class IPTVMetadataSettingsTests(unittest.TestCase):
                 "Authorization: Bearer fixture-secret-value api_key=fixture-secret-value"
             )
 
-            self.assertEqual(saved, {"tmdb_configured": True, "credential_type": "bearer"})
+            self.assertEqual(saved, {
+                "tmdb_configured": True,
+                "credential_type": "bearer",
+                "ollama_enabled": False,
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_model": "",
+            })
             self.assertEqual(preserved, saved)
             self.assertEqual(settings.path.read_bytes(), before)
             self.assertNotIn("fixture-secret-value", redacted)
@@ -121,12 +133,14 @@ class IPTVMovieStoreTests(unittest.TestCase):
                 IPTVMovieStore(base / PROVIDER_A, PROVIDER_B)
             first.project_sources([{"item_id": "1", "name": "First Movie", "year": 2024}], 1)
             second.project_sources([{"item_id": "1", "name": "Second Movie", "year": 2024}], 1)
+            first.apply_classification([source_key("1")], "film", method="test-fixture", confidence=1)
+            second.apply_classification([source_key("1")], "film", method="test-fixture", confidence=1)
             snapshot = normalize_tmdb_movie(tmdb_payload(550, "Shared Identity", 2024))
             first.apply_match(f"source:{source_key('1')}", snapshot)
             second.apply_match(f"source:{source_key('1')}", snapshot)
 
-            self.assertEqual(first.list_movies()["items"][0]["movie_key"], "tmdb:550")
-            self.assertEqual(second.list_movies()["items"][0]["movie_key"], "tmdb:550")
+            self.assertEqual(first.list_movies({"view": "cp"})["items"][0]["movie_key"], "tmdb:550")
+            self.assertEqual(second.list_movies({"view": "cp"})["items"][0]["movie_key"], "tmdb:550")
             self.assertNotEqual(first.database_path, second.database_path)
             self.assertEqual(first.integrity(), "ok")
             self.assertEqual(second.integrity(), "ok")
@@ -207,9 +221,15 @@ class IPTVMovieStoreTests(unittest.TestCase):
             self.assertFalse(fallback["items"][0]["matched"])
 
             snapshot = normalize_tmdb_movie(tmdb_payload(550, "Same Movie", 2024))
+            store.apply_classification(
+                [source_key("1"), source_key("2")],
+                "film",
+                method="test-fixture",
+                confidence=1,
+            )
             store.apply_match(f"source:{source_key('1')}", snapshot)
             store.apply_match(f"source:{source_key('2')}", snapshot)
-            grouped = store.list_movies({"list_id": "list-a", "genre_id": 18})
+            grouped = store.list_movies({"view": "cp", "list_id": "list-a", "genre_id": 18})
 
             self.assertEqual(grouped["total"], 1)
             self.assertEqual(grouped["items"][0]["source_count"], 2)
@@ -221,7 +241,7 @@ class IPTVMovieStoreTests(unittest.TestCase):
             self.assertEqual([(row[0], row[1]) for row in membership], [(1, 10.0)])
 
             store.project_sources(rows[:1] + rows[2:], 2)
-            retained = store.list_movies({"list_id": "list-a"})
+            retained = store.list_movies({"view": "cp", "list_id": "list-a"})
             self.assertEqual(retained["items"][0]["source_count"], 1)
 
     def test_manual_match_lock_correction_and_remove_are_transactional(self):
@@ -306,7 +326,7 @@ class IPTVMatchEngineTests(unittest.TestCase):
             )
             try:
                 service.start_projection(wait=True)
-                card = service.list_movies()["items"][0]
+                card = service.list_movies({"view": "cp"})["items"][0]
                 result = service.manual_search(card["movie_key"], "ssss ( 2026 )", "")
                 self.assertEqual(captured, {"title": "ssss", "year": 2026, "page": 1})
                 self.assertEqual(result["year"], 2026)
@@ -327,9 +347,12 @@ class IPTVMatchEngineTests(unittest.TestCase):
 
             try:
                 service.ensure_projected()
+                service.store.apply_classification(
+                    [source_key("10")], "film", method="test-fixture", confidence=1
+                )
                 with patch.object(raw, "enrichment_movie_detail", side_effect=lambda item_id: detail("movie", item_id)):
                     state = service.enrich_source(source_key("10"))
-                card = service.list_movies()["items"][0]
+                card = service.list_movies({"view": "cp"})["items"][0]
                 self.assertEqual(state, "matched-auto")
                 self.assertEqual(card["movie_key"], "tmdb:550")
                 self.assertEqual(card["item_id"], "10")
@@ -349,6 +372,9 @@ class IPTVMatchEngineTests(unittest.TestCase):
             detail.update({"name": "Fixture Movie", "year": "2024-02-03", "tmdb_id": ""})
             try:
                 service.ensure_projected()
+                service.store.apply_classification(
+                    [source_key("10")], "film", method="test-fixture", confidence=1
+                )
                 with patch.object(raw, "enrichment_movie_detail", return_value=detail):
                     self.assertEqual(
                         service.enrich_source(source_key("10"), tmdb_client=client),
@@ -453,6 +479,12 @@ class IPTVWorkerTests(unittest.TestCase):
             service = IPTVMovieService(raw.root, PROVIDER_A, raw, settings)
             try:
                 service.ensure_projected()
+                service.store.apply_classification(
+                    [source_key(str(index)) for index in range(1, 5)],
+                    "film",
+                    method="test-fixture",
+                    confidence=1,
+                )
                 service.store.prepare_enrichment(consent=True, diagnostic_limit=2)
                 with patch.object(service, "enrich_source", return_value="unmatched") as enrich:
                     self.assertEqual(run_worker(service, max_jobs=2), "paused")
@@ -463,7 +495,11 @@ class IPTVWorkerTests(unittest.TestCase):
                     connection.execute("UPDATE source_matches SET state='ambiguous'")
                     connection.execute("DELETE FROM enrichment_queue")
                 service.store.prepare_enrichment(consent=True)
-                self.assertEqual(service.enrichment_status()["queue"], {})
+                with service.store.connection() as connection:
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM enrichment_queue").fetchone()[0],
+                        0,
+                    )
             finally:
                 raw.close()
 
@@ -493,7 +529,7 @@ class IPTVWorkerTests(unittest.TestCase):
             finally:
                 raw.close()
 
-    def test_inactive_cancel_finishes_immediately_and_next_batch_can_requeue(self):
+    def test_inactive_cancel_finishes_immediately_and_preserves_pending_work(self):
         with tempfile.TemporaryDirectory() as temporary:
             raw = create_raw_service(temporary, PROVIDER_A)
             settings = IPTVMetadataSettings(temporary)
@@ -501,12 +537,16 @@ class IPTVWorkerTests(unittest.TestCase):
             service = IPTVMovieService(raw.root, PROVIDER_A, raw, settings)
             try:
                 service.ensure_projected()
+                service.store.apply_classification(
+                    [source_key("10")], "film", method="test-fixture", confidence=1
+                )
                 service.store.prepare_enrichment(consent=True)
                 service.store.worker_finished("paused")
                 cancelled = service.cancel_enrichment()
                 self.assertEqual(cancelled["state"], "cancelled")
                 self.assertEqual(cancelled["command"], "idle")
-                self.assertEqual(cancelled["queue"]["cancelled"], 1)
+                self.assertEqual(cancelled["queue"]["cancelled"], 0)
+                self.assertEqual(cancelled["queue"]["pending"], 1)
 
                 service.store.prepare_enrichment(consent=True)
                 with service.store.connection() as connection:

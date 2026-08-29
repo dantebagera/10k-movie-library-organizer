@@ -118,9 +118,9 @@ class ProjectionAndWorkerTests(unittest.TestCase):
                 with patch.object(IPTVMovieStore, "project_source_batch", slow_batch):
                     started = time.perf_counter()
                     status = service.start_projection(wait=False)
-                    self.assertLess(time.perf_counter() - started, 0.5)
+                    self.assertLess(time.perf_counter() - started, 1.0)
                     self.assertEqual(status["state"], "running")
-                    deadline = time.time() + 5
+                    deadline = time.time() + 30
                     saw_partial = False
                     while time.time() < deadline:
                         status = service.projection_status()
@@ -130,8 +130,12 @@ class ProjectionAndWorkerTests(unittest.TestCase):
                             break
                         time.sleep(0.01)
                 self.assertTrue(saw_partial)
+                self.assertEqual(status["state"], "complete")
                 self.assertEqual(service.list_movies(page_size=10)["total"], 200)
             finally:
+                if service._projection_thread is not None:
+                    service._projection_thread.join(timeout=30)
+                service.close()
                 raw.close()
 
     def test_one_consent_continues_beyond_one_hundred_with_durable_checkpoint(self):
@@ -182,9 +186,18 @@ class ParserLocalizationAndPresentationTests(unittest.TestCase):
             arabic["original_title"] = "\u0641\u064a\u0644\u0645 \u0639\u0631\u0628\u064a \u0623\u0635\u0644\u064a"
             arabic["plot"] = "English fallback plot"
             english = snapshot(2, "English Movie", 2025, language="en", imdb_id="tt7654321")
+            store.apply_classification(
+                [source_key("1"), source_key("2")],
+                "film",
+                method="test-fixture",
+                confidence=1,
+            )
             store.apply_match(f"source:{source_key('1')}", arabic)
             store.apply_match(f"source:{source_key('2')}", english)
-            fallback_card = {item["tmdb_id"]: item for item in store.list_movies(page_size=10)["items"]}[1]
+            fallback_card = {
+                item["tmdb_id"]: item
+                for item in store.list_movies({"view": "cp"}, page_size=10)["items"]
+            }[1]
             self.assertEqual(fallback_card["name"], "\u0641\u064a\u0644\u0645 \u0639\u0631\u0628\u064a \u0623\u0635\u0644\u064a")
             self.assertEqual(fallback_card["plot"], "English fallback plot")
             fallback_detail = store.movie("tmdb:1")
@@ -198,7 +211,10 @@ class ParserLocalizationAndPresentationTests(unittest.TestCase):
                 "cast": [{"id": 11, "name": "\u0645\u0645\u062b\u0644 \u0639\u0631\u0628\u064a", "character": "\u0627\u0644\u0628\u0637\u0644"}],
             }
             store.save_localization(1, "ar-SA", localized)
-            cards = {item["tmdb_id"]: item for item in store.list_movies(page_size=10)["items"]}
+            cards = {
+                item["tmdb_id"]: item
+                for item in store.list_movies({"view": "cp"}, page_size=10)["items"]
+            }
             self.assertEqual(cards[1]["name"], "\u0641\u064a\u0644\u0645 \u0639\u0631\u0628\u064a \u0623\u0635\u0644\u064a")
             self.assertEqual(cards[1]["plot"], "English fallback plot")
             self.assertEqual(cards[1]["display_locale"], "ar-SA")

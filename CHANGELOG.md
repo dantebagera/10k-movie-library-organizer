@@ -11,15 +11,20 @@ Cinema Paradiso v2.8.5 adds one shared advanced-search language across the local
 - TMDB-owned compound Discover planning with bounded provider paging and explicit handling for criteria TMDB cannot prove globally.
 - Provider-local IPTV movie classification, metadata-review, rebuild, fusion, manual-match, and list workflows with preview-before-apply routes.
 - Optional localhost Ollama assistance for IPTV classification with bounded payload validation and provider-local settings.
+- Provider View and CP View for keeping raw IPTV sources separate or fusing independently verified Film sources by TMDB identity.
+- Pre-download torrent manifest, infohash, path, payload-type, and size validation for magnet and `.torrent` submissions.
+- Ollama cloud-catalogue access scans and exact-model validation in Settings.
+- A configurable YouTube trailer region with a validated two-letter country code.
 - Complete normalized audio-track inventories in authoritative media-file facts.
 - Native-player subtitle action icons and Windows media play/pause command handling.
+- Native-player icon source generation and packaged Windows icon assets.
 - Zero-regression design records for advanced-search ownership, continuity, and release handoff.
 
 ### Changed
 
 - Library and Discover simple filters compile into the same query contract used by Advanced mode instead of maintaining a second filter language.
 - IPTV movie storage, enrichment, filtering, pagination, and review state remain provider-local while exposing richer desktop controls.
-- Native-player source metadata and compatibility now identify player `0.1.25` for Cinema Paradiso 2.8.5.
+- Native-player source metadata and the immutable runtime selector now identify player `0.1.26` for Cinema Paradiso 2.8.5.
 - Desktop search, pagination, Maintenance, and IPTV layouts were refined without introducing a separate mobile redesign.
 
 ### Fixed
@@ -28,6 +33,9 @@ Cinema Paradiso v2.8.5 adds one shared advanced-search language across the local
 - Continue Watching can present an unfinished rewatch even when the movie remains Watched.
 - Maintenance audio decisions use every audio track and exclude subtitle streams from the audio inventory.
 - Stale Discover requests and navigation history no longer replace a newer advanced-search result.
+- Discover provider paging removes duplicate movie identities while preserving honest bounded navigation.
+- YTS and Prowlarr acquisition paths reject identity mismatches before submission and retain usable Prowlarr `.torrent` downloads.
+- Device shutdown and restart actions report the real operating-system outcome instead of treating an attempted command as success.
 - Native Windows media play/pause requests respect the resume-decision gate and reveal player controls.
 
 ## v2.8.4 - August 2026

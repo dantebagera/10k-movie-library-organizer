@@ -91,6 +91,12 @@ def main():
         first_service.store.update_history("movie", "7", 12, 100, False)
         first_movies = manager.movie_service(first["provider_id"])
         first_movies.ensure_projected()
+        first_movies.store.apply_classification(
+            [source_key(item_id) for item_id in ("7", "8", "10", "11")],
+            "film",
+            method="playwright-fixture",
+            confidence=1,
+        )
         snapshot = normalize_tmdb_movie({
             "id": 550,
             "title": "First Enriched Movie",

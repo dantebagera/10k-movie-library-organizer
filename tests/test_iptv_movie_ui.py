@@ -18,7 +18,10 @@ class IPTVMovieUITests(unittest.TestCase):
             "Genre", "Language", "Country", "Metadata", "Claimed quality", "Watched", "Sort",
         ):
             self.assertIn(label, self.workspace)
-        self.assertIn("iptvMovieQuery(movieFilters, page, browsePageSize)", self.workspace)
+        self.assertIn(
+            "iptvMovieQuery({ ...movieFilters, q: normalizedQuery }, page, browsePageSize)",
+            self.workspace,
+        )
         self.assertNotIn("createList(activeProviderId, filters", self.workspace)
 
     def test_unmatched_grouped_sources_and_manual_matching_have_complete_actions(self):

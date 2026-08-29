@@ -3018,8 +3018,10 @@ test('IPTV Movies keeps provider playlists, My list, grouped sources, unmatched 
   await expect(page.getByLabel('Provider playlist')).toBeVisible();
   await expect(page.getByLabel('My list')).toBeVisible();
   await expect(page.getByPlaceholder('Search movie...')).toBeVisible();
-  await expect(page.getByText('First Enriched Movie', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'First Enriched Movie' })).toHaveCount(2);
   await expect(page.getByText('First Unmatched Movie', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'CP View', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'First Enriched Movie' })).toHaveCount(1);
   await expect(page.getByText('2 sources', { exact: true })).toBeVisible();
   const movieGrid = page.locator('.iptv-movie-grid');
   const renderedColumnCount = () => movieGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length);

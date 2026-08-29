@@ -65,10 +65,14 @@ Cinema Paradiso v2.8.5 adds one shared advanced-search language across the local
 - **Advanced search:** Library and Discover now share a criterion builder for compound title, identity, range, language, country, and catalogue-state queries while keeping their existing data owners.
 - **Complete result handling:** advanced Library selection remains SQL-backed, and Discover preserves bounded provider paging, honest result limits, ownership state, and existing movie-card actions.
 - **IPTV review workflow:** provider-local movie catalogues gain richer metadata review, deterministic and optional local-AI classification previews, explicit apply actions, manual matches, and expanded filters.
+- **Provider and CP views:** IPTV Provider View keeps every raw source independently playable, while CP View fuses only accepted Film sources that share a verified TMDB identity.
+- **Safer downloads:** magnet and `.torrent` submissions verify the advertised infohash and reject unsafe, non-movie, path-traversing, or implausibly sized payloads before qBittorrent can continue.
+- **Ollama model access:** Settings loads the complete Ollama cloud catalogue, can scan which cloud models the current account can actually use, and validates exact model choices before saving.
+- **Regional trailers:** YouTube trailer fallback and playlist discovery use a configurable two-letter region, with Egypt as the default.
 - **Catalogue facts:** media facts retain the complete normalized audio-track inventory for Maintenance decisions without treating subtitles as audio.
 - **Playback continuity:** replaying a completed movie starts a new resumable session without clearing its independent Watched state.
-- **Native player:** player `0.1.25` adds subtitle action icons and Windows media play/pause integration, with an updated 2.8.5 compatibility manifest.
-- **Version display:** the sidebar footer and future portable package derive from the authoritative `2.8.5` package version.
+- **Native player:** player `0.1.26` includes the updated Windows icon assets and immutable 2.8.5 runtime manifest alongside subtitle actions and Windows media play/pause integration.
+- **Version display:** the sidebar footer and portable package derive from the authoritative `2.8.5` package version.
 
 ---
 
@@ -214,7 +218,7 @@ AI Control is an experimental review workspace for natural-language commands.
 
 Downloads uses the original qBittorrent WebUI inside Cinema Paradiso. The embedded client is isolated from any qBittorrent installation already registered as the operating system's default torrent client.
 
-- The current public v2.8.4 portable release ZIP includes tested bundled qBittorrent, FFmpeg, and native-player runtimes.
+- The current public v2.8.5 portable release ZIP includes tested bundled qBittorrent, FFmpeg, and native-player runtimes.
 - Cinema Paradiso submissions are tagged `cinema-paradiso` and download to an incomplete staging folder.
 - Removing an unfinished CP submission in qBittorrent is treated as a normal cancellation; CP does not move its data or update the catalog.
 - At 100%, Cinema Paradiso pauses and removes the torrent without deleting its data, then moves the unchanged payload into the selected movie destination.
@@ -278,7 +282,7 @@ User lists, Watched and Watchlist states, edited collections, followed releases,
 
 ### Windows Quick Start
 
-For normal use, download the `Cinema-Paradiso-2.8.4-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent, FFmpeg, and native-player runtimes.
+For normal use, download the `Cinema-Paradiso-2.8.5-Portable.zip` artifact from GitHub Releases, extract it, and run Cinema Paradiso from that folder. The portable release includes the tested bundled qBittorrent, FFmpeg, and native-player runtimes.
 
 The GitHub Source ZIP remains developer-oriented. If you download the source ZIP or clone the repository, double-click `run.bat`. It runs in a normal console window so you can see progress and any errors.
 
@@ -332,7 +336,7 @@ Example:
 
 Only a movie library folder is required. Integrations are optional.
 
-The public v2.8.4 portable release uses bundled qBittorrent, FFmpeg, and the first-party native player. Cinema Paradiso 2.8 keeps each runtime portable and retains the user-triggered qBittorrent update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
+The public v2.8.5 portable release uses bundled qBittorrent, FFmpeg, and the first-party native player. Cinema Paradiso 2.8 keeps each runtime portable and retains the user-triggered qBittorrent update control in Settings. Torrent mode and completed/incomplete folders remain configurable.
 
 ---
 
