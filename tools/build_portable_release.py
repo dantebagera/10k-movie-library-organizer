@@ -208,7 +208,11 @@ def build_release_zip(project_root, qbt_source=None, ffmpeg_source=None, output_
             continue
         target = staging / item.name
         if item.is_dir():
-            shutil.copytree(item, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copytree(
+                item,
+                target,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.log"),
+            )
         else:
             shutil.copy2(item, target)
     native_root = project_root / "native"
